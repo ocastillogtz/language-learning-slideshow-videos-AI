@@ -3,10 +3,15 @@ create_images_openai.py
 
 Generate images per scene using project manifest — OpenAI provider.
 
-- Narrator image uses all character reference art from assets
-- Each scene image uses only the character art of characters in that scene
-- visual_context from manifest injected into every prompt for consistency
-- Saves RELATIVE (posix) paths in manifest
+Each dialogue scene uses its own visual_context field from the manifest
+(written by create_script.py) to drive a scene-specific image:
+  - Narrator / establishing scenes: room composition from global visual_context
+  - Dialogue scenes: illustrate what the character is talking ABOUT.
+    e.g. if they mention going to the movies → show that character at a cinema.
+    If no per-scene context is set, falls back to a standard room shot.
+
+Character art reference images are still passed to OpenAI for consistency.
+Saves RELATIVE (posix) paths in manifest.
 """
 
 import os
@@ -103,19 +108,9 @@ def load_character_images(characters: List[str], characters_data: dict, assets_d
 
 
 # =========================
-# PROMPTS
+# STYLE BLOCK
 # =========================
-def build_base_prompt(context: str, visual_context: str, character_details: str) -> str:
-    return f"""
-Create a vertical illustration for a YouTube Shorts video.
-
-Visual environment consistency:
-{visual_context}
-
-Character details (STRICT consistency required):
-{character_details}
-
-Style:
+STYLE_BLOCK = """Style:
 - watercolor
 - soft tones
 - minimal facial detail, minimal clothing detail
@@ -134,47 +129,98 @@ Framing:
 Consistency:
 - characters MUST match reference images
 - clothing, colors, facial features must remain consistent
-- characters must appear only once per image
-- positions and environment must match the visual_context description
-"""
+- characters must appear only once per image"""
 
 
-def build_scene_prompt(base_prompt: str, speaker: str, text: str, others: List[str]) -> str:
-    shot_type = random.choice(["over_shoulder", "two_shot"])
-    if shot_type == "over_shoulder":
-        composition = (
-            f"Shot: over-the-shoulder. Focus on {speaker}. "
-            f"Show {', '.join(others) if others else 'environment'} softly in background."
+# =========================
+# NARRATOR / ESTABLISHING SHOT PROMPT
+# =========================
+def build_narrator_prompt(
+    global_visual_context: str,
+    scene_visual_context: str,
+    character_details: str,
+    characters: List[str],
+) -> str:
+    scene_note = f"\nScene action: {scene_visual_context}" if scene_visual_context else ""
+    return f"""Create a vertical illustration for a YouTube Shorts video.
+
+Setting:
+{global_visual_context}{scene_note}
+
+Character details (STRICT consistency required):
+{character_details}
+
+{STYLE_BLOCK}
+
+Scene composition:
+Wide cinematic establishing shot showing: {', '.join(characters)}.
+- Environment clearly visible
+- Characters smaller in frame
+- Storytelling mood"""
+
+
+# =========================
+# DIALOGUE SCENE PROMPT
+# =========================
+def build_scene_prompt(
+    global_visual_context: str,
+    scene_visual_context: str,
+    character_details: str,
+    speaker: str,
+    text: str,
+    others: List[str],
+) -> str:
+    """
+    When scene_visual_context is set, it drives the scene completely —
+    the image shows what the character is talking ABOUT (cinema, street, etc.).
+    The global_visual_context is still referenced for character style anchoring.
+    Falls back to a standard room two-shot when scene_visual_context is empty.
+    """
+    if scene_visual_context:
+        scene_description = scene_visual_context
+        composition_note  = (
+            f"{speaker} is the visual focus. "
+            + (f"Other character(s) may appear if relevant: {', '.join(others)}." if others else "")
         )
     else:
-        composition = (
-            f"Shot: two-shot. Show {speaker} and "
-            f"{', '.join(others) if others else speaker}. Natural interaction."
-        )
-    return f"{base_prompt}\n\nMost important:\nScene:\n{speaker} is speaking: \"{text}\"\n\n{composition}"
+        shot_type = random.choice(["over_shoulder", "two_shot"])
+        if shot_type == "over_shoulder":
+            composition_note = (
+                f"Shot: over-the-shoulder. Focus on {speaker}. "
+                f"Show {', '.join(others) if others else 'environment'} softly in background."
+            )
+        else:
+            composition_note = (
+                f"Shot: two-shot. Show {speaker} and "
+                f"{', '.join(others) if others else speaker}. Natural interaction."
+            )
+        scene_description = global_visual_context
 
+    return f"""Create a vertical illustration for a YouTube Shorts video.
 
-def build_narrator_prompt(base_prompt: str, characters: List[str]) -> str:
-    return (
-        f"{base_prompt}\n\nScene:\n"
-        f"Wide cinematic establishing shot showing: {', '.join(characters)}.\n"
-        "- Environment clearly visible\n"
-        "- Characters smaller in frame\n"
-        "- Storytelling mood"
-    )
+Character style reference (appearance must match these descriptions):
+{global_visual_context}
+
+Character details (STRICT consistency required):
+{character_details}
+
+{STYLE_BLOCK}
+
+Scene to illustrate:
+{scene_description}
+
+{speaker} is speaking: "{text}"
+
+Composition: {composition_note}"""
 
 
 # =========================
 # IMAGE GENERATION (OpenAI)
 # =========================
 def generate_image(prompt: str, image_inputs: list, model: str, size: str) -> bytes:
-    """
-    Call OpenAI images.edit with one or more reference images.
-    image_inputs: list of open file handles.
-    """
     from openai import OpenAI
     oa = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    logger.info("The prompt is: \n" + prompt + "\n")
+    logger.info("Prompt:\n" + prompt + "\n")
     response = oa.images.edit(
         model=model,
         image=image_inputs,
@@ -187,25 +233,23 @@ def generate_image(prompt: str, image_inputs: list, model: str, size: str) -> by
 
 
 # =========================
-# TEST FUNCTION (single image)
+# SHARED SETUP HELPER
 # =========================
-def test_image_generation(project_name: str, output_path: str = "test_image.png"):
-    """
-    Generate a single narrator image using character art as reference.
-    Useful for checking prompt quality and style before a full run.
-    """
+def _setup(project_name: str):
     assets_dir, projects_dir, openai_model, resolutions, extend_pad = load_config()
     characters_data = load_characters(assets_dir)
 
     project_path  = projects_dir / project_name
     manifest_path = project_path / "project_manifest.json"
 
+    if not manifest_path.exists():
+        raise FileNotFoundError("Missing project_manifest.json")
+
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
-    context        = manifest["script"]["context"]
-    visual_context = manifest["script"].get("visual_context", "")
-    scenes         = manifest["scenes"]
+    global_visual_context = manifest["script"].get("visual_context", "")
+    scenes = manifest["scenes"]
 
     all_characters = list({
         s["character"] for s in scenes
@@ -216,11 +260,32 @@ def test_image_generation(project_name: str, output_path: str = "test_image.png"
         for c in all_characters
     )
 
-    base_prompt  = build_base_prompt(context, visual_context, char_descriptions)
-    prompt       = build_narrator_prompt(base_prompt, all_characters)
+    return (
+        assets_dir, projects_dir, openai_model, resolutions, extend_pad,
+        characters_data, project_path, manifest_path, manifest,
+        global_visual_context, scenes, all_characters, char_descriptions,
+    )
+
+
+# =========================
+# TEST FUNCTION
+# =========================
+def test_image_generation(project_name: str, output_path: str = "test_image.png"):
+    (
+        assets_dir, _, openai_model, resolutions, extend_pad,
+        characters_data, _, _, manifest,
+        global_visual_context, scenes, all_characters, char_descriptions,
+    ) = _setup(project_name)
+
+    first_narrator = next(
+        (s for s in scenes if s.get("is_narrator") and s.get("visual_context")), None
+    )
+    scene_vc = first_narrator["visual_context"] if first_narrator else ""
+
+    prompt       = build_narrator_prompt(global_visual_context, scene_vc, char_descriptions, all_characters)
     image_inputs = load_character_images(all_characters, characters_data, assets_dir)
 
-    logger.info("Test image generation (narrator, using all character art as reference)")
+    logger.info("Test image generation (narrator, OpenAI)")
     image_bytes = generate_image(prompt, image_inputs, openai_model, resolutions["shorts"])
 
     out = Path(output_path)
@@ -234,44 +299,26 @@ def test_image_generation(project_name: str, output_path: str = "test_image.png"
 # MAIN
 # =========================
 def generate_images(project_name: str, format_type: str = "shorts"):
-    assets_dir, projects_dir, openai_model, resolutions, extend_pad = load_config()
-    characters_data = load_characters(assets_dir)
+    (
+        assets_dir, projects_dir, openai_model, resolutions, extend_pad,
+        characters_data, project_path, manifest_path, manifest,
+        global_visual_context, scenes, all_characters, char_descriptions,
+    ) = _setup(project_name)
 
-    project_path  = projects_dir / project_name
-    manifest_path = project_path / "project_manifest.json"
-
-    if not manifest_path.exists():
-        raise FileNotFoundError("Missing project_manifest.json")
-
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-
-    context        = manifest["script"]["context"]
-    visual_context = manifest["script"].get("visual_context", "")
-    scenes         = manifest["scenes"]
-    size           = resolutions[format_type]
-
+    size       = resolutions[format_type]
     images_dir = project_path / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    all_characters = list({
-        s["character"] for s in scenes
-        if s["type"] == "dialogue" and not s.get("is_narrator", False)
-    })
-    char_descriptions = "\n".join(
-        f"{c}: {characters_data.get(c, {}).get('description', '')}"
-        for c in all_characters
-    )
-
-    base_prompt = build_base_prompt(context, visual_context, char_descriptions)
-
-    # ---- NARRATOR IMAGE ----
-    # Uses all character art — establishes the visual style for the whole video.
+    # ---- NARRATOR / ESTABLISHING IMAGE ----
     narrator_path = images_dir / "scene_narrator.png"
 
     if not narrator_path.exists():
-        logger.info("Generating narrator image (using all character art as reference)...")
-        prompt       = build_narrator_prompt(base_prompt, all_characters)
+        logger.info("Generating narrator image...")
+        first_narrator = next(
+            (s for s in scenes if s.get("is_narrator") and s.get("visual_context")), None
+        )
+        scene_vc     = first_narrator["visual_context"] if first_narrator else ""
+        prompt       = build_narrator_prompt(global_visual_context, scene_vc, char_descriptions, all_characters)
         image_inputs = load_character_images(all_characters, characters_data, assets_dir)
         image_bytes  = generate_image(prompt, image_inputs, openai_model, size)
 
@@ -285,8 +332,6 @@ def generate_images(project_name: str, format_type: str = "shorts"):
     manifest["narrator_image"] = to_relative(narrator_path, project_path)
 
     # ---- SCENE IMAGES ----
-    # Each scene uses only the character art of characters visible in that scene.
-    # The visual_context in the prompt enforces spatial and style consistency.
     for scene in scenes:
         if scene["type"] != "dialogue":
             continue
@@ -298,6 +343,7 @@ def generate_images(project_name: str, format_type: str = "shorts"):
         scene_id    = scene["id"]
         speaker     = scene["character"]
         text        = scene["text"]
+        scene_vc    = scene.get("visual_context", "")
         output_path = images_dir / f"{scene_id}.png"
 
         if output_path.exists():
@@ -305,16 +351,18 @@ def generate_images(project_name: str, format_type: str = "shorts"):
             scene["image"] = to_relative(output_path, project_path)
             continue
 
-        logger.info(f"Generating {scene_id} ({speaker})")
+        logger.info(f"Generating {scene_id} ({speaker}): {scene_vc[:80]}...")
 
         others          = [c for c in all_characters if c != speaker]
         selected_others = random.sample(others, min(2, len(others)))
         scene_chars     = [speaker] + selected_others
-        prompt          = build_scene_prompt(base_prompt, speaker, text, selected_others)
-        image_inputs    = load_character_images(scene_chars, characters_data, assets_dir)
 
-        logger.debug(f"Prompt:\n{prompt}")
-        image_bytes = generate_image(prompt, image_inputs, openai_model, size)
+        prompt       = build_scene_prompt(
+            global_visual_context, scene_vc, char_descriptions,
+            speaker, text, selected_others,
+        )
+        image_inputs = load_character_images(scene_chars, characters_data, assets_dir)
+        image_bytes  = generate_image(prompt, image_inputs, openai_model, size)
 
         with open(output_path, "wb") as f:
             f.write(image_bytes)
@@ -335,7 +383,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate images for project (OpenAI)")
     parser.add_argument("project_name")
     parser.add_argument("--format", choices=["shorts", "landscape"], default="shorts")
-    parser.add_argument("--test", action="store_true", help="Generate a single test image and exit")
+    parser.add_argument("--test", action="store_true")
     parser.add_argument("--test-output", default="test_image.png")
     args = parser.parse_args()
 

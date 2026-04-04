@@ -193,8 +193,8 @@ def main():
 # =========================
 if __name__ == "__main__":
     create_project(
-        project_name="coffee_convo_1",
-        scene_text="Olena and Mario are talking in the coffee shop about finding a handyman to fix leaking in the kitchen sink. Two interaction per character",
-        learning_text="use at least 3 advanced words of the b2 or c1 level.",
+        project_name="office_convo_4",
+        scene_text="Zahra is talking with Wiebke, Zahra states that the delivery of the product can't be achieved because of the lack of the new safety label, then Wiebke says that she is going to take care of it and the delivery is going to happen as planned ",
+        learning_text="the grammatical construction Um ... zu. The expression: ich kuemmere mich um",
     )
 

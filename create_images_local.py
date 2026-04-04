@@ -3,17 +3,23 @@ create_images_local.py
 
 Generate images per scene using a local ComfyUI instance (Flux + LoRA).
 
+Each dialogue scene uses its own visual_context field from the manifest
+(written by create_script.py) to drive a scene-specific image:
+  - Narrator / establishing scenes: room composition from global visual_context
+  - Dialogue scenes: illustrate what the character is talking ABOUT.
+    e.g. if they mention going to the movies → show that character at a cinema.
+    If no per-scene context is set, falls back to a standard room shot.
+
+The full scene description is sent as the t5xxl prompt (long-text encoder).
+The clip_l prompt is always the short style tag from config.
+
 LoRA chain (always in this order):
-  1. brezelstyle  — style lora, strength 0.5 (always present)
-  2. speaker lora — character lora for the speaking character, strength 0.5
-  3. other loras  — remaining scene characters with a lora, strength 0.2
+  1. brezelstyle  — style lora, strength from config (default 0.5)
+  2. speaker lora — character lora for the speaking character, strength from config (default 0.5)
+  3. other loras  — remaining scene characters with a lora, strength from config (default 0.2)
 
 Characters without a lora entry (empty string) are included only in the
 text prompt, not the LoRA chain.
-
-Prompts mirror create_images_openai.py:
-  - clip_l  → short style tag (e.g. "brezelstyle watercolor soft colors...")
-  - t5xxl   → full scene description built from build_scene_prompt / build_narrator_prompt
 
 Saves RELATIVE (posix) paths in manifest, same as the OpenAI provider.
 """
@@ -32,7 +38,6 @@ from pathlib import Path
 from typing import List, Optional
 import random
 
-import websocket          # websocket-client
 from PIL import Image
 from dotenv import load_dotenv
 
@@ -41,6 +46,15 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 random.seed()
+
+CHARACTER_MAPPING = {
+    "Zahra":"ZahraBrezel",
+    "Olena":"OlenaBrezel",
+    "Amir":"AmirBrezel",
+    "Mario":"MarioBrezel",
+    "Sani":"SaniBrezel",
+    "Wiebke":"WiebkeBrezel",
+}
 
 # =========================
 # COMFYUI BASE WORKFLOW
@@ -64,13 +78,13 @@ BASE_WORKFLOW = {
     },
     "31": {
         "inputs": {
-            "seed": 0,           # overwritten per render
+            "seed": 0,               # overwritten per render
             "steps": 20,
             "cfg": 1,
             "sampler_name": "euler",
             "scheduler": "simple",
             "denoise": 1,
-            "model": ["LAST_LORA", 0],   # placeholder — replaced at build time
+            "model": ["LAST_LORA", 0],   # placeholder — replaced in build_workflow
             "positive": ["41", 0],
             "negative": ["42", 0],
             "latent_image": ["27", 0]
@@ -100,10 +114,10 @@ BASE_WORKFLOW = {
     },
     "41": {
         "inputs": {
-            "clip_l": "",        # overwritten per render
-            "t5xxl": "",         # overwritten per render
+            "clip_l": "",            # overwritten per render
+            "t5xxl": "",             # overwritten per render
             "guidance": 4,
-            "clip": ["LAST_LORA", 1]     # placeholder — replaced at build time
+            "clip": ["LAST_LORA", 1]     # placeholder — replaced in build_workflow
         },
         "class_type": "CLIPTextEncodeFlux",
         "_meta": {"title": "CLIPTextEncodeFlux"}
@@ -123,14 +137,14 @@ def load_config(config_path="config.ini"):
     config = configparser.ConfigParser()
     config.read(config_path)
 
-    assets_dir    = Path(config["paths"]["assets_dir"])
-    projects_dir  = Path(config["paths"]["projects_dir"])
-    extend_pad    = config.getfloat("images", "extend_pad_ratio", fallback=0.12)
-    log_level     = config.get("images", "log_level", fallback="INFO")
+    assets_dir   = Path(config["paths"]["assets_dir"])
+    projects_dir = Path(config["paths"]["projects_dir"])
+    extend_pad   = config.getfloat("images", "extend_pad_ratio", fallback=0.12)
+    log_level    = config.get("images", "log_level", fallback="INFO")
 
-    comfyui_host  = config.get("comfyui", "host",          fallback="127.0.0.1")
-    comfyui_port  = config.getint("comfyui", "port",        fallback=8188)
-    style_lora    = config.get("comfyui", "style_lora",     fallback="brezelstyle_pytorch_lora_weights.safetensors")
+    comfyui_host   = config.get("comfyui", "host",                fallback="127.0.0.1")
+    comfyui_port   = config.getint("comfyui", "port",             fallback=8188)
+    style_lora     = config.get("comfyui", "style_lora",          fallback="brezelstyle_pytorch_lora_weights.safetensors")
     style_strength = config.getfloat("comfyui", "style_lora_strength", fallback=0.5)
     char_strength  = config.getfloat("comfyui", "char_lora_strength",  fallback=0.5)
     bg_strength    = config.getfloat("comfyui", "bg_lora_strength",    fallback=0.2)
@@ -142,18 +156,18 @@ def load_config(config_path="config.ini"):
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
     return {
-        "assets_dir":    assets_dir,
-        "projects_dir":  projects_dir,
-        "extend_pad":    extend_pad,
-        "host":          comfyui_host,
-        "port":          comfyui_port,
-        "style_lora":    style_lora,
+        "assets_dir":     assets_dir,
+        "projects_dir":   projects_dir,
+        "extend_pad":     extend_pad,
+        "host":           comfyui_host,
+        "port":           comfyui_port,
+        "style_lora":     style_lora,
         "style_strength": style_strength,
-        "char_strength": char_strength,
-        "bg_strength":   bg_strength,
-        "clip_l_tag":    clip_l_tag,
-        "poll_interval": poll_interval,
-        "timeout_s":     timeout_s,
+        "char_strength":  char_strength,
+        "bg_strength":    bg_strength,
+        "clip_l_tag":     clip_l_tag,
+        "poll_interval":  poll_interval,
+        "timeout_s":      timeout_s,
     }
 
 
@@ -186,6 +200,147 @@ def extend_image_vertical(input_path: Path, pad_ratio: float = 0.12):
 
 
 # =========================
+# STYLE BLOCK (mirrors openai version exactly)
+# =========================
+STYLE_BLOCK = """Style:
+- watercolor
+- soft tones
+- minimal facial detail, minimal clothing detail
+- clean thicker outlines
+- NEVER render text on images. no subtitles, no speech bubbles, no text.
+- no anime eyes
+- no blush cheeks
+
+Framing:
+- vertical 9:16 composition
+- central 80% contains important elements
+- leave at least 8% margin on all sides
+- no faces near edges
+- characters centered
+- background softly fades into white at the bottom
+
+Consistency:
+- clothing, colors, facial features must remain consistent
+- characters must appear only once per image"""
+
+
+# =========================
+# NARRATOR / ESTABLISHING SHOT PROMPT
+# =========================
+def build_narrator_prompt(
+    global_visual_context: str,
+    scene_visual_context: str,
+    character_details: str,
+    characters: List[str],
+) -> str:
+    scene_note = f"\nScene action: {scene_visual_context}" if scene_visual_context else ""
+    return f"""Create a vertical illustration for a YouTube Shorts video.
+
+Setting:
+{global_visual_context}{scene_note}
+
+Character details (STRICT consistency required):
+{character_details}
+
+{STYLE_BLOCK}
+
+Scene composition:
+Wide cinematic establishing shot showing: {', '.join(characters)}.
+- Environment clearly visible
+- Characters smaller in frame
+- Storytelling mood"""
+
+
+# =========================
+# DIALOGUE SCENE PROMPT
+# =========================
+def build_scene_prompt(
+    global_visual_context: str,
+    scene_visual_context: str,
+    character_details: str,
+    speaker: str,
+    text: str,
+    others: List[str],
+) -> str:
+    """
+    When scene_visual_context is set, it drives the scene completely —
+    the image shows what the character is talking ABOUT (cinema, street, etc.).
+    The global_visual_context is still referenced for character style anchoring.
+    Falls back to a standard room two-shot when scene_visual_context is empty.
+    """
+    if scene_visual_context:
+        scene_description = scene_visual_context
+        composition_note  = (
+            f"{speaker} is the visual focus. "
+            + (f"Other character(s) may appear if relevant: {', '.join(others)}." if others else "")
+        )
+    else:
+        shot_type = random.choice(["over_shoulder", "two_shot"])
+        if shot_type == "over_shoulder":
+            composition_note = (
+                f"Shot: over-the-shoulder. Focus on {speaker}. "
+                f"Show {', '.join(others) if others else 'environment'} softly in background."
+            )
+        else:
+            composition_note = (
+                f"Shot: two-shot. Show {speaker} and "
+                f"{', '.join(others) if others else speaker}. Natural interaction."
+            )
+        scene_description = global_visual_context
+
+    return f"""Create a vertical illustration for a YouTube Shorts video.
+
+Character style reference (appearance must match these descriptions):
+{global_visual_context}
+
+Character details (STRICT consistency required):
+{character_details}
+
+{STYLE_BLOCK}
+
+Scene to illustrate (This overrides any previous description of the scene of it doesn't match):
+{scene_description}
+
+
+Composition: {composition_note}"""
+
+
+# =========================
+# LORA LIST BUILDER
+# =========================
+def build_lora_list(
+    speaker: str,
+    others: List[str],
+    characters_data: dict,
+    style_lora: str,
+) -> List[str]:
+    """
+    Build ordered LoRA list:
+      [style_lora, speaker_lora (if any), ...other_loras (if any)]
+
+    Characters with an empty or missing lora field are skipped silently —
+    they are still described in the text prompt.
+    """
+    loras = [style_lora]
+
+    def get_lora(name: str) -> Optional[str]:
+        lora = characters_data.get(name, {}).get("lora", "")
+        return lora if lora else None
+
+    if speaker:
+        speaker_lora = get_lora(speaker)
+        if speaker_lora:
+            loras.append(speaker_lora)
+
+    for other in others:
+        other_lora = get_lora(other)
+        if other_lora and other_lora not in loras:
+            loras.append(other_lora)
+
+    return loras
+
+
+# =========================
 # WORKFLOW BUILDER
 # =========================
 def build_workflow(
@@ -202,19 +357,18 @@ def build_workflow(
       [1] = speaker lora
       [2..] = background character loras
 
-    Strengths are assigned based on position:
+    Strengths assigned by position:
       index 0  → style_strength
       index 1  → char_strength
       index 2+ → bg_strength
 
-    Returns a complete workflow ready to POST to /prompt.
+    LoRA nodes start at ID 100 to avoid collisions with fixed node IDs.
     """
     workflow = copy.deepcopy(BASE_WORKFLOW)
 
-    # Node IDs for the LoRA chain start at 100 to avoid collisions
-    lora_node_ids = []
     prev_model_ref = ["38", 0]   # UNETLoader output
     prev_clip_ref  = ["40", 0]   # DualCLIPLoader output
+    last_lora_id   = None
 
     for i, lora_name in enumerate(lora_names):
         if i == 0:
@@ -236,125 +390,40 @@ def build_workflow(
             "class_type": "LoraLoader",
             "_meta": {"title": f"LoRA {i}: {lora_name}"}
         }
-        lora_node_ids.append(node_id)
         prev_model_ref = [node_id, 0]
         prev_clip_ref  = [node_id, 1]
+        last_lora_id   = node_id
 
-    last_lora_id = lora_node_ids[-1] if lora_node_ids else "38"
+    # Wire last LoRA (or UNETLoader if no loras) into KSampler and CLIPTextEncodeFlux
+    final_model = last_lora_id if last_lora_id else "38"
+    final_clip  = last_lora_id if last_lora_id else "40"
+    workflow["31"]["inputs"]["model"] = [final_model, 0]
+    workflow["41"]["inputs"]["clip"]  = [final_clip,  1]
 
-    # Wire last LoRA output into KSampler and CLIPTextEncodeFlux
-    workflow["31"]["inputs"]["model"] = [last_lora_id, 0]
-    workflow["41"]["inputs"]["clip"]  = [last_lora_id, 1]
+    for chara, charabrezel in CHARACTER_MAPPING.items():
+        clip_l = clip_l.replace(chara + " ",charabrezel + " ")
+        t5xxl = t5xxl.replace(chara + " ",charabrezel  + " ")
+        clip_l = clip_l.replace(chara + ",",charabrezel + ",")
+        t5xxl = t5xxl.replace(chara + ",",charabrezel  + ",")
+        clip_l = clip_l.replace(chara + ".",charabrezel  + ".")
+        t5xxl = t5xxl.replace(chara + ".",charabrezel  + ".")
+        clip_l = clip_l.replace(chara + ":" ,charabrezel  + ":")
+        t5xxl = t5xxl.replace(chara + ":",charabrezel  + ":")
 
-    # Inject prompts
+    # Inject prompts and random seed
     workflow["41"]["inputs"]["clip_l"] = clip_l
     workflow["41"]["inputs"]["t5xxl"]  = t5xxl
-
-    logging.info("prompt l: " + clip_l)
-    logging.info("prompt t5: " + t5xxl)
-
-    # Random seed
-    workflow["31"]["inputs"]["seed"] = random.randint(0, 2**32 - 1)
+    logger.info("clip_l: " + clip_l + "\n\n")
+    logger.info("t5xxl: " + t5xxl + "\n\n")
+    workflow["31"]["inputs"]["seed"]   = 899916076476193
 
     return workflow
 
 
 # =========================
-# PROMPTS (mirrors openai version)
-# =========================
-def build_base_prompt(context: str, visual_context: str, character_details: str) -> str:
-    return f"""Create a vertical illustration for a YouTube Shorts video.
-
-Visual environment consistency:
-{visual_context}
-
-Character details (STRICT consistency required):
-{character_details}
-
-Style:
-- watercolor
-- soft tones
-- minimal facial detail, minimal clothing detail
-- clean thicker outlines
-- NEVER render text on images. no subtitles, no speech bubbles, no text.
-- no anime eyes
-
-Framing:
-- vertical 9:16 composition
-- central 80% contains important elements
-- leave at least 8% margin on all sides
-- no faces near edges
-- characters centered
-- background softly fades into white at the bottom
-
-Consistency:
-- clothing, colors, facial features must remain consistent
-- characters must appear only once per image
-- positions and environment must match the visual_context description"""
-
-
-def build_scene_prompt(base_prompt: str, speaker: str, text: str, others: List[str]) -> str:
-    shot_type = random.choice(["over_shoulder", "two_shot"])
-    if shot_type == "over_shoulder":
-        composition = (
-            f"Shot: over-the-shoulder. Focus on {speaker}. "
-            f"Show {', '.join(others) if others else 'environment'} softly in background."
-        )
-    else:
-        composition = (
-            f"Shot: two-shot. Show {speaker} and "
-            f"{', '.join(others) if others else speaker}. Natural interaction."
-        )
-    return f"{base_prompt}\n\nMost important:\nScene:\n{speaker} is speaking: \"{text}\"\n\n{composition}"
-
-
-def build_narrator_prompt(base_prompt: str, characters: List[str]) -> str:
-    return (
-        f"{base_prompt}\n\nScene:\n"
-        f"Wide cinematic establishing shot showing: {', '.join(characters)}.\n"
-        "- Environment clearly visible\n"
-        "- Characters smaller in frame\n"
-        "- Storytelling mood"
-    )
-
-
-# =========================
-# LORA LIST BUILDER
-# =========================
-def build_lora_list(
-    speaker: str,
-    others: List[str],
-    characters_data: dict,
-    style_lora: str,
-) -> List[str]:
-    """
-    Build ordered LoRA list:
-      [style_lora, speaker_lora (if any), ...other_loras (if any)]
-
-    Characters with an empty or missing lora field are skipped.
-    """
-    loras = [style_lora]
-
-    def get_lora(name: str) -> Optional[str]:
-        lora = characters_data.get(name, {}).get("lora", "")
-        return lora if lora else None
-
-    speaker_lora = get_lora(speaker)
-    if speaker_lora:
-        loras.append(speaker_lora)
-
-    for other in others:
-        other_lora = get_lora(other)
-        if other_lora and other_lora not in loras:
-            loras.append(other_lora)
-
-    return loras
-
-
-# =========================
 # COMFYUI API CLIENT
 # =========================
-def comfyui_url(host: str, port: int, path: str) -> str:
+def _comfyui_url(host: str, port: int, path: str) -> str:
     return f"http://{host}:{port}{path}"
 
 
@@ -362,7 +431,7 @@ def queue_prompt(workflow: dict, client_id: str, host: str, port: int) -> str:
     """POST workflow to /prompt, return prompt_id."""
     payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
     req = urllib.request.Request(
-        comfyui_url(host, port, "/prompt"),
+        _comfyui_url(host, port, "/prompt"),
         data=payload,
         headers={"Content-Type": "application/json"},
     )
@@ -372,14 +441,14 @@ def queue_prompt(workflow: dict, client_id: str, host: str, port: int) -> str:
 
 
 def fetch_history(prompt_id: str, host: str, port: int) -> dict:
-    url = comfyui_url(host, port, f"/history/{prompt_id}")
+    url = _comfyui_url(host, port, f"/history/{prompt_id}")
     with urllib.request.urlopen(url) as resp:
         return json.loads(resp.read())
 
 
 def fetch_image(filename: str, subfolder: str, folder_type: str, host: str, port: int) -> bytes:
     url = (
-        comfyui_url(host, port, "/view")
+        _comfyui_url(host, port, "/view")
         + f"?filename={filename}&subfolder={subfolder}&type={folder_type}"
     )
     with urllib.request.urlopen(url) as resp:
@@ -393,7 +462,7 @@ def wait_for_image(
     poll_interval: float,
     timeout_s: float,
 ) -> bytes:
-    """Poll /history until the prompt is done, then download the first output image."""
+    """Poll /history until done, then download the first output image."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         history = fetch_history(prompt_id, host, port)
@@ -415,7 +484,7 @@ def wait_for_image(
 
 
 # =========================
-# GENERATE ONE IMAGE
+# GENERATE ONE IMAGE (ComfyUI)
 # =========================
 def generate_image_local(
     clip_l: str,
@@ -443,16 +512,12 @@ def generate_image_local(
 
 
 # =========================
-# MAIN
+# SHARED SETUP HELPER
 # =========================
-def generate_images(project_name: str, format_type: str = "shorts"):
+def _setup(project_name: str):
     cfg             = load_config()
     assets_dir      = cfg["assets_dir"]
     projects_dir    = cfg["projects_dir"]
-    extend_pad      = cfg["extend_pad"]
-    style_lora      = cfg["style_lora"]
-    clip_l_tag      = cfg["clip_l_tag"]
-
     characters_data = load_characters(assets_dir)
 
     project_path  = projects_dir / project_name
@@ -464,12 +529,8 @@ def generate_images(project_name: str, format_type: str = "shorts"):
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
-    context        = manifest["script"]["context"]
-    visual_context = manifest["script"].get("visual_context", "")
-    scenes         = manifest["scenes"]
-
-    images_dir = project_path / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
+    global_visual_context = manifest["script"].get("visual_context", "")
+    scenes = manifest["scenes"]
 
     all_characters = list({
         s["character"] for s in scenes
@@ -480,26 +541,73 @@ def generate_images(project_name: str, format_type: str = "shorts"):
         for c in all_characters
     )
 
-    base_prompt = build_base_prompt(context, visual_context, char_descriptions)
+    return (
+        cfg, assets_dir, projects_dir, characters_data,
+        project_path, manifest_path, manifest,
+        global_visual_context, scenes, all_characters, char_descriptions,
+    )
 
-    # ---- NARRATOR IMAGE ----
+
+# =========================
+# TEST FUNCTION
+# =========================
+def test_image_generation(project_name: str, output_path: str = "test_image_local.png"):
+    """Generate a single narrator image for quick sanity-check."""
+    (
+        cfg, assets_dir, _, characters_data,
+        _, _, manifest,
+        global_visual_context, scenes, all_characters, char_descriptions,
+    ) = _setup(project_name)
+
+    first_narrator = next(
+        (s for s in scenes if s.get("is_narrator") and s.get("visual_context")), None
+    )
+    scene_vc = first_narrator["visual_context"] if first_narrator else ""
+
+    t5xxl      = build_narrator_prompt(global_visual_context, scene_vc, char_descriptions, all_characters)
+    lora_names = build_lora_list("", all_characters, characters_data, cfg["style_lora"])
+
+    logger.info("Test generation (narrator, ComfyUI local)")
+    image_bytes = generate_image_local(cfg["clip_l_tag"], t5xxl, lora_names, cfg)
+
+    out = Path(output_path)
+    with open(out, "wb") as f:
+        f.write(image_bytes)
+    extend_image_vertical(out, cfg["extend_pad"])
+    logger.info(f"Test image saved: {out}")
+
+
+# =========================
+# MAIN
+# =========================
+def generate_images(project_name: str, format_type: str = "shorts"):
+    (
+        cfg, assets_dir, projects_dir, characters_data,
+        project_path, manifest_path, manifest,
+        global_visual_context, scenes, all_characters, char_descriptions,
+    ) = _setup(project_name)
+
+    images_dir = project_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- NARRATOR / ESTABLISHING IMAGE ----
     narrator_path = images_dir / "scene_narrator.png"
 
     if not narrator_path.exists():
         logger.info("Generating narrator image...")
-        t5xxl     = build_narrator_prompt(base_prompt, all_characters)
-        # Narrator: style lora + all character loras (all at bg_strength via position >=2)
-        lora_names = build_lora_list(
-            speaker="",
-            others=all_characters,
-            characters_data=characters_data,
-            style_lora=style_lora,
+
+        first_narrator = next(
+            (s for s in scenes if s.get("is_narrator") and s.get("visual_context")), None
         )
-        image_bytes = generate_image_local(clip_l_tag, t5xxl, lora_names, cfg)
+        scene_vc   = first_narrator["visual_context"] if first_narrator else ""
+        t5xxl      = build_narrator_prompt(global_visual_context, scene_vc, char_descriptions, all_characters)
+        lora_names = build_lora_list("", all_characters, characters_data, cfg["style_lora"])
+
+        image_bytes = generate_image_local(cfg["clip_l_tag"], t5xxl, lora_names, cfg)
 
         with open(narrator_path, "wb") as f:
             f.write(image_bytes)
-        extend_image_vertical(narrator_path, extend_pad)
+        extend_image_vertical(narrator_path, cfg["extend_pad"])
         logger.info("Narrator image saved.")
     else:
         logger.info("Narrator image already exists, skipping.")
@@ -518,6 +626,7 @@ def generate_images(project_name: str, format_type: str = "shorts"):
         scene_id    = scene["id"]
         speaker     = scene["character"]
         text        = scene["text"]
+        scene_vc    = scene.get("visual_context", "")
         output_path = images_dir / f"{scene_id}.png"
 
         if output_path.exists():
@@ -525,20 +634,23 @@ def generate_images(project_name: str, format_type: str = "shorts"):
             scene["image"] = to_relative(output_path, project_path)
             continue
 
-        logger.info(f"Generating {scene_id} ({speaker})")
+        logger.info(f"Generating {scene_id} ({speaker}): {scene_vc[:80]}...")
 
         others          = [c for c in all_characters if c != speaker]
         selected_others = random.sample(others, min(2, len(others)))
 
-        t5xxl      = build_scene_prompt(base_prompt, speaker, text, selected_others)
-        lora_names = build_lora_list(speaker, selected_others, characters_data, style_lora)
+        t5xxl      = build_scene_prompt(
+            global_visual_context, scene_vc, char_descriptions,
+            speaker, text, selected_others,
+        )
+        lora_names = build_lora_list(speaker, selected_others, characters_data, cfg["style_lora"])
 
         logger.debug(f"LoRA chain: {lora_names}")
-        image_bytes = generate_image_local(clip_l_tag, t5xxl, lora_names, cfg)
+        image_bytes = generate_image_local(cfg["clip_l_tag"], t5xxl, lora_names, cfg)
 
         with open(output_path, "wb") as f:
             f.write(image_bytes)
-        extend_image_vertical(output_path, extend_pad)
+        extend_image_vertical(output_path, cfg["extend_pad"])
         scene["image"] = to_relative(output_path, project_path)
 
     # ---- SAVE MANIFEST ----
@@ -546,52 +658,6 @@ def generate_images(project_name: str, format_type: str = "shorts"):
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     logger.info("Local image generation completed.")
-
-
-# =========================
-# TEST FUNCTION
-# =========================
-def test_image_generation(project_name: str, output_path: str = "test_image_local.png"):
-    """Generate a single narrator image for quick sanity-check."""
-    cfg             = load_config()
-    assets_dir      = cfg["assets_dir"]
-    projects_dir    = cfg["projects_dir"]
-    extend_pad      = cfg["extend_pad"]
-    style_lora      = cfg["style_lora"]
-    clip_l_tag      = cfg["clip_l_tag"]
-
-    characters_data = load_characters(assets_dir)
-    project_path    = projects_dir / project_name
-    manifest_path   = project_path / "project_manifest.json"
-
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-
-    context        = manifest["script"]["context"]
-    visual_context = manifest["script"].get("visual_context", "")
-    scenes         = manifest["scenes"]
-
-    all_characters = list({
-        s["character"] for s in scenes
-        if s["type"] == "dialogue" and not s.get("is_narrator", False)
-    })
-    char_descriptions = "\n".join(
-        f"{c}: {characters_data.get(c, {}).get('description', '')}"
-        for c in all_characters
-    )
-
-    base_prompt = build_base_prompt(context, visual_context, char_descriptions)
-    t5xxl       = build_narrator_prompt(base_prompt, all_characters)
-    lora_names  = build_lora_list("", all_characters, characters_data, style_lora)
-
-    logger.info("Test generation (narrator, ComfyUI local)")
-    image_bytes = generate_image_local(clip_l_tag, t5xxl, lora_names, cfg)
-
-    out = Path(output_path)
-    with open(out, "wb") as f:
-        f.write(image_bytes)
-    extend_image_vertical(out, extend_pad)
-    logger.info(f"Test image saved: {out}")
 
 
 # =========================
@@ -611,4 +677,4 @@ def main():
         generate_images(args.project_name, args.format)
 
 if __name__ == "__main__":
-    generate_images("coffee_convo_1")
+    generate_images("office_convo_4")

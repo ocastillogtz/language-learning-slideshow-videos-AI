@@ -4,6 +4,8 @@ create_video.py
 Render one video clip per scene → projects/<project>/videos/<scene_id>.mp4
 
 All tunable constants are read from config.ini.
+Character thumbnail icon is composited onto dialogue clips at the position
+defined in [character_icon] in config.ini.
 """
 
 import json
@@ -37,38 +39,39 @@ def load_config(config_path="config.ini"):
     if cfg.has_option("tools", "imagemagick"):
         change_settings({"IMAGEMAGICK_BINARY": cfg["tools"]["imagemagick"]})
 
-    v = cfg["video"]
-    s = cfg["subtitles"]
-    n = cfg["narrator_subtitles"]
-
     params = {
         # video
-        "target_w":            cfg.getint("video", "target_w",            fallback=1080),
-        "target_h":            cfg.getint("video", "target_h",            fallback=1920),
-        "fps":                 cfg.getint("video", "fps",                  fallback=30),
-        "dialogue_hold_s":     cfg.getfloat("video", "dialogue_hold_s",   fallback=0.4),
-        "margin_blur_radius":  cfg.getint("video", "margin_blur_radius",  fallback=30),
-        "narrator_blur_radius":cfg.getint("video", "narrator_blur_radius",fallback=18),
-        "blend_px":            cfg.getint("video", "blend_px",            fallback=120),
+        "target_w":             cfg.getint("video",   "target_w",             fallback=1080),
+        "target_h":             cfg.getint("video",   "target_h",             fallback=1920),
+        "fps":                  cfg.getint("video",   "fps",                   fallback=30),
+        "dialogue_hold_s":      cfg.getfloat("video", "dialogue_hold_s",       fallback=0.4),
+        "margin_blur_radius":   cfg.getint("video",   "margin_blur_radius",    fallback=30),
+        "narrator_blur_radius": cfg.getint("video",   "narrator_blur_radius",  fallback=18),
+        "blend_px":             cfg.getint("video",   "blend_px",              fallback=120),
         # subtitles
-        "sub_font":            cfg.get("subtitles", "font",               fallback="Arial-Bold"),
-        "sub_fontsize":        cfg.getint("subtitles", "fontsize",        fallback=76),
-        "sub_color":           cfg.get("subtitles", "color",              fallback="white"),
-        "sub_stroke_color":    cfg.get("subtitles", "stroke_color",       fallback="black"),
-        "sub_stroke_width":    cfg.getint("subtitles", "stroke_width",    fallback=4),
-        "sub_margin_bottom":   cfg.getint("subtitles", "margin_bottom",   fallback=200),
-        "sub_margin_left":     cfg.getint("subtitles", "margin_left",     fallback=40),
-        "sub_margin_right":    cfg.getint("subtitles", "margin_right",    fallback=160),
-        "sub_bg_opacity":      cfg.getfloat("subtitles", "bg_opacity",     fallback=0.45),
-        "sub_bg_padding_x":    cfg.getint("subtitles", "bg_padding_x",     fallback=20),
-        "sub_bg_padding_y":    cfg.getint("subtitles", "bg_padding_y",     fallback=12),
+        "sub_font":             cfg.get("subtitles",  "font",                  fallback="Arial-Bold"),
+        "sub_fontsize":         cfg.getint("subtitles","fontsize",              fallback=76),
+        "sub_color":            cfg.get("subtitles",  "color",                 fallback="white"),
+        "sub_stroke_color":     cfg.get("subtitles",  "stroke_color",          fallback="black"),
+        "sub_stroke_width":     cfg.getint("subtitles","stroke_width",          fallback=4),
+        "sub_margin_bottom":    cfg.getint("subtitles","margin_bottom",         fallback=200),
+        "sub_margin_left":      cfg.getint("subtitles","margin_left",           fallback=40),
+        "sub_margin_right":     cfg.getint("subtitles","margin_right",          fallback=160),
+        "sub_bg_opacity":       cfg.getfloat("subtitles","bg_opacity",          fallback=0.45),
+        "sub_bg_padding_x":     cfg.getint("subtitles","bg_padding_x",          fallback=20),
+        "sub_bg_padding_y":     cfg.getint("subtitles","bg_padding_y",          fallback=12),
         # narrator subtitles
-        "nar_font":            cfg.get("narrator_subtitles", "font",          fallback="Arial-Bold"),
-        "nar_fontsize":        cfg.getint("narrator_subtitles", "fontsize",    fallback=76),
-        "nar_color":           cfg.get("narrator_subtitles", "color",         fallback="white"),
-        "nar_stroke_color":    cfg.get("narrator_subtitles", "stroke_color",  fallback="black"),
-        "nar_stroke_width":    cfg.getint("narrator_subtitles", "stroke_width",fallback=4),
+        "nar_font":             cfg.get("narrator_subtitles","font",            fallback="Arial-Bold"),
+        "nar_fontsize":         cfg.getint("narrator_subtitles","fontsize",      fallback=76),
+        "nar_color":            cfg.get("narrator_subtitles","color",           fallback="white"),
+        "nar_stroke_color":     cfg.get("narrator_subtitles","stroke_color",    fallback="black"),
+        "nar_stroke_width":     cfg.getint("narrator_subtitles","stroke_width",  fallback=4),
+        # character icon
+        "icon_x":               cfg.getint("character_icon", "x",              fallback=750),
+        "icon_y":               cfg.getint("character_icon", "y",              fallback=1450),
+        "icon_size":            cfg.getint("character_icon", "size",           fallback=220),
     }
+
     log_level = cfg.get("video", "log_level", fallback="INFO")
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
@@ -76,10 +79,18 @@ def load_config(config_path="config.ini"):
 
 
 # =========================
+# LOAD CHARACTERS
+# =========================
+def load_characters(assets_dir: Path) -> dict:
+    path = assets_dir / "characters.json"
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+# =========================
 # TEXT HELPERS
 # =========================
 def clean_subtitle_text(text: str) -> str:
-    """Strip trailing period so subtitles don't end with a dot."""
     return text.rstrip(".")
 
 
@@ -89,7 +100,6 @@ def clean_subtitle_text(text: str) -> str:
 def pad_image_to_shorts(img: Image.Image, p: dict) -> Image.Image:
     """
     Scale image to target width, pin to top, fill bottom with blurred background.
-    All padding goes at the bottom (covered by YouTube Shorts UI).
     """
     W, H   = p["target_w"], p["target_h"]
     blur_r = p["margin_blur_radius"]
@@ -104,7 +114,6 @@ def pad_image_to_shorts(img: Image.Image, p: dict) -> Image.Image:
     if new_h >= H:
         return img.crop((0, 0, W, H))
 
-    # Build blurred background canvas at full height
     bg_scale = H / src_h
     bg_w     = int(src_w * bg_scale)
     bg       = img.resize((bg_w, H), Image.LANCZOS)
@@ -118,11 +127,8 @@ def pad_image_to_shorts(img: Image.Image, p: dict) -> Image.Image:
 
     bg = bg.filter(ImageFilter.GaussianBlur(blur_r))
 
-    # Pin sharp image to top
     result = bg.copy()
     result.paste(img, (0, 0))
-
-    # Blend only the bottom seam
     result = _blend_seam(result, new_h - 1, "bottom", blend, blur_r)
     return result
 
@@ -148,6 +154,56 @@ def blur_image(img: Image.Image, radius: int) -> Image.Image:
 
 def pil_to_numpy(img: Image.Image) -> np.ndarray:
     return np.array(img.convert("RGB"))
+
+
+# =========================
+# CHARACTER ICON
+# =========================
+def make_icon_clip(
+    character: str,
+    characters_data: dict,
+    assets_dir: Path,
+    duration_s: float,
+    p: dict,
+) -> ImageClip | None:
+    """
+    Load a character's thumbnail, resize to a circle, return as an ImageClip
+    positioned at (icon_x, icon_y). Returns None if no thumbnail is available.
+    """
+    thumb_path = characters_data.get(character, {}).get("thumbnail")
+    if not thumb_path:
+        return None
+
+    # Strip leading "assets/" prefix if present so it's relative to assets_dir
+    thumb_relative = Path(thumb_path)
+    if thumb_relative.parts[0] == "assets":
+        thumb_relative = Path(*thumb_relative.parts[1:])
+    full_path = assets_dir / thumb_relative
+
+    if not full_path.exists():
+        logger.warning(f"Thumbnail not found: {full_path}")
+        return None
+
+    size = p["icon_size"]
+
+    # Load and resize to square
+    thumb = Image.open(full_path).convert("RGBA")
+    thumb = thumb.resize((size, size), Image.LANCZOS)
+
+    # Circular mask
+    mask = Image.new("L", (size, size), 0)
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+    thumb.putalpha(mask)
+
+    icon_np = np.array(thumb)
+    clip = (
+        ImageClip(icon_np, ismask=False)
+        .set_duration(duration_s)
+        .set_position((p["icon_x"], p["icon_y"]))
+    )
+    return clip
 
 
 # =========================
@@ -178,27 +234,18 @@ def subtitle_x(p: dict) -> int:
 
 
 def make_subtitle_bg(sub: TextClip, duration: float, p: dict) -> ColorClip:
-    """
-    Semi-transparent black rectangle sized to the subtitle clip + padding.
-    Place this layer immediately before the TextClip in the composite stack.
-    """
     pad_x = p["sub_bg_padding_x"]
     pad_y = p["sub_bg_padding_y"]
-    rect  = ColorClip(
+    return ColorClip(
         size=(sub.w + pad_x * 2, sub.h + pad_y * 2),
         color=(0, 0, 0),
     ).set_duration(duration).set_opacity(p["sub_bg_opacity"])
-    return rect
 
 
 def subtitle_layers(sub: TextClip, x: int, y, duration: float, p: dict) -> list:
-    """
-    Return [bg_rect, text] both correctly positioned, ready to extend a layers list.
-    y can be an int or the string "center".
-    """
-    pad_x  = p["sub_bg_padding_x"]
-    pad_y  = p["sub_bg_padding_y"]
-    bg     = make_subtitle_bg(sub, duration, p)
+    pad_x = p["sub_bg_padding_x"]
+    pad_y = p["sub_bg_padding_y"]
+    bg    = make_subtitle_bg(sub, duration, p)
 
     if y == "center":
         bg  = bg.set_position((x - pad_x, "center"))
@@ -213,23 +260,36 @@ def subtitle_layers(sub: TextClip, x: int, y, duration: float, p: dict) -> list:
 # =========================
 # CLIP BUILDERS
 # =========================
-def build_dialogue_clip(scene: dict, project_path: Path,
-                        duration_s: float, p: dict) -> CompositeVideoClip:
+def build_dialogue_clip(
+    scene: dict,
+    project_path: Path,
+    duration_s: float,
+    p: dict,
+    characters_data: dict,
+    assets_dir: Path,
+) -> CompositeVideoClip:
     img_path = project_path / scene["image"]
     img      = Image.open(img_path).convert("RGB")
     frame_np = pil_to_numpy(pad_image_to_shorts(img, p))
     bg_clip  = ImageClip(frame_np).set_duration(duration_s)
 
-    text = scene.get("text", "").strip()
-    if not text:
-        return CompositeVideoClip([bg_clip], size=(p["target_w"], p["target_h"])).set_duration(duration_s)
+    layers = [bg_clip]
 
-    sub   = make_subtitle_clip(text, duration_s, False, p)
-    sub_y = p["target_h"] - p["sub_margin_bottom"] - sub.h
-    return CompositeVideoClip(
-        [bg_clip] + subtitle_layers(sub, subtitle_x(p), sub_y, duration_s, p),
-        size=(p["target_w"], p["target_h"])
-    ).set_duration(duration_s)
+    # Character icon
+    icon = make_icon_clip(
+        scene.get("character", ""), characters_data, assets_dir, duration_s, p
+    )
+    if icon is not None:
+        layers.append(icon)
+
+    # Subtitle
+    text = scene.get("text", "").strip()
+    if text:
+        sub   = make_subtitle_clip(text, duration_s, False, p)
+        sub_y = p["target_h"] - p["sub_margin_bottom"] - sub.h
+        layers += subtitle_layers(sub, subtitle_x(p), sub_y, duration_s, p)
+
+    return CompositeVideoClip(layers, size=(p["target_w"], p["target_h"])).set_duration(duration_s)
 
 
 def build_narrator_clip(scene: dict, narrator_img_path: Path,
@@ -237,8 +297,6 @@ def build_narrator_clip(scene: dict, narrator_img_path: Path,
     img   = Image.open(narrator_img_path).convert("RGB")
     frame = pad_image_to_shorts(img, p)
 
-    # Introduction scenes show the narrator image sharp — no blur.
-    # Repeat and learning sections use blur to signal a different mode.
     if scene.get("section") != "introduction":
         frame = blur_image(frame, p["narrator_blur_radius"])
 
@@ -265,6 +323,7 @@ def build_pause_clip(scene, duration_s, p: dict,
 
     layers = [bg_clip]
     text   = scene.get("text", "").strip()
+
     if text:
         sub = make_subtitle_clip(text, duration_s, prev_is_narrator, p)
         if subtitle_position == "bottom":
@@ -301,12 +360,6 @@ def attach_audio(clip, audio_path: Path, fps: int):
 # NARRATOR IMAGE RESOLVER
 # =========================
 def resolve_narrator_path(manifest: dict, project_path: Path) -> Path | None:
-    """
-    Returns the narrator image path.
-    Primary:  manifest["narrator_image"] (written by create_images)
-    Fallback: first is_narrator scene's image field
-    Returns None if neither is available.
-    """
     rel = manifest.get("narrator_image")
     if rel:
         p = project_path / rel
@@ -314,7 +367,6 @@ def resolve_narrator_path(manifest: dict, project_path: Path) -> Path | None:
             return p
         logger.warning(f"narrator_image key exists but file missing: {p}")
 
-    # Fallback: first narrator dialogue scene with an image
     for scene in manifest.get("scenes", []):
         if scene.get("is_narrator") and scene.get("image"):
             p = project_path / scene["image"]
@@ -330,6 +382,8 @@ def resolve_narrator_path(manifest: dict, project_path: Path) -> Path | None:
 # =========================
 def create_videos(project_name: str, overwrite: bool = False):
     projects_dir, assets_dir, p = load_config()
+    characters_data = load_characters(assets_dir)
+
     project_path  = projects_dir / project_name
     manifest_path = project_path / "project_manifest.json"
 
@@ -345,8 +399,8 @@ def create_videos(project_name: str, overwrite: bool = False):
     videos_dir     = project_path / "videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
 
-    fps              = p["fps"]
-    dialogue_hold_s  = p["dialogue_hold_s"]
+    fps             = p["fps"]
+    dialogue_hold_s = p["dialogue_hold_s"]
 
     last_frame_np    = None
     last_is_narrator = False
@@ -369,11 +423,11 @@ def create_videos(project_name: str, overwrite: bool = False):
                 logger.warning(f"SFX not found: {sfx_audio_path} — skipping {scene_id}")
                 continue
 
-            sfx_audio   = AudioFileClip(str(sfx_audio_path))
-            clip        = build_pause_clip({"text": ""}, sfx_audio.duration, p,
-                                           prev_frame_np=last_frame_np,
-                                           prev_is_narrator=last_is_narrator)
-            clip        = clip.set_audio(sfx_audio)
+            sfx_audio = AudioFileClip(str(sfx_audio_path))
+            clip      = build_pause_clip({"text": ""}, sfx_audio.duration, p,
+                                         prev_frame_np=last_frame_np,
+                                         prev_is_narrator=last_is_narrator)
+            clip = clip.set_audio(sfx_audio)
             try:
                 clip.write_videofile(str(out_path), fps=fps, codec="libx264",
                                      audio_codec="aac",
@@ -410,16 +464,19 @@ def create_videos(project_name: str, overwrite: bool = False):
                     if not narrator_path:
                         logger.error(f"No narrator image available for {scene_id} — skipping")
                         continue
-                    clip = build_narrator_clip(scene, narrator_path, duration_s, p)
-                    img  = Image.open(narrator_path).convert("RGB")
+                    clip  = build_narrator_clip(scene, narrator_path, duration_s, p)
+                    img   = Image.open(narrator_path).convert("RGB")
                     frame = pad_image_to_shorts(img, p)
                     if scene.get("section") != "introduction":
                         frame = blur_image(frame, p["narrator_blur_radius"])
                     last_frame_np    = pil_to_numpy(frame)
                     last_is_narrator = True
                 else:
-                    clip = build_dialogue_clip(scene, project_path, duration_s, p)
-                    img  = Image.open(project_path / scene["image"]).convert("RGB")
+                    clip = build_dialogue_clip(
+                        scene, project_path, duration_s, p,
+                        characters_data, assets_dir,
+                    )
+                    img = Image.open(project_path / scene["image"]).convert("RGB")
                     last_frame_np    = pil_to_numpy(pad_image_to_shorts(img, p))
                     last_is_narrator = False
 
@@ -476,4 +533,4 @@ def main():
     create_videos(args.project_name, overwrite=args.overwrite)
 
 if __name__ == "__main__":
-    create_videos("coffee_convo_1")
+    create_videos("office_convo_3")
