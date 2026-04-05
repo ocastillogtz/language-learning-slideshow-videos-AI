@@ -193,8 +193,8 @@ def main():
 # =========================
 if __name__ == "__main__":
     create_project(
-        project_name="office_convo_4",
+        project_name="office_convo_6",
         scene_text="Zahra is talking with Wiebke, Zahra states that the delivery of the product can't be achieved because of the lack of the new safety label, then Wiebke says that she is going to take care of it and the delivery is going to happen as planned ",
-        learning_text="the grammatical construction Um ... zu. The expression: ich kuemmere mich um",
+        learning_text="the grammatical construction Um ... zu and The expression: ich kuemmere mich um",
     )
 

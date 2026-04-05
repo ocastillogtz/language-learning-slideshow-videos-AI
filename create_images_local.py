@@ -428,7 +428,12 @@ def _comfyui_url(host: str, port: int, path: str) -> str:
 
 
 def queue_prompt(workflow: dict, client_id: str, host: str, port: int) -> str:
-    """POST workflow to /prompt, return prompt_id."""
+    """POST workflow to /prompt, return prompt_id.
+
+    ComfyUI validates the workflow synchronously and returns errors in the
+    response body (not as an HTTP error code).  We check for them here so
+    the problem is surfaced immediately rather than as a silent empty-output.
+    """
     payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
     req = urllib.request.Request(
         _comfyui_url(host, port, "/prompt"),
@@ -436,7 +441,50 @@ def queue_prompt(workflow: dict, client_id: str, host: str, port: int) -> str:
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
+        raw = resp.read()
+
+    logger.info(f"ComfyUI /prompt raw response:\n{raw.decode('utf-8', errors='replace')}")
+    result = json.loads(raw)
+
+    # ComfyUI always returns "node_errors" in the response (empty dict {} on success).
+    # Only treat as failure when "error" key is present OR node_errors is non-empty.
+    if result.get("error") or result.get("node_errors"):
+        error_val   = result.get("error", "unknown error")
+        # Older ComfyUI builds wrap the message inside {"type":..., "message":..., "details":...}
+        if isinstance(error_val, dict):
+            error_msg = (
+                f"{error_val.get('type','?')}: {error_val.get('message','?')} "
+                f"| details: {error_val.get('details','')}"
+            )
+        else:
+            error_msg = str(error_val)
+
+        node_errors = result.get("node_errors", {})
+        details = []
+        for node_id, node_err in node_errors.items():
+            # node_err can be a list of error dicts or a plain dict
+            if isinstance(node_err, list):
+                for e in node_err:
+                    details.append(
+                        f"  node {node_id}: {e.get('type','?')} — {e.get('message','?')} "
+                        f"(details: {e.get('details','')})"
+                    )
+            elif isinstance(node_err, dict):
+                details.append(
+                    f"  node {node_id} ({node_err.get('class_type','?')}): "
+                    f"{node_err.get('errors', node_err)}"
+                )
+            else:
+                details.append(f"  node {node_id}: {node_err}")
+
+        detail_str = "\n".join(details) if details else "(no node details — see raw response above)"
+        raise RuntimeError(
+            f"ComfyUI workflow validation failed: {error_msg}\n{detail_str}"
+        )
+
+    if "prompt_id" not in result:
+        raise RuntimeError(f"ComfyUI /prompt returned unexpected response: {result}")
+
     return result["prompt_id"]
 
 
@@ -455,6 +503,15 @@ def fetch_image(filename: str, subfolder: str, folder_type: str, host: str, port
         return resp.read()
 
 
+# OSError Errno 22 is thrown by ComfyUI Desktop on Windows via its patched tqdm
+# stderr writer.  The image is already saved before this happens — ignore it.
+_WINDOWS_TQDM_OSERROR = "OSError: [Errno 22] Invalid argument"
+
+
+def _is_nonfatal_windows_error(error_lines: list) -> bool:
+    return bool(error_lines) and all(_WINDOWS_TQDM_OSERROR in e for e in error_lines)
+
+
 def wait_for_image(
     prompt_id: str,
     host: str,
@@ -462,23 +519,84 @@ def wait_for_image(
     poll_interval: float,
     timeout_s: float,
 ) -> bytes:
-    """Poll /history until done, then download the first output image."""
+    """Poll /history until done, then download the first output image.
+
+    Outputs are checked BEFORE status.  On ComfyUI Desktop / Windows the tqdm
+    progress bar triggers an OSError that marks the prompt as failed even though
+    SaveImage already wrote the file — checking outputs first handles this.
+    """
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         history = fetch_history(prompt_id, host, port)
         if prompt_id in history:
-            outputs = history[prompt_id].get("outputs", {})
-            for node_output in outputs.values():
+            entry   = history[prompt_id]
+            outputs = entry.get("outputs", {})
+            status  = entry.get("status", {})
+
+            # ── Happy path first: image present in outputs ──────────────
+            # Check this before status so the Windows/tqdm OSError (which marks
+            # the prompt errored after SaveImage already ran) does not hide
+            # successfully generated images.
+            for node_id, node_output in outputs.items():
                 images = node_output.get("images", [])
                 if images:
                     img_info = images[0]
+                    logger.debug(f"Image found in output node {node_id}: {img_info['filename']}")
+                    if status.get("status_str") == "error":
+                        logger.warning(
+                            "ComfyUI reported an error status but image was produced — "
+                            "likely the Windows/tqdm OSError (non-fatal). Continuing."
+                        )
                     return fetch_image(
                         img_info["filename"],
                         img_info.get("subfolder", ""),
                         img_info.get("type", "output"),
                         host, port,
                     )
-            raise RuntimeError(f"Prompt {prompt_id} finished but no images found in output")
+
+            # ── No outputs: now inspect status for real errors ──────────
+            if status.get("status_str") == "error" or status.get("completed") is False:
+                messages = status.get("messages", [])
+                error_lines = []
+                for msg in messages:
+                    if isinstance(msg, (list, tuple)) and len(msg) >= 2:
+                        evt, data = msg[0], msg[1]
+                        if evt == "execution_error":
+                            node_id   = data.get("node_id", "?")
+                            node_type = data.get("node_type", "?")
+                            exc_type  = data.get("exception_type", "?")
+                            exc_msg   = data.get("exception_message", "?")
+                            tb        = "\n".join(data.get("traceback", []))
+                            error_lines.append(
+                                f"  node {node_id} ({node_type}): {exc_type}: {exc_msg}\n{tb}"
+                            )
+
+                if _is_nonfatal_windows_error(error_lines):
+                    # The only error is the Windows tqdm OSError and no image was
+                    # produced — very unlikely, but keep polling a bit longer.
+                    logger.warning("Windows tqdm OSError with no output yet — retrying...")
+                    time.sleep(poll_interval)
+                    continue
+
+                if error_lines:
+                    raise RuntimeError(
+                        f"ComfyUI execution error in prompt {prompt_id}:\n"
+                        + "\n".join(error_lines)
+                    )
+
+                logger.error(f"ComfyUI reported error. Full status: {status}")
+                raise RuntimeError(
+                    f"Prompt {prompt_id} failed with no structured error info. "
+                    f"Status: {status}"
+                )
+
+            # Completed successfully but truly no images
+            logger.error(f"Prompt {prompt_id} outputs: {outputs}")
+            raise RuntimeError(
+                f"Prompt {prompt_id} finished with no images. "
+                f"Output node keys: {list(outputs.keys())}"
+            )
+
         time.sleep(poll_interval)
     raise TimeoutError(f"ComfyUI did not finish prompt {prompt_id} within {timeout_s}s")
 
@@ -677,4 +795,4 @@ def main():
         generate_images(args.project_name, args.format)
 
 if __name__ == "__main__":
-    generate_images("office_convo_4")
+    generate_images("office_convo_6")

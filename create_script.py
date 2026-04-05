@@ -2,19 +2,19 @@
 create_script.py
 
 Generate script and populate project_manifest.json.
-Extracts: insights, context, visual_context (global), conversation.
 
-Each dialogue line now carries a per-scene visual_context as the 5th
-pipe-delimited field, describing what is visually happening in that moment
-(not just the room, but the scene action / subject being discussed).
+Conversation line format (6 pipe-separated fields):
+  dialogue:  char|mode|section|text|visual_context|stage
+  pause:     pause||subtitle|duration_ms||
+  sfx:       sfx|||name||
 
-Non-dialogue lines (pause, sfx) use an empty 5th field so the format
-stays uniformly parseable by position.
-
-Conversation line format:
-  dialogue:  char|mode|section|text|visual_context
-  pause:     pause||subtitle|duration_ms|
-  sfx:       sfx|||name|
+Field definitions:
+  visual_context (field 5): CHARACTER POSE ONLY — facing direction, angle, expression,
+                            body language. NO environment. e.g. "facing left at 45 degrees,
+                            arms crossed, neutral expression".
+  stage        (field 6): BACKGROUND ONLY — location, lighting, furniture, time of day.
+                          No characters. Identical stage strings across scenes → background
+                          image is cached and reused for consistency.
 """
 
 import os
@@ -68,7 +68,7 @@ def build_prompt(level: str, scene: str, learning: str) -> str:
     <visual_context>
     </visual_context>
     <conversation>
-    char|mode|section|text|visual_context
+    char|mode|section|text|visual_context|stage
     </conversation>
 
     follow this conversation block scheme:
@@ -78,53 +78,61 @@ def build_prompt(level: str, scene: str, learning: str) -> str:
     2. dialog element 1
     3. dialog element 2
     4. dialog element 3
-    repeat section: The narrator guides
+    repeat section
     5. repeat introduction: bitte wiederholen
     6. repeat element 1
     7. repeat element 2
     8. repeat element 3
 
-
     rules:
     - Write detailed learning insights based on the level {level}
     - Use german characters, we can have UTF-8.
     - The FIRST line of <conversation> MUST always be a Narrator line introducing the scene
-    - All conversations must have the introduction, the dialog andthe repeating section.
-    - The speaker that requests something or proposes something, uses a faster speech and the one that replies or inquires, uses a slower speech.
+    - All conversations must have the introduction, the dialog and the repeating section.
+    - The speaker that requests/proposes uses faster speech; the one that replies/inquires uses slower speech.
     - narrator introduces context at the start
     - short, natural sentences
     - include repetition section after dialog section
     - in the repetition section the narrator uses a slower speak mode
-    - add sfx|||bell| before each repetition phrase
-    - pauses: pause|||<ms>|  (no text) OR  pause||<subtitle_text>|<ms>|  (with subtitle)
-    - sfx: sfx|||<n>|
+    - add sfx|||bell|| before each repetition phrase
+    - pauses: pause|||<ms>||  (no text) OR  pause||<subtitle_text>|<ms>||  (with subtitle)
+    - sfx: sfx|||<n>||
     - output strictly in format, no markdown, no extra text
 
-    <visual_context> rules (global — used for narrator/establishing shot):
-    - Describe the physical scene in detail: location, time of day, lighting, atmosphere
-    - For each character: exact position in frame, clothing (colors, style), posture
-    - Describe furniture, objects, colors — anything that must stay consistent across images
+    <visual_context> rules (global — establishing shot description):
+    - Describe the physical scene: location, time of day, lighting, atmosphere
+    - For each character: exact position (left/right), clothing, posture
+    - Describe furniture, objects, colors for consistency across images
     - Write in English, concise but specific (3-6 sentences)
-    - Do not mention the topic of conversation here
+    - Do not mention the topic of conversation
 
-    per-line visual_context rules (5th field on EVERY line, including pause and sfx):
-    - For dialogue lines: describe what is VISUALLY HAPPENING in that specific moment
-    - If the character is talking ABOUT something (going to the movies, seeing a cat,
-      fixing a pipe) → show THAT THING. Example: the character standing at a cinema
-      entrance, a street cat looking up at the character, hands under a leaking sink.
-    - Very important to add the position of the characters in its context who is on the right and left of the image, very explicit.
-    - For narrator introduction and repeat lines: show the characters in the room
-      in the establishing shot composition described in <visual_context>
-    - this visual context is going to help us build images, so if they happen in the same environment, the characters should NOT switch places
-    - Be specific: character position, action, expression, environment. 1-2 sentences in English.
-    - For pause lines: empty field — end the line with | like: pause|||1000|
-    - For sfx lines: empty field — end the line with | like: sfx|||bell|
+    per-line visual_context rules (field 5 — CHARACTER POSE ONLY, no environment):
+    - Describe ONLY the speaking character's pose, facing direction, angle, and expression
+    - Be explicit about angle: "facing left at 45 degrees", "full profile facing right",
+      "three-quarter view facing camera", "facing right at 90 degrees", etc.
+    - Include expression and body language: leaning forward, arms gesturing, hands on hips
+    - If talking ABOUT an action elsewhere, describe the character's reaction pose as if
+      interacting with/looking at that thing off-screen
+    - Characters in the same room MUST NOT switch left/right positions between scenes
+    - For narrator lines: describe both characters in their established room positions
+    - For repeat narrator lines: pose is optional, can be empty
+    - Keep to 1-2 sentences in English
+    - For pause/sfx lines: empty — end with two trailing pipes
+
+    per-line stage rules (field 6 — BACKGROUND ENVIRONMENT ONLY, no characters):
+    - Describe ONLY the physical background: location type, time of day, lighting,
+      key furniture/objects, color palette
+    - For all scenes in the SAME room: use the EXACT SAME stage string every time
+      (enables background caching — identical strings reuse the same background image)
+    - For action scenes in a different location: describe that new environment
+    - Keep to 1-2 sentences in English
+    - For pause/sfx lines AND repeat narrator lines: empty — end line with trailing pipe
 
     example:
 
     <insights>
     In diesem Dialog werden einige fortgeschrittene Wörter verwendet:
-    - "Bericht" (Report) - ein schriftliches Dokument.
+    - "Bericht" (Report) - ein schriftliches Dokument mit Daten und Analysen.
     </insights>
     <context>
     Die Szene findet in einem deutschen Büro statt.
@@ -133,25 +141,25 @@ def build_prompt(level: str, scene: str, learning: str) -> str:
     Bright modern office, large windows with natural daylight on the left. Zahra stands on the left wearing a dark navy blazer and white blouse, arms slightly crossed. Olena sits at a light oak desk on the right, wearing a light grey cardigan, leaning forward attentively. The desk has a laptop, a white coffee mug, and a small potted plant. Walls are white with a framed abstract print in muted blues.
     </visual_context>
     <conversation>
-    Narrator|clear slow|introduction|In diesem Szenario ist Zahra die Chefin, die Olena einen Auftrag gibt.|Zahra stands confidently near the window, Olena looks up from her desk with an attentive expression, morning light fills the room.
-    pause|||2000|
-    Zahra|normal|dialog|Ich brauche einen Bericht bis Freitag.|Zahra leans toward Olena's desk, gesturing with one hand, direct eye contact, professional office setting.
-    pause|||700|
-    Olena|slower|dialog|Alles klar, ich fange sofort an.|Olena turns to her laptop and begins typing, focused expression, coffee mug beside her keyboard.
-    pause|||700|
-    Zahra|normal|dialog|Perfekt. Danke.|Zahra gives a brief approving nod and walks toward the door, Olena watches from her desk.
-    sfx|||bell|
-    Narrator|slower|repeat|Bitte wiederholen|Both characters in the room, Olena at desk, Zahra near window, calm atmosphere.
-    pause|||800|
-    sfx|||bell|
-    Narrator|slower|repeat|Ich brauche einen Bericht bis Freitag.|
-    pause||Ich brauche einen Bericht bis Freitag.|3500|
-    sfx|||bell|
-    Narrator|slower|repeat|Alles klar, ich fange sofort an.|
-    pause||Alles klar, ich fange sofort an.|3500|
-    sfx|||bell|
-    Narrator|slower|repeat|Perfekt. Danke.|
-    pause||Perfekt. Danke.|3500|
+    Narrator|clear slow|introduction|In diesem Szenario ist Zahra die Chefin, die Olena einen Auftrag gibt.|ZahraBrezel on the left facing right at 45 degrees, calm posture; OlenaBrezel on the right facing left, leaning forward.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
+    pause|||2000||
+    Zahra|normal|dialog|Ich brauche einen Bericht bis Freitag.|ZahraBrezel facing right at 45 degrees, gesturing with right hand, direct and confident.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
+    pause|||700||
+    Olena|slower|dialog|Alles klar, ich fange sofort an.|OlenaBrezel facing left at 90 degrees, seated, turning toward keyboard, focused expression.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
+    pause|||700||
+    Zahra|normal|dialog|Perfekt. Danke.|ZahraBrezel facing right at 30 degrees, brief approving nod, slight smile.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
+    sfx|||bell||
+    Narrator|slower|repeat|Bitte wiederholen|ZahraBrezel on the left facing right; OlenaBrezel on the right facing left, seated.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
+    pause|||800||
+    sfx|||bell||
+    Narrator|slower|repeat|Ich brauche einen Bericht bis Freitag.|||
+    pause||Ich brauche einen Bericht bis Freitag.|3500||
+    sfx|||bell||
+    Narrator|slower|repeat|Alles klar, ich fange sofort an.|||
+    pause||Alles klar, ich fange sofort an.|3500||
+    sfx|||bell||
+    Narrator|slower|repeat|Perfekt. Danke.|||
+    pause||Perfekt. Danke.|3500||
     </conversation>
 
     scene:
@@ -195,7 +203,7 @@ def parse_conversation(conversation: str):
         char_raw = parts[0].strip()
         char     = char_raw.lower()
 
-        # PAUSE  —  pause||subtitle|duration_ms|
+        # PAUSE  —  pause||subtitle|duration_ms||
         if char == "pause":
             subtitle = parts[2].strip() if len(parts) > 2 else ""
             try:
@@ -208,7 +216,7 @@ def parse_conversation(conversation: str):
             })
             continue
 
-        # SFX  —  sfx|||name|
+        # SFX  —  sfx|||name||
         if char == "sfx":
             scenes.append({
                 "id": scene_id, "type": "sfx",
@@ -216,7 +224,7 @@ def parse_conversation(conversation: str):
             })
             continue
 
-        # DIALOGUE  —  char|mode|section|text|visual_context
+        # DIALOGUE  —  char|mode|section|text|visual_context|stage
         if len(parts) < 4:
             logger.warning(f"Skipping incomplete dialogue line {idx}: {line!r}")
             continue
@@ -226,6 +234,7 @@ def parse_conversation(conversation: str):
         section      = parts[2].strip()
         text         = parts[3].strip()
         scene_visual = parts[4].strip() if len(parts) > 4 else ""
+        stage        = parts[5].strip() if len(parts) > 5 else ""
 
         if char != "narrator" and section == "dialog":
             if speaker not in recent_characters:
@@ -240,6 +249,7 @@ def parse_conversation(conversation: str):
             "id": scene_id, "type": "dialogue",
             "character": speaker, "mode": mode, "section": section, "text": text,
             "visual_context": scene_visual,
+            "stage": stage,
             "characters": scene_characters, "is_narrator": is_narrator,
             "audio": None, "image": None
         })
@@ -328,4 +338,4 @@ def main():
     create_script(args.project_name)
 
 if __name__ == "__main__":
-    create_script("office_convo_4")
+    create_script("office_convo_6")
