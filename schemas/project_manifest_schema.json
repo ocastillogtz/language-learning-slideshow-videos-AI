@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Project Manifest Schema",
+  "description": "Schema for the project manifest file used in the AI Video Generation pipeline.",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "created_at"]
+    },
+    "style": { "type": "string" },
+    "title": { "type": "string" },
+    "tags": { "type": "string" },
+    "insights": { "type": "string" },
+    "provided-context": { "type": "string" },
+    "provided-learning-points": { "type": "string" },
+    "location-key": { "type": "string" },
+    "main-background": { "type": "string" },
+    "inter-pause-ms": { "type": "integer" },
+    "repetition-pause-factor": { "type": "number" },
+    "repetition-bell-audio": { "type": "string" },
+    "bitte-wiederholen-audio": { "type": "string" },
+    "characters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "placement": { "type": "string" },
+          "image": { "type": ["string", "null"] }
+        },
+        "required": ["name", "placement"]
+      }
+    },
+    "conversation": {
+      "type": "object",
+      "properties": {
+        "narration": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" },
+            "image": { "type": "string" },
+            "audio-file": { "type": "string" },
+            "duration-ms": { "type": "integer" },
+            "audio-transcript": { "type": "string" }
+          },
+          "required": ["text", "image", "audio-file", "duration-ms", "audio-transcript"]
+        },
+        "dialog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" },
+              "speaker": { "type": "string" },
+              "speaker-posture": { "type": "string" },
+              "shot_type": { "type": "string" },
+              "image-cache-key": { "type": "string" },
+              "image": { "type": "string" },
+              "audio-file": { "type": "string" },
+              "duration-ms": { "type": "integer" },
+              "audio-transcript": { "type": "string" },
+              "cutaway": { "type": "string" },
+              "prompt-cutaway-image": { "type": "string" }
+            },
+            "required": ["text", "speaker", "speaker-posture", "shot_type", "image-cache-key", "image", "audio-file", "duration-ms", "audio-transcript"]
+          }
+        }
+      },
+      "required": ["narration", "dialog"]
+    },
+    "repetitions": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "index": { "type": "integer" },
+          "duration-ms": { "type": "integer" }
+        },
+        "required": ["id", "type"]
+      }
+    }
+  },
+  "required": [
+    "project",
+    "style",
+    "title",
+    "tags",
+    "insights",
+    "provided-context",
+    "provided-learning-points",
+    "location-key",
+    "main-background",
+    "inter-pause-ms",
+    "repetition-pause-factor",
+    "repetition-bell-audio",
+    "bitte-wiederholen-audio",
+    "characters",
+    "conversation",
+    "repetitions",
+    "scenes"
+  ]
+}
