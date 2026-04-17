@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Details - German Learning Video Generator</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="mb-4">Project: {{ project_name }}</h1>
+                
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">Project Information</h5>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Created:</strong> {{ project.project.created_at }}</p>
+                        <p><strong>Context:</strong> {{ project.provided-context }}</p>
+                        <p><strong>Learning Points:</strong> {{ project.provided-learning-points }}</p>
+                    </div>
+                </div>
+                
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">Project Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Style:</strong> {{ project.style or 'Not set' }}</p>
+                        <p><strong>Location:</strong> {{ project["location-key"] or 'Not set' }}</p>
+                        <p><strong>Characters:</strong> {{ project.characters|join(', ') or 'None' }}</p>
+                        <p><strong>Scenes:</strong> {{ project.scenes|length or 0 }}</p>
+                    </div>
+                </div>
+                
+                <div class="d-flex justify-content-between">
+                    <a href="/" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left me-2"></i>Back to Projects
+                    </a>
+                    <a href="/project/{{ project_name }}/run" class="btn btn-primary">
+                        <i class="fas fa-play me-2"></i>Run Pipeline
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap 5 JS Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

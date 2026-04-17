@@ -1,846 +1,146 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Video Pipeline</title>
-<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0d0d11;color:#dddde8;min-height:100vh}
-
-/* ── Layout ── */
-.shell{display:flex;height:100vh;overflow:hidden}
-.sidebar{width:210px;min-width:210px;background:#13131a;border-right:1px solid #222230;
-         overflow-y:auto;display:flex;flex-direction:column}
-.main{flex:1;overflow-y:auto;padding:24px 28px}
-
-/* ── Sidebar ── */
-.sidebar-title{padding:18px 16px 10px;font-size:11px;font-weight:700;letter-spacing:.08em;
-               text-transform:uppercase;color:#555}
-.proj-btn{display:block;width:100%;text-align:left;padding:9px 16px;background:none;
-          border:none;color:#999;cursor:pointer;font-size:13px;
-          border-left:3px solid transparent;transition:all .12s}
-.proj-btn:hover{background:#1a1a24;color:#fff}
-.proj-btn.active{background:#1a1a24;color:#a78bfa;border-left-color:#a78bfa}
-
-/* ── Cards ── */
-.card{background:#13131a;border:1px solid #222230;border-radius:10px;
-      padding:18px 20px;margin-bottom:16px}
-.card-title{font-size:11px;font-weight:700;color:#555;text-transform:uppercase;
-            letter-spacing:.07em;margin-bottom:14px}
-
-/* ── Stats row ── */
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:12px}
-.stat{background:#0d0d11;border:1px solid #222230;border-radius:8px;
-      padding:12px;text-align:center}
-.stat-val{font-size:22px;font-weight:700;line-height:1}
-.stat-lbl{font-size:11px;color:#555;margin-top:4px}
-
-/* ── Meta grid ── */
-.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.meta-grid.full{grid-template-columns:1fr}
-.meta-label{font-size:11px;font-weight:700;color:#555;text-transform:uppercase;
-            letter-spacing:.07em;margin-bottom:5px}
-.meta-val{background:#0d0d11;border-radius:6px;padding:10px 12px;font-size:13px;
-          line-height:1.6;color:#aaa;white-space:pre-wrap;max-height:160px;overflow-y:auto}
-
-/* ── Section tabs ── */
-.tabs{display:flex;gap:4px;margin-bottom:18px;border-bottom:1px solid #222230;padding-bottom:0}
-.tab{padding:8px 16px;font-size:13px;background:none;border:none;color:#666;cursor:pointer;
-     border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .12s}
-.tab:hover{color:#ccc}
-.tab.active{color:#a78bfa;border-bottom-color:#a78bfa}
-
-/* ── Dialog item card ── */
-.dialog-card{background:#0d0d11;border:1px solid #222230;border-radius:8px;
-             margin-bottom:10px;overflow:hidden}
-.dialog-header{display:flex;align-items:center;gap:10px;padding:10px 14px;
-               cursor:pointer;user-select:none}
-.dialog-header:hover{background:#13131a}
-.dialog-body{padding:14px;border-top:1px solid #1a1a24;display:grid;
-             grid-template-columns:180px 1fr;gap:16px}
-.dialog-body.no-image{grid-template-columns:1fr}
-
-/* ── Image preview ── */
-.img-thumb{width:180px;aspect-ratio:9/16;object-fit:cover;border-radius:6px;
-           border:1px solid #2a2a36;cursor:zoom-in;display:block}
-.img-placeholder{width:180px;aspect-ratio:9/16;background:#1a1a24;border-radius:6px;
-                 border:1px dashed #333;display:flex;align-items:center;
-                 justify-content:center;color:#444;font-size:12px}
-
-/* ── Lightbox ── */
-.lightbox{position:fixed;inset:0;background:#000a;display:flex;align-items:center;
-          justify-content:center;z-index:2000;cursor:zoom-out}
-.lightbox img{max-height:90vh;max-width:90vw;border-radius:8px;
-              box-shadow:0 8px 40px #0008}
-
-/* ── Audio player ── */
-audio{width:100%;height:32px;border-radius:4px;accent-color:#a78bfa;margin:6px 0}
-
-/* ── Prompt editor ── */
-.prompt-area{width:100%;background:#0a0a0f;border:1px solid #2a2a36;border-radius:6px;
-             color:#ccc;font-size:12px;font-family:monospace;line-height:1.5;
-             padding:8px;resize:vertical;min-height:80px;transition:border-color .12s}
-.prompt-area:focus{outline:none;border-color:#a78bfa}
-.prompt-row{display:flex;align-items:flex-start;gap:8px;margin-top:6px}
-
-/* ── Buttons ── */
-.btn{padding:5px 12px;border-radius:6px;border:1px solid #2a2a36;background:none;
-     color:#888;font-size:12px;cursor:pointer;transition:all .12s;white-space:nowrap}
-.btn:hover:not(:disabled){border-color:#a78bfa;color:#a78bfa;background:#a78bfa11}
-.btn:disabled{opacity:.35;cursor:not-allowed}
-.btn.loading{border-color:#f59e0b;color:#f59e0b}
-.btn.ok{border-color:#4ade80;color:#4ade80}
-.btn.err{border-color:#ef4444;color:#ef4444}
-.btn.primary{border-color:#a78bfa;color:#a78bfa;background:#a78bfa11}
-
-/* ── Badges ── */
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
-.b-both{background:#1e3a5f;color:#60a5fa}
-.b-over_shoulder_A,.b-over_shoulder_B{background:#2d1a3a;color:#c084fc}
-.b-narration{background:#1a2d1a;color:#86efac}
-.b-repetition{background:#2d2a1a;color:#f59e0b}
-.b-cutaway{background:#3a1a1a;color:#f87171}
-
-/* ── Status dots ── */
-.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex-shrink:0}
-.dot-ok{background:#4ade80}
-.dot-miss{background:#ef4444}
-.dot-na{background:#333}
-
-/* ── Cost history ── */
-.cost-row{display:grid;grid-template-columns:140px 80px 1fr;gap:8px;
-          font-size:12px;padding:5px 0;border-bottom:1px solid #1a1a24;color:#888}
-.cost-row:last-child{border:none}
-.cost-amount{color:#f59e0b;font-weight:600}
-.cost-total{font-size:16px;font-weight:700;color:#f59e0b;margin-top:8px}
-
-/* ── Toast ── */
-.toast{position:fixed;bottom:24px;right:24px;background:#13131a;border:1px solid #333;
-       border-radius:8px;padding:11px 16px;font-size:13px;z-index:3000;max-width:320px;
-       animation:su .2s ease}
-.toast.ok{border-color:#4ade80;color:#4ade80}
-.toast.err{border-color:#ef4444;color:#ef4444}
-@keyframes su{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-
-/* ── Misc ── */
-.empty{color:#444;padding:40px;text-align:center;font-size:14px}
-.spin{display:inline-block;width:13px;height:13px;border:2px solid #333;
-      border-top-color:#a78bfa;border-radius:50%;animation:sp .6s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
-.expand-caret{font-size:10px;color:#555;margin-left:auto}
-.speaker-badge{font-size:12px;font-weight:600;color:#a78bfa}
-.shot-info{font-size:11px;color:#555}
-.text-preview{font-size:13px;color:#ccc;flex:1;overflow:hidden;
-              text-overflow:ellipsis;white-space:nowrap}
-.section-label{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
-               color:#555;font-weight:700;padding:14px 0 6px}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>German Learning Video Generator</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
-<div id="root"></div>
-<script type="text/babel">
-const { useState, useEffect, useCallback, useRef } = React;
-
-// ── API ──────────────────────────────────────────────────────────────────────
-const A = {
-  projects:    ()      => fetch("/api/projects").then(r=>r.json()),
-  project:     (n)     => fetch(`/api/projects/${n}`).then(r=>r.json()),
-  asset:       (n,rel) => `/api/projects/${n}/asset/${rel}`,
-  dialogImg:   (n,i)   => `/api/projects/${n}/dialog/${i}/image`,
-  dialogAudio: (n,i)   => `/api/projects/${n}/dialog/${i}/audio`,
-  narImg:      (n)     => `/api/projects/${n}/narration/image`,
-  narAudio:    (n)     => `/api/projects/${n}/narration/audio`,
-  repAudio:    (n,i)   => `/api/projects/${n}/repetition/${i}/audio`,
-
-  patchPrompt: (url, prompt) =>
-    fetch(url, {method:"PATCH", headers:{"Content-Type":"application/json"},
-                body:JSON.stringify({prompt})}),
-  post: (url) => fetch(url, {method:"POST"}),
-  addCost: (n, body) =>
-    fetch(`/api/projects/${n}/cost`, {method:"POST",
-      headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)}),
-};
-
-// ── Toast ─────────────────────────────────────────────────────────────────────
-function Toast({msg, kind, onDone}) {
-  useEffect(()=>{ const t=setTimeout(onDone,3500); return ()=>clearTimeout(t); },[]);
-  return <div className={`toast ${kind}`}>{msg}</div>;
-}
-
-// ── Lightbox ──────────────────────────────────────────────────────────────────
-function Lightbox({src, onClose}) {
-  useEffect(()=>{
-    const h = e => { if(e.key==="Escape") onClose(); };
-    window.addEventListener("keydown",h);
-    return ()=>window.removeEventListener("keydown",h);
-  },[]);
-  return (
-    <div className="lightbox" onClick={onClose}>
-      <img src={src} onClick={e=>e.stopPropagation()} alt="preview"/>
-    </div>
-  );
-}
-
-// ── Action button with loading/ok/err states ──────────────────────────────────
-function Btn({label, onClick, disabled, className=""}) {
-  const [st, setSt] = useState("idle");
-  const run = async () => {
-    setSt("loading");
-    try { const ok = await onClick(); setSt(ok?"ok":"err"); }
-    catch { setSt("err"); }
-    setTimeout(()=>setSt("idle"), 2500);
-  };
-  const lbl = st==="loading"? <span className="spin"/> : st==="ok"?"✓":st==="err"?"✗":label;
-  return (
-    <button className={`btn ${st!=="idle"?st:""} ${className}`}
-            onClick={run} disabled={disabled||st==="loading"}>
-      {lbl}
-    </button>
-  );
-}
-
-// ── Prompt editor ──────────────────────────────────────────────────────────────
-function PromptEditor({label, initial, patchUrl, onToast}) {
-  const [val, setVal]     = useState(initial || "");
-  const [saved, setSaved] = useState(true);
-
-  useEffect(()=>{ setVal(initial||""); setSaved(true); }, [initial]);
-
-  const save = async () => {
-    const r = await A.patchPrompt(patchUrl, val);
-    if(r.ok){ setSaved(true); onToast("Prompt saved","ok"); return true; }
-    onToast("Failed to save prompt","err"); return false;
-  };
-
-  return (
-    <div style={{marginTop:8}}>
-      <div className="meta-label" style={{marginBottom:4}}>{label}</div>
-      <textarea
-        className="prompt-area"
-        value={val}
-        onChange={e=>{ setVal(e.target.value); setSaved(false); }}
-        rows={4}
-      />
-      <div className="prompt-row">
-        <Btn label="Save prompt" onClick={save} disabled={saved}/>
-        {!saved && <span style={{fontSize:11,color:"#f59e0b",marginLeft:4}}>unsaved</span>}
-      </div>
-    </div>
-  );
-}
-
-// ── Audio row ─────────────────────────────────────────────────────────────────
-function AudioRow({src, exists, patchUrl, onRegen, onToast}) {
-  if(!exists) return (
-    <div style={{display:"flex",gap:8,alignItems:"center",marginTop:6}}>
-      <span className="dot dot-miss" title="missing"/>
-      <Btn label="Generate audio" onClick={onRegen}/>
-    </div>
-  );
-  return (
-    <div style={{marginTop:6}}>
-      <audio controls src={src} preload="none"/>
-      <div style={{display:"flex",gap:6,marginTop:4}}>
-        <Btn label="🔊 Regen" onClick={onRegen}/>
-      </div>
-    </div>
-  );
-}
-
-// ── Image panel ───────────────────────────────────────────────────────────────
-function ImagePanel({src, exists, onRegen, onZoom}) {
-  return (
-    <div>
-      {exists
-        ? <img className="img-thumb" src={src} alt="scene" onClick={()=>onZoom(src)}/>
-        : <div className="img-placeholder">no image</div>}
-      <div style={{marginTop:6}}>
-        <Btn label={exists?"🖼 Regen":"Generate"} onClick={onRegen}/>
-      </div>
-    </div>
-  );
-}
-
-// ── Dialog item ───────────────────────────────────────────────────────────────
-function DialogItem({item, index, projectName, onToast, onRefresh, onZoom}) {
-  const [open, setOpen] = useState(false);
-
-  const shotCls = `badge b-${item.shot_type||"both"}`;
-
-  const regenImage = async () => {
-    const r = await A.post(`/api/projects/${projectName}/dialog/${index}/regenerate-image`);
-    const d = await r.json();
-    if(d.ok){ onToast("Image regenerated","ok"); onRefresh(); return true; }
-    onToast("Image regen failed: "+d.error,"err"); return false;
-  };
-  const regenAudio = async () => {
-    const r = await A.post(`/api/projects/${projectName}/dialog/${index}/regenerate-audio`);
-    const d = await r.json();
-    if(d.ok){ onToast("Audio regenerated","ok"); onRefresh(); return true; }
-    onToast("Audio regen failed: "+d.error,"err"); return false;
-  };
-
-  const imgUrl   = A.dialogImg(projectName, index);
-  const audioUrl = A.dialogAudio(projectName, index);
-
-  return (
-    <div className="dialog-card">
-      <div className="dialog-header" onClick={()=>setOpen(o=>!o)}>
-        <span className="dot" style={{background: item._image_exists&&item._audio_exists?"#4ade80":item._image_exists||item._audio_exists?"#f59e0b":"#ef4444"}}/>
-        <span className="speaker-badge">{item.speaker}</span>
-        <span className={shotCls}>{item.shot_type||"both"}</span>
-        <span className="text-preview">{item.text}</span>
-        <span className="expand-caret">{open?"▲":"▼"}</span>
-      </div>
-
-      {open && (
-        <div className={`dialog-body ${!item._image_exists && !item.image ? "no-image" : ""}`}>
-          {/* Left: image */}
-          <ImagePanel
-            src={`${imgUrl}?t=${Date.now()}`}
-            exists={item._image_exists}
-            onRegen={regenImage}
-            onZoom={onZoom}
-          />
-
-          {/* Right: text, audio, prompts */}
-          <div>
-            <div className="meta-label">Dialogue text</div>
-            <div className="meta-val" style={{marginBottom:10}}>{item.text}</div>
-
-            {item["speaker-posture"] && (
-              <>
-                <div className="meta-label">Speaker posture</div>
-                <div className="meta-val" style={{marginBottom:10,fontSize:12,color:"#777"}}>{item["speaker-posture"]}</div>
-              </>
-            )}
-
-            <div className="meta-label">Audio</div>
-            <AudioRow
-              src={`${audioUrl}?t=${Date.now()}`}
-              exists={item._audio_exists}
-              onRegen={regenAudio}
-              onToast={onToast}
-            />
-
-            <PromptEditor
-              label="Image prompt"
-              initial={item["prompt-image"]}
-              patchUrl={`/api/projects/${projectName}/dialog/${index}/prompt-image`}
-              onToast={onToast}
-            />
-
-            {/* Cutaway note — image is shown above in the ImagePanel */}
-            {item.cutaway && (
-              <div style={{marginTop:8,padding:8,background:"#1a0a0a",borderRadius:6,border:"1px solid #3a1a1a"}}>
-                <div className="meta-label" style={{color:"#f87171",marginBottom:3}}>Cutaway description</div>
-                <div style={{fontSize:12,color:"#f87171"}}>{item.cutaway}</div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Narration section ─────────────────────────────────────────────────────────
-function NarrationSection({narration, projectName, onToast, onRefresh, onZoom}) {
-  const [open, setOpen] = useState(false);
-
-  if(!narration) return null;
-
-  const regenImage = async () => {
-    const r = await A.post(`/api/projects/${projectName}/narration/regenerate-image`);
-    const d = await r.json();
-    if(d.ok){ onToast("Narration image regenerated","ok"); onRefresh(); return true; }
-    onToast(d.error,"err"); return false;
-  };
-  const regenAudio = async () => {
-    const r = await A.post(`/api/projects/${projectName}/narration/regenerate-audio`);
-    const d = await r.json();
-    if(d.ok){ onToast("Narration audio regenerated","ok"); onRefresh(); return true; }
-    onToast(d.error,"err"); return false;
-  };
-
-  const imgUrl   = A.narImg(projectName);
-  const audioUrl = A.narAudio(projectName);
-
-  return (
-    <div className="dialog-card">
-      <div className="dialog-header" onClick={()=>setOpen(o=>!o)}>
-        <span className="dot" style={{background:narration._image_exists&&narration._audio_exists?"#4ade80":"#f59e0b"}}/>
-        <span className="badge b-narration">narration</span>
-        <span className="text-preview">{narration.text}</span>
-        <span className="expand-caret">{open?"▲":"▼"}</span>
-      </div>
-      {open && (
-        <div className="dialog-body">
-          <ImagePanel
-            src={`${imgUrl}?t=${Date.now()}`}
-            exists={narration._image_exists}
-            onRegen={regenImage}
-            onZoom={onZoom}
-          />
-          <div>
-            <div className="meta-label">Text</div>
-            <div className="meta-val" style={{marginBottom:10}}>{narration.text}</div>
-            <div className="meta-label">Audio</div>
-            <AudioRow src={`${audioUrl}?t=${Date.now()}`} exists={narration._audio_exists} onRegen={regenAudio} onToast={onToast}/>
-            <PromptEditor
-              label="Image prompt"
-              initial={narration["prompt-image"]}
-              patchUrl={`/api/projects/${projectName}/narration/prompt-image`}
-              onToast={onToast}
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Repetitions section ───────────────────────────────────────────────────────
-function RepetitionsSection({repetitions, projectName, onToast, onRefresh}) {
-  if(!repetitions?.length) return null;
-  return (
-    <div>
-      {repetitions.map((rep,i)=>(
-        <div key={i} className="dialog-card" style={{marginBottom:8}}>
-          <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 14px"}}>
-            <span className="dot" style={{background:rep._audio_exists?"#4ade80":"#ef4444"}}/>
-            <span className="badge b-repetition">rep {i+1}</span>
-            <span className="text-preview">{rep.text}</span>
-            {rep._audio_exists &&
-              <audio controls src={`${A.repAudio(projectName,i)}?t=${Date.now()}`}
-                     preload="none" style={{width:200,height:28}}/>}
-            <Btn label={rep._audio_exists?"🔊 Regen":"Generate"} onClick={async()=>{
-              const r = await A.post(`/api/projects/${projectName}/repetition/${i}/regenerate-audio`);
-              const d = await r.json();
-              if(d.ok){ onToast("Regen ok","ok"); onRefresh(); return true; }
-              onToast(d.error,"err"); return false;
-            }}/>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Cost history ──────────────────────────────────────────────────────────────
-function CostHistory({history, total}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:open?12:0}}>
-        <span className="cost-total">€{total?.toFixed(4)||"0.0000"} total</span>
-        <button className="btn" onClick={()=>setOpen(o=>!o)} style={{fontSize:11}}>
-          {open?"▲ hide":"▼ history"} ({history?.length||0})
-        </button>
-      </div>
-      {open && (history||[]).slice().reverse().map((e,i)=>(
-        <div key={i} className="cost-row">
-          <span style={{color:"#555"}}>{e.ts?.slice(0,16).replace("T"," ")}</span>
-          <span className="cost-amount">€{e.amount?.toFixed(4)}</span>
-          <span>{e.step}{e.note?` — ${e.note}`:""}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Project view ──────────────────────────────────────────────────────────────
-function ProjectView({name, onToast}) {
-  const [manifest, setManifest] = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [tab, setTab]           = useState("dialog");
-  const [lightbox, setLightbox] = useState(null);
-
-  const load = useCallback(()=>{
-    setLoading(true);
-    A.project(name).then(m=>{ setManifest(m); setLoading(false); });
-  },[name]);
-
-  useEffect(()=>{ load(); },[load]);
-
-  if(loading) return <div className="empty"><span className="spin"/> Loading…</div>;
-  if(!manifest) return <div className="empty">Failed to load</div>;
-
-  const conv     = manifest.conversation || {};
-  const dialog   = conv.dialog || [];
-  const narr     = conv.narration || {};
-  const reps     = manifest.repetitions || [];
-  const style    = manifest.style || "shadowing";
-  const locKey   = manifest["location-key"] || "—";
-  const chars    = (manifest.characters||[]).map(c=>c.name).join(" & ");
-  const history  = manifest.cost_history || [];
-  const total    = manifest._total_cost || 0;
-
-  const missingImg   = dialog.filter(d=>!d._image_exists).length;
-  const missingAudio = dialog.filter(d=>!d._audio_exists).length
-                     + (narr._audio_exists===false?1:0);
-
-  return (
-    <div>
-      {lightbox && <Lightbox src={lightbox} onClose={()=>setLightbox(null)}/>}
-
-      {/* Header */}
-      <div style={{marginBottom:20}}>
-        <div style={{fontSize:19,fontWeight:700,marginBottom:4}}>{manifest.title||name}</div>
-        <div style={{fontSize:12,color:"#555"}}>
-          {manifest.project?.created_at?.slice(0,10)} ·
-          {chars} · {locKey} · <span style={{color:style==="shadowing"?"#a78bfa":"#67e8f9"}}>{style}</span>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="card" style={{padding:14}}>
-        <div className="stats">
-          {[
-            ["Dialog",    dialog.length,    "#60a5fa"],
-            ["Reps",      reps.length,      "#f59e0b"],
-            ["No image",  missingImg,       missingImg>0?"#ef4444":"#4ade80"],
-            ["No audio",  missingAudio,     missingAudio>0?"#ef4444":"#4ade80"],
-          ].map(([l,v,c])=>(
-            <div key={l} className="stat">
-              <div className="stat-val" style={{color:c}}>{v}</div>
-              <div className="stat-lbl">{l}</div>
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="text-center mb-4">German Learning Video Generator</h1>
+                
+                <!-- Create Project Button -->
+                <div class="text-center mb-5">
+                    <button type="button" class="btn btn-primary btn-lg" data-bs-toggle="modal" data-bs-target="#createProjectModal">
+                        <i class="fas fa-plus-circle me-2"></i>Create New Project
+                    </button>
+                </div>
+                
+                <!-- Project List -->
+                <div id="projectList" class="row">
+                    <!-- Projects will be loaded here dynamically -->
+                </div>
             </div>
-          ))}
         </div>
-      </div>
-
-      {/* Cost */}
-      <div className="card">
-        <div className="card-title">Cost</div>
-        <CostHistory history={history} total={total}/>
-      </div>
-
-      {/* Tabs */}
-      <div className="tabs">
-        {["dialog","narration","repetitions","pipeline","meta"].map(t=>(
-          <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}>{t}</button>
-        ))}
-      </div>
-
-      {/* Dialog tab */}
-      {tab==="dialog" && (
-        <div>
-          {dialog.map((item,i)=>(
-            <DialogItem
-              key={i} item={item} index={i}
-              projectName={name} onToast={onToast} onRefresh={load}
-              onZoom={setLightbox}
-            />
-          ))}
-          {dialog.length===0 && <div className="empty">No dialog lines yet — run create_script first</div>}
-        </div>
-      )}
-
-      {/* Narration tab */}
-      {tab==="narration" && (
-        <NarrationSection
-          narration={narr._audio_exists!==undefined?narr:null}
-          projectName={name} onToast={onToast} onRefresh={load} onZoom={setLightbox}
-        />
-      )}
-
-      {/* Repetitions tab */}
-      {tab==="repetitions" && (
-        <div>
-          {style==="story"
-            ? <div className="empty">This project uses "story" style — no repetitions</div>
-            : <RepetitionsSection repetitions={reps} projectName={name} onToast={onToast} onRefresh={load}/>}
-        </div>
-      )}
-
-      {/* Pipeline tab */}
-      {tab==="pipeline" && (
-        <PipelinePanel projectName={name} manifest={manifest} onToast={onToast} onRefresh={load}/>
-      )}
-
-      {/* Meta tab */}
-      {tab==="meta" && (
-        <div>
-          <div className="card">
-            <div className="card-title">Project info</div>
-            <div className="meta-grid">
-              <div>
-                <div className="meta-label">Context</div>
-                <div className="meta-val">{manifest["provided-context"]||"—"}</div>
-              </div>
-              <div>
-                <div className="meta-label">Learning points</div>
-                <div className="meta-val">{manifest["provided-learning-points"]||"—"}</div>
-              </div>
-              <div style={{gridColumn:"1/-1"}}>
-                <div className="meta-label">Insights</div>
-                <div className="meta-val">{manifest.insights||"—"}</div>
-              </div>
-              <div style={{gridColumn:"1/-1"}}>
-                <div className="meta-label">Background description</div>
-                <div className="meta-val">{manifest["main-background"]||"—"}</div>
-              </div>
-              <div>
-                <div className="meta-label">Tags</div>
-                <div className="meta-val">{manifest.tags||"—"}</div>
-              </div>
-              <div>
-                <div className="meta-label">Location · Style · Level</div>
-                <div className="meta-val">{locKey} · {style}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
-  );
-}
 
-// ── Pipeline panel ───────────────────────────────────────────────────────────
-const ALL_STEPS = ["script","audio","images","video","assemble","upload"];
-const STEP_LABELS = {
-  script:"Generate script", audio:"Generate audio", images:"Generate images",
-  video:"Render clips", assemble:"Assemble video", upload:"Upload to YouTube",
-};
+    <!-- Create Project Modal -->
+    <div class="modal fade" id="createProjectModal" tabindex="-1" aria-labelledby="createProjectModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="createProjectModalLabel">Create New Project</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="projectForm">
+                        <div class="mb-3">
+                            <label for="projectTitle" class="form-label">Project Title</label>
+                            <input type="text" class="form-control" id="projectTitle" placeholder="Enter project title" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="sceneDescription" class="form-label">Scene Description</label>
+                            <textarea class="form-control" id="sceneDescription" rows="3" placeholder="Describe the scene setting" required></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="learningPoints" class="form-label">Learning Points</label>
+                            <textarea class="form-control" id="learningPoints" rows="3" placeholder="What language points should be covered?" required></textarea>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" id="saveProjectBtn">Create Project</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
-function PipelinePanel({projectName, manifest, onToast, onRefresh}) {
-  const [status, setStatus]       = useState(null);
-  const [running, setRunning]     = useState(false);
-  const [logs, setLogs]           = useState([]);
-  const [currentStep, setCurrent] = useState(null);
-  const [stopAfter, setStopAfter] = useState("images");  // default pause point
-  const [selected, setSelected]   = useState(new Set(ALL_STEPS));
-  const [extraArgs, setExtraArgs] = useState({
-    assemble: "--branding both",
-    upload:   "--privacy private",
-  });
-  const [ytPrivacy, setYtPrivacy] = useState("private");
-  const logsRef = useRef(null);
-
-  const loadStatus = useCallback(()=>{
-    fetch(`/api/projects/${projectName}/pipeline/status`)
-      .then(r=>r.json()).then(setStatus);
-  },[projectName]);
-
-  useEffect(()=>{ loadStatus(); },[loadStatus]);
-  useEffect(()=>{
-    if(logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
-  },[logs]);
-
-  const toggleStep = (sid) => {
-    setSelected(prev=>{
-      const s = new Set(prev);
-      s.has(sid) ? s.delete(sid) : s.add(sid);
-      return s;
-    });
-  };
-
-  const runPipeline = () => {
-    setRunning(true);
-    setLogs([]);
-    setCurrent(null);
-
-    const body = {
-      steps:      ALL_STEPS.filter(s=>selected.has(s)),
-      stop_after: stopAfter || null,
-      extra_args: {
-        assemble: (extraArgs.assemble||"").trim().split(/\s+/).filter(Boolean),
-        upload:   ["--privacy", ytPrivacy],
-      },
-    };
-
-    const es = new EventSource(
-      `/api/projects/${projectName}/pipeline/run`
-    );
-
-    // SSE uses POST body — we must use fetch + ReadableStream since EventSource is GET-only
-    es.close();
-
-    // Use fetch streaming instead
-    fetch(`/api/projects/${projectName}/pipeline/run`, {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify(body),
-    }).then(async resp => {
-      const reader = resp.body.getReader();
-      const dec    = new TextDecoder();
-      let buf = "";
-
-      while(true) {
-        const {done, value} = await reader.read();
-        if(done) break;
-        buf += dec.decode(value, {stream:true});
-        const parts = buf.split("\n\n");
-        buf = parts.pop();
-        for(const part of parts) {
-          const line = part.replace(/^data: /,"").trim();
-          if(!line) continue;
-          try {
-            const msg = JSON.parse(line);
-            if(msg.type==="step_start")    setCurrent(msg.step);
-            if(msg.type==="log")           setLogs(l=>[...l, {step:msg.step, line:msg.line}]);
-            if(msg.type==="step_done")     { loadStatus(); if(msg.ok) onRefresh(); }
-            if(msg.type==="pipeline_done") {
-              setRunning(false); setCurrent(null);
-              if(msg.error)      onToast("Pipeline stopped with error","err");
-              else if(msg.stopped_at) onToast(`Paused after: ${msg.stopped_at}`,"ok");
-              else               onToast("Pipeline complete ✓","ok");
-              loadStatus(); onRefresh();
+    <!-- Bootstrap 5 JS Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        // Handle form submission
+        document.getElementById('saveProjectBtn').addEventListener('click', function() {
+            const title = document.getElementById('projectTitle').value;
+            const scene = document.getElementById('sceneDescription').value;
+            const learning = document.getElementById('learningPoints').value;
+            
+            if (!title || !scene || !learning) {
+                alert('Please fill in all fields');
+                return;
             }
-          } catch{}
+            
+            // Create project via AJAX
+            $.ajax({
+                url: '/create_project',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    project_name: title,
+                    scene: scene,
+                    learning: learning
+                }),
+                success: function(response) {
+                    alert('Project created successfully!');
+                    // Close modal
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('createProjectModal'));
+                    modal.hide();
+                    // Reset form
+                    document.getElementById('projectForm').reset();
+                    // Reload project list
+                    loadProjects();
+                },
+                error: function(xhr, status, error) {
+                    alert('Error creating project: ' + error);
+                }
+            });
+        });
+        
+        // Load projects on page load
+        function loadProjects() {
+            $.ajax({
+                url: '/projects',
+                method: 'GET',
+                success: function(projects) {
+                    const projectList = document.getElementById('projectList');
+                    projectList.innerHTML = '';
+                    
+                    if (projects.length === 0) {
+                        projectList.innerHTML = '<div class="col-12"><p class="text-center text-muted">No projects yet. Create your first project!</p></div>';
+                        return;
+                    }
+                    
+                    projects.forEach(function(project) {
+                        const projectCard = `
+                            <div class="col-md-4 mb-4">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h5 class="card-title">${project.name}</h5>
+                                        <p class="card-text">
+                                            <small class="text-muted">Created: ${new Date(project.created_at).toLocaleDateString()}</small>
+                                        </p>
+                                        <a href="/project/${project.name}" class="btn btn-outline-primary btn-sm">View Details</a>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                        projectList.innerHTML += projectCard;
+                    });
+                },
+                error: function() {
+                    document.getElementById('projectList').innerHTML = '<div class="col-12"><p class="text-center text-danger">Error loading projects</p></div>';
+                }
+            });
         }
-      }
-      setRunning(false);
-    }).catch(e=>{ onToast("Pipeline connection error: "+e,"err"); setRunning(false); });
-  };
-
-  const stepColor = (sid) => {
-    if(!status) return "#555";
-    const s = status[sid];
-    if(!s) return "#555";
-    if(sid===currentStep) return "#f59e0b";
-    return s.done ? "#4ade80" : "#ef4444";
-  };
-
-  return (
-    <div>
-      {/* Step selector + controls */}
-      <div className="card">
-        <div className="card-title">Run pipeline steps</div>
-
-        {/* Step toggles */}
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
-          {ALL_STEPS.map(sid=>(
-            <label key={sid} style={{display:"flex",alignItems:"center",gap:6,
-              padding:"6px 12px",borderRadius:6,border:"1px solid",cursor:"pointer",
-              borderColor:selected.has(sid)?"#a78bfa":"#2a2a36",
-              background:selected.has(sid)?"#a78bfa11":"none",
-              color:selected.has(sid)?"#a78bfa":"#666", fontSize:13}}>
-              <input type="checkbox" checked={selected.has(sid)}
-                     onChange={()=>toggleStep(sid)} style={{display:"none"}}/>
-              <span className="dot" style={{background:stepColor(sid)}}/>
-              {STEP_LABELS[sid]}
-              {status?.[sid]?.done && <span style={{fontSize:10,color:"#4ade80"}}>✓</span>}
-            </label>
-          ))}
-        </div>
-
-        {/* Pause point */}
-        <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
-          <label style={{fontSize:12,color:"#888"}}>Pause after:</label>
-          <select value={stopAfter} onChange={e=>setStopAfter(e.target.value)}
-                  style={{background:"#0d0d11",border:"1px solid #2a2a36",color:"#ccc",
-                          borderRadius:5,padding:"4px 8px",fontSize:12}}>
-            <option value="">— run to end —</option>
-            {ALL_STEPS.map(s=><option key={s} value={s}>{STEP_LABELS[s]}</option>)}
-          </select>
-
-          <label style={{fontSize:12,color:"#888",marginLeft:12}}>YouTube privacy:</label>
-          <select value={ytPrivacy} onChange={e=>setYtPrivacy(e.target.value)}
-                  style={{background:"#0d0d11",border:"1px solid #2a2a36",color:"#ccc",
-                          borderRadius:5,padding:"4px 8px",fontSize:12}}>
-            <option value="private">Private</option>
-            <option value="unlisted">Unlisted</option>
-            <option value="public">Public</option>
-          </select>
-
-          <label style={{fontSize:12,color:"#888",marginLeft:12}}>Assemble args:</label>
-          <input value={extraArgs.assemble}
-                 onChange={e=>setExtraArgs(a=>({...a,assemble:e.target.value}))}
-                 style={{background:"#0d0d11",border:"1px solid #2a2a36",color:"#ccc",
-                         borderRadius:5,padding:"4px 8px",fontSize:12,width:180}}
-                 placeholder="--branding both"/>
-        </div>
-
-        <button className="btn primary" onClick={runPipeline}
-                disabled={running||selected.size===0}
-                style={{fontSize:13,padding:"7px 20px"}}>
-          {running ? <><span className="spin"/> Running…</> : "▶ Run selected steps"}
-        </button>
-
-        {/* YouTube link if uploaded */}
-        {status?.upload?.youtube_id && (
-          <div style={{marginTop:12,fontSize:13}}>
-            <span style={{color:"#4ade80"}}>✓ Uploaded → </span>
-            <a href={`https://youtu.be/${status.upload.youtube_id}`}
-               target="_blank" style={{color:"#a78bfa"}}>
-              youtu.be/{status.upload.youtube_id}
-            </a>
-            {" · "}
-            <a href={`https://studio.youtube.com/video/${status.upload.youtube_id}/edit`}
-               target="_blank" style={{color:"#667"}}>Studio</a>
-          </div>
-        )}
-      </div>
-
-      {/* Live log */}
-      {logs.length > 0 && (
-        <div className="card" style={{padding:0,overflow:"hidden"}}>
-          <div style={{padding:"10px 14px",fontSize:11,fontWeight:700,
-                       color:"#555",textTransform:"uppercase",letterSpacing:".07em",
-                       borderBottom:"1px solid #1a1a24",display:"flex",
-                       justifyContent:"space-between",alignItems:"center"}}>
-            <span>Pipeline log {currentStep && <span style={{color:"#f59e0b"}}>— {STEP_LABELS[currentStep]}</span>}</span>
-            <button className="btn" style={{fontSize:10,padding:"2px 8px"}}
-                    onClick={()=>setLogs([])}>clear</button>
-          </div>
-          <div ref={logsRef}
-               style={{fontFamily:"monospace",fontSize:11,lineHeight:1.5,
-                       maxHeight:300,overflowY:"auto",padding:"10px 14px",
-                       background:"#080810",color:"#8888aa"}}>
-            {logs.map((e,i)=>(
-              <div key={i}>
-                <span style={{color:"#333",marginRight:8}}>[{e.step}]</span>
-                <span style={{color: e.line.includes("ERROR")||e.line.includes("FAIL")
-                              ? "#ef4444" : e.line.includes("Saved")||e.line.includes("complete")
-                              ? "#4ade80" : "#8888aa"}}>{e.line}</span>
-              </div>
-            ))}
-            {running && <div style={{color:"#f59e0b"}}>▌</div>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── App ───────────────────────────────────────────────────────────────────────
-function App() {
-  const [projects, setProjects] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [toast, setToast]       = useState(null);
-
-  useEffect(()=>{
-    A.projects().then(ps=>{ setProjects(ps); if(ps.length) setSelected(ps[0]); });
-  },[]);
-
-  const showToast = (msg, kind="ok") => setToast({msg, kind, key:Date.now()});
-
-  return (
-    <div className="shell">
-      <div className="sidebar">
-        <div className="sidebar-title">Projects</div>
-        {projects.map(p=>(
-          <button key={p} className={`proj-btn ${selected===p?"active":""}`}
-                  onClick={()=>setSelected(p)}>{p}</button>
-        ))}
-      </div>
-      <div className="main">
-        {selected
-          ? <ProjectView key={selected} name={selected} onToast={showToast}/>
-          : <div className="empty">Select a project</div>}
-      </div>
-      {toast && <Toast key={toast.key} msg={toast.msg} kind={toast.kind} onDone={()=>setToast(null)}/>}
-    </div>
-  );
-}
-
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
-</script>
+        
+        // Load projects when page loads
+        loadProjects();
+    </script>
 </body>
 </html>
