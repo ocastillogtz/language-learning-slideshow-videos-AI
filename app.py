@@ -102,7 +102,25 @@ def project_details(project_name):
     with open(manifest_path, 'r') as f:
         manifest = json.load(f)
     
-    return render_template('project.html', project=manifest, project_name=project_name)
+    # Safely access manifest values with defaults to prevent KeyError
+    project_data = {
+        "name": project_name,
+        "created_at": manifest.get("project", {}).get("created_at", ""),
+        "style": manifest.get("style", ""),
+        "title": manifest.get("title", ""),
+        "tags": manifest.get("tags", ""),
+        "insights": manifest.get("insights", ""),
+        "provided-context": manifest.get("provided-context", ""),
+        "provided-learning-points": manifest.get("provided-learning-points", ""),
+        "location-key": manifest.get("location-key", ""),
+        "main-background": manifest.get("main-background", ""),
+        "characters": manifest.get("characters", []),
+        "conversation": manifest.get("conversation", {}),
+        "repetitions": manifest.get("repetitions", []),
+        "scenes": manifest.get("scenes", [])
+    }
+    
+    return render_template('project.html', project=project_data, project_name=project_name)
 
 if __name__ == '__main__':
     app.run(debug=True)
