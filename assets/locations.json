@@ -1,0 +1,23 @@
+{
+  "cafe": {
+    "description": "cozy coffeshop, characters are sitting chatting looking at each other",
+    "file": "locations/cafe.png",
+    "characters_amount":2,
+    "eligible_characters":["Amir","Mario","Sani","Olena","Zahra","Wiebke"],
+    "files_for_prod":[]
+  },
+  "warehouse": {
+    "description": "warehouse, characters are standing in a warehouse chatting with each other 3/4 posture",
+    "file": "locations/warehouse.png",
+    "files_for_prod":[],
+    "characters_amount":2,
+    "eligible_characters":["Amir","Mario","Sani","Olena","Zahra","Wiebke"]
+  },
+    "kitchen": {
+    "description": "an open concept kitchen where you can see that something in cooking in the oven, characters are on the front of the table, they are standing, close to each other and talking to each other in a friendly manner",
+    "file": "locations/kitchen.png",
+    "characters_amount":2,
+    "eligible_characters":["Amir","Mario","Sani","Olena","Zahra","Wiebke"]
+  }
+
+}

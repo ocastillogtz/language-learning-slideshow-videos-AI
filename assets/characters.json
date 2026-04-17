@@ -1,0 +1,65 @@
+{
+  "Zahra": {
+    "voice_id": "KXxZd16DiBqt82nbarJx",
+    "art": "character_art/Zahra_art.png",
+    "34left":"character_art/Zahra34left.png",
+    "lora": "ZahraBrezel_pytorch_lora_weights.safetensors",
+    "thumbnail":"character_art/ZahraThumbnail.png",
+    "height":"165",
+    "location":["cafe","cafe_single_2"],
+    "ref_desc":"teal blouse, wavy hair female",
+    "description": "from Iran, wears a teal blouse, dark color hair with some lights, brown eyes, aquiline nose, female, 35 years old, with medium warm skin tone and shoulder length curly dark brown hair, calm confident expression, wearing a teal green t shirt and dark gray pants with simple flats"
+  },
+  "Olena": {
+    "voice_id": "nGISSznGHAgSTKaMXEPO",
+    "art": "character_art/Olena_art.png",
+    "34left":"character_art/Olena34left.png",
+    "lora":"OlenaBrezel_pytorch_lora_weights.safetensors",
+    "thumbnail":"character_art/OlenaThumbnail.png",
+    "height":"168",
+    "location":["cafe","cafe_single_2"],
+        "ref_desc":"pink blouse, light colored hair, chubby female",
+    "description": "from Ukraine, wears a light purple blouse, light colored hair but not blonde, female, 25 years old, brown eyes, slightly chubby,  friendly adult woman with long wavy blonde hair and light skin, curvy body type, wearing a light purple t shirt and blue jeans with casual shoes, warm approachable personality"
+  },
+  "Narrator": { "voice_id": "WHaUUVTDq47Yqc9aDbkH" },
+  "Amir": {
+    "voice_id": "LBdEwXpO9YwPdF4PqCd9",
+    "art": "character_art/Amir_art.png",
+    "34left":"character_art/Amir34left.png",
+    "lora":"AmirBrezel_pytorch_lora_weights.safetensors",
+    "thumbnail":"character_art/AmirThumbnail.png",
+      "ref_desc":"blue shirt, dark hair, fit male",
+    "height":"172",
+    "description": "from Kazahkistan, he's fit, east-eurasian phenotype, 28 years old, male, brown eyes, dark hair, young adult man with short dark brown hair and light skin, friendly neutral expression, wearing a blue short sleeve button up shirt, beige pants and dark shoes, casual everyday character, simple children's book illustration style"
+  },
+  "Mario": {
+    "voice_id": "tUGS6AkOqpB4R8nb1DTU",
+    "art": "character_art/Mario_art.png",
+    "34left":"character_art/Mario34left.png",
+    "lora":"MarioBrezel_pytorch_lora_weights.safetensors",
+    "thumbnail":"character_art/MarioThumbnail.png",
+          "ref_desc":"olive sweater, glass wearing, older male",
+    "height":"170",
+    "description": "from Guatemala, wears an olive sweater with a light grey shirt inside, male, 50 years old, brown eyes, dark hair, healthy thin, with short salt and pepper hair and a mustache wearing glasses, calm thoughtful expression, gray pants and brown shoes, slightly scholarly appearance"
+  },
+  "Sani": {
+    "voice_id": "29P4oL0t0q3euslXSCVo",
+    "art": "character_art/Sani_art.png",
+    "34left":"character_art/Sani34left.png",
+    "lora":"SaniBrezel_pytorch_lora_weights.safetensors",
+        "ref_desc":"tan sweater, black hair, black skin, male",
+    "thumbnail":"character_art/SaniThumbnail.png",
+    "height":"175",
+    "description": "from Nigeria, wears a tan sweater with a white shirt underneath, dark hair, male, 30 years old, middle build, medium brown skin and short black hair, calm expression, wearing a light brown sweater, gray pants and brown shoes, relaxed casual appearance "
+  },
+  "Wiebke": {
+    "voice_id": "otF9rqKzRHFgfwf6serQ",
+    "art": "character_art/Wiebke_art.png",
+    "34left":"character_art/Wiebke34left.png",
+    "lora":"WiebkeBrezel_pytorch_lora_weights.safetensors",
+    "thumbnail":"character_art/WiebkeThumbnail.png",
+            "ref_desc":"burgundy blouse , beige cardigan, short light hair female",
+    "height":"172",
+    "description": "from Germany, light colored hair not blonde, blue eyes, female, 45 years old, middle build, short messy blonde hair in a pixie style, light skin, energetic and friendly expression, wearing a burgundy blouse under a beige cardigan jacket and blue jeans, casual modern character"
+  }
+}
