@@ -1,3 +1,16 @@
+"""
+app.py
+Main Flask application file.
+"""
+from flask import Flask, request, jsonify
+import os
+import json
+from datetime import datetime
+from utils_config import load_config  # Assuming this is a module you have in your project
+
+# Initialize Flask app
+app = Flask(__name__)
+
 @app.route('/create_project', methods=['POST'])
 def create_project():
     """API endpoint to create a new project"""
@@ -22,11 +35,11 @@ def create_project():
         manifest = {
             "project":  {
                 "name": project_name,
-                "created_at": datetime.utcnow().isoformat()    # Add created_at timestamp
+                "created_at": datetime.utcnow().isoformat()     # Add created_at timestamp
             },
             "style": None,
             "title": None,
-            "tags": [],   # Replace 'None' with an empty list []
+            "tags": [],    # Replace 'None' with an empty list  []
             "insights": None,
             "provided-context": scene,
             "provided-learning-points": learning,
