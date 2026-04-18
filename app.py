@@ -22,9 +22,31 @@ def create_project():
         manifest = {
             "project":  {
                 "name": project_name,
-                "created_at": datetime.utcnow().isoformat()   # Add created_at timestamp
+                "created_at": datetime.utcnow().isoformat()    # Add created_at timestamp
             },
             "style": None,
             "title": None,
-            "tags": None,<｜begin▁of▁sentence｜>
-!
+            "tags": [],   # Replace 'None' with an empty list []
+            "insights": None,
+            "provided-context": scene,
+            "provided-learning-points": learning,
+            "location-key": None,
+            "main-background": None,
+            "inter-pause-ms": cfg["inter_pause_ms"],
+            "repetition-pause-factor": cfg["repetition_pause_factor"],
+            "repetition-bell-audio": "assets/sfx/bell.mp3",
+            "bitte-wiederholen-audio": "assets/sfx/bitte_wiederholen.mp3",
+            "characters": [],
+            "conversation": {"narration": None, "dialog": []},
+            "repetitions": [],
+            "scenes": [],
+        }
+        
+        manifest_path = os.path.join(project_path, "project_manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+        
+        return jsonify({"message": "Project created successfully", "project_name": project_name})
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
