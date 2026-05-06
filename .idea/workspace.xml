@@ -1,0 +1,350 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="87330b1a-2695-43ab-91db-fb25ca46eddd" name="Changes" comment="Added new feature: annotated subtitles, instead of just showing the subtitles we request an llm to add grammatical insight about the sentence, then we add that to the subtitles.">
+      <change afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/germanLearningVidsAIPowered.iml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/assets/assets.example.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/assets/background_audio/background_audio.example.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/assets/characters/characters.example.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/assets/locations/locations.example.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/assets/project_types/project_types.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/assets/sfx/sfx.example.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/assets/video_clips/video_clips.example.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/core.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/manage_background_audio.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/manage_characters.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/manage_locations.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/manage_project_types.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/manage_sfx.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/manage_video_clips.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/routes/assets.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/routes/images.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/routes/pipeline.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/routes/projects.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/routes/prompts.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/css/style.css" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/App.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/AppContext.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/api.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/AssetsTab.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/ItemsTab.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/ManifestTab.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/Modals.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/PipelineTab.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/ProjectView.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/Sidebar.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/old_28_4/ItemsTab.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/old_28_4/Modals.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/old_28_4/PipelineTab.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/components/old_28_4/Sidebar.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/static/js/index.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/templates/index.html" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/upload_instagram.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/upload_video.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/utils_config.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/utils_image.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/utils_markup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assemble_video.py" beforeDir="false" afterPath="$PROJECT_DIR$/assemble_video.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/characters.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/characters.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/locations.json" beforeDir="false" afterPath="$PROJECT_DIR$/assets/locations.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.ini" beforeDir="false" afterPath="$PROJECT_DIR$/config.ini" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_audio.py" beforeDir="false" afterPath="$PROJECT_DIR$/create_audio.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_images.py" beforeDir="false" afterPath="$PROJECT_DIR$/create_images.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_images_local.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_images_openai.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_project.py" beforeDir="false" afterPath="$PROJECT_DIR$/create_project.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_script.py" beforeDir="false" afterPath="$PROJECT_DIR$/create_script.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_video.py" beforeDir="false" afterPath="$PROJECT_DIR$/create_video.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/generate_annotations.py" beforeDir="false" afterPath="$PROJECT_DIR$/generate_annotations.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/static/index.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/subtitle_renderer.py" beforeDir="false" afterPath="$PROJECT_DIR$/subtitle_renderer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/templates/project.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/}" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="HTML File" />
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 0
+}</component>
+  <component name="ProjectId" id="3BLmusFca1428Xql2LVLjUEHor3" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "DefaultHtmlFileTemplate": "HTML File",
+    "Python.app.executor": "Run",
+    "Python.assemble_video.executor": "Run",
+    "Python.cacheimg.executor": "Run",
+    "Python.create_audio.executor": "Run",
+    "Python.create_character.executor": "Run",
+    "Python.create_images.executor": "Run",
+    "Python.create_images_local.executor": "Run",
+    "Python.create_project (1).executor": "Run",
+    "Python.create_project.executor": "Run",
+    "Python.create_script.executor": "Run",
+    "Python.create_video.executor": "Run",
+    "Python.fal_im_gen.executor": "Run",
+    "Python.gen_cache_img.executor": "Run",
+    "Python.generate_character_cache.executor": "Run",
+    "Python.generate_character_cache_paral.executor": "Run",
+    "Python.remove_blooms.executor": "Run",
+    "Python.script_details.executor": "Run",
+    "Python.subtitle_renderer.executor": "Run",
+    "Python.try_connections.executor": "Run",
+    "Python.upload_video.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "master",
+    "last_opened_file_path": "C:/Users/omar_/Documents/github/germanLearningVidsAIPowered",
+    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\omar_\Documents\github\germanLearningVidsAIPowered\templates" />
+      <recent name="C:\Users\omar_\Documents\github\germanLearningVidsAIPowered" />
+      <recent name="C:\Users\omar_\Documents\github\germanLearningVidsAIPowered\characters" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\omar_\Documents\github\germanLearningVidsAIPowered\templates" />
+      <recent name="C:\Users\omar_\Documents\github\germanLearningVidsAIPowered\assets\sfx" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Python.app">
+    <configuration name="app" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="germanLearningVidsAIPowered" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/app.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="create_audio" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="germanLearningVidsAIPowered" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/create_audio.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="create_images" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="germanLearningVidsAIPowered" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/create_images.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="create_project" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="germanLearningVidsAIPowered" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/create_project.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="create_script" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="germanLearningVidsAIPowered" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/create_script.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="fal_im_gen" type="PythonConfigurationType" factoryName="Python">
+      <module name="germanLearningVidsAIPowered" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/fal_image_generator.py" />
+      <option name="PARAMETERS" value="--char-a &quot;C:\Users\omar_\Documents\github\germanLearningVidsAIPowered\assets\character_art\Olena34left.png&quot; --char-b &quot;C:\Users\omar_\Documents\github\germanLearningVidsAIPowered\assets\character_art\Sani34left.png&quot; --location &quot;C:\Users\omar_\Documents\github\germanLearningVidsAIPowered\assets\locations\office.png&quot; --prompt &quot;Show these character standing up chatting, full body, try to blend the style of the images, the woman in pink to the left and the man to the right side of the image&quot; -v" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <list>
+      <item itemvalue="Python.fal_im_gen" />
+      <item itemvalue="Python.create_images" />
+      <item itemvalue="Python.create_project" />
+      <item itemvalue="Python.app" />
+      <item itemvalue="Python.create_script" />
+      <item itemvalue="Python.create_audio" />
+    </list>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.app" />
+        <item itemvalue="Python.create_images" />
+        <item itemvalue="Python.create_script" />
+        <item itemvalue="Python.create_project" />
+        <item itemvalue="Python.create_audio" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-8753aad8314d-d902c0275401-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-252.25557.178" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="87330b1a-2695-43ab-91db-fb25ca46eddd" name="Changes" comment="" />
+      <created>1774276950362</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1774276950362</updated>
+    </task>
+    <task id="LOCAL-00001" summary="just another commit">
+      <option name="closed" value="true" />
+      <created>1775251419355</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1775251419355</updated>
+    </task>
+    <task id="LOCAL-00002" summary="before the addition of the background environment parameter addition and the addition of the image pipeline that creates the background separately.">
+      <option name="closed" value="true" />
+      <created>1775340774268</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1775340774268</updated>
+    </task>
+    <task id="LOCAL-00003" summary="small mod, before architecture redo.">
+      <option name="closed" value="true" />
+      <created>1775412423385</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1775412423385</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Added new feature: annotated subtitles, instead of just showing the subtitles we request an llm to add grammatical insight about the sentence, then we add that to the subtitles.">
+      <option name="closed" value="true" />
+      <created>1776514050832</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1776514050832</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
+    <servers />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="just another commit" />
+    <MESSAGE value="before the addition of the background environment parameter addition and the addition of the image pipeline that creates the background separately." />
+    <MESSAGE value="small mod, before architecture redo." />
+    <MESSAGE value="Added new feature: annotated subtitles, instead of just showing the subtitles we request an llm to add grammatical insight about the sentence, then we add that to the subtitles." />
+    <option name="LAST_COMMIT_MESSAGE" value="Added new feature: annotated subtitles, instead of just showing the subtitles we request an llm to add grammatical insight about the sentence, then we add that to the subtitles." />
+  </component>
+</project>

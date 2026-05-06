@@ -16,5 +16,11 @@
     "file": "locations/kitchen.png",
     "characters_amount":2,
     "eligible_characters":["Amir","Mario","Sani","Olena","Zahra","Wiebke"]
+  },
+    "football": {
+    "description": "A local football field for the public to enjoy",
+    "file": "locations/soccer_field.png",
+    "characters_amount":2,
+    "eligible_characters":["Amir","Mario","Sani","Olena","Zahra","Wiebke"]
   }
 }

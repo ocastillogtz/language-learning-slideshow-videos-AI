@@ -1,0 +1,30 @@
+# ─── Environment & secrets ────────────────────────────────────────────────────
+.env
+
+# Google OAuth credentials (YouTube upload)
+client_secret.json
+token.json
+
+# Instagram credentials
+instagram_creds.json
+
+# ─── Generated project output ─────────────────────────────────────────────────
+projects/
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# ─── OS / Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.aider*
+*.swp
+*.swo

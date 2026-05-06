@@ -1,341 +1,518 @@
 """
 create_script.py
+================
+Calls GPT to generate the scene list for a project.
 
-Generate script and populate project_manifest.json.
+How it works
+------------
+1. Loads the project_type from assets/project_types/project_types.json using
+   the manifest's project_metadata.project_type_key.
+2. Injects character and location data into the project_type's
+   description_for_prompt template (uses {PLACEHOLDER} markers).
+3. Calls GPT with the project_type's output_json_schema as response_format.
+4. Runs build_scene_list() which converts GPT output into a flat list of
+   universal scene objects driven by the project_type's scene_builder_rules.
+5. Writes the resulting scenes[] array back to the manifest.
 
-Conversation line format (6 pipe-separated fields):
-  dialogue:  char|mode|section|text|visual_context|stage
-  pause:     pause||subtitle|duration_ms||
-  sfx:       sfx|||name||
+Adding a new video type requires only a new entry in project_types.json.
+No changes to this file are needed unless the new type requires a scene
+pattern that scene_builder_rules cannot express.
 
-Field definitions:
-  visual_context (field 5): CHARACTER POSE ONLY — facing direction, angle, expression,
-                            body language. NO environment. e.g. "facing left at 45 degrees,
-                            arms crossed, neutral expression".
-  stage        (field 6): BACKGROUND ONLY — location, lighting, furniture, time of day.
-                          No characters. Identical stage strings across scenes → background
-                          image is cached and reused for consistency.
+Prompt placeholders
+-------------------
+{LEVEL}                    — language level (e.g. B1)
+{LOCATION_KEY}             — location key (e.g. cafe)
+{LOCATION_DESC}            — location description
+{CHAR_A} / {CHAR_B}        — character names
+{CHAR_A_DESC}              — fixed + variable description for char A
+{CHAR_B_DESC}              — fixed + variable description for char B
+{WORDS_LIST}               — comma-separated word list (word_learning only)
+{PROVIDED_CONTEXT}         — user-supplied scene description
+{PROVIDED_LEARNING_POINTS} — user-supplied learning objectives
+
+Dialog item fields (GPT output)
+--------------------------------
+  text             — German dialog text
+  speaker          — character name
+  scene_visual     — English action description for the illustration
+  scene_characters — "speaker_only" | "both"
 """
 
-import os
-import re
 import json
 import logging
 import argparse
-import configparser
+import os
+from datetime import datetime
 from pathlib import Path
+
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from utils_config import (
+    load_config,
+    load_new_characters,
+    load_project_types,
+    get_new_locations_flat,
+)
+
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
-
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY not found")
-client = OpenAI(api_key=api_key)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Style/framing tokens are loaded from config.ini [image_prompts] at runtime.
+# These module-level vars are populated once by _load_style_tokens() on first use.
+_STYLE_TOKENS:   str = ""
+_FRAMING_TOKENS: str = ""
 
 
-# =========================
-# CONFIG LOADER
-# =========================
-def load_config(config_path="config.ini"):
-    config = configparser.ConfigParser()
-    config.read(config_path)
-    projects_dir = Path(config["paths"]["projects_dir"])
-    model        = config.get("script", "openai_model", fallback="gpt-4.1-nano")
-    level        = config.get("script", "level", fallback="B2")
-    log_level    = config.get("script", "log_level", fallback="INFO")
-    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-    return projects_dir, model, level
+def _load_style_tokens() -> None:
+    """Populate module-level style/framing vars from config (called once)."""
+    global _STYLE_TOKENS, _FRAMING_TOKENS
+    if _STYLE_TOKENS:
+        return
+    cfg = load_config()
+    _STYLE_TOKENS   = cfg["image_style_tokens"]
+    _FRAMING_TOKENS = cfg["image_framing_tokens"]
 
 
-# =========================
+# =============================================================================
 # PROMPT BUILDER
-# =========================
-def build_prompt(level: str, scene: str, learning: str) -> str:
+# =============================================================================
+
+def _build_prompt(
+    project_type: dict,
+    manifest: dict,
+    chars_data: dict,
+    all_locs: dict,
+) -> str:
+    """
+    Inject runtime values into the project_type's description_for_prompt template.
+    Returns the complete prompt string ready for GPT.
+    """
+    gen        = manifest["generation_config"]
+    char_names = gen["characters"]
+    char_a, char_b = char_names[0], char_names[1]
+    location_key   = gen["location_key"]
+    level          = gen["level"]
+
+    loc_data      = all_locs[location_key]
+    location_desc = loc_data["description"]
+
+    char_a_data = chars_data[char_a]
+    char_b_data = chars_data[char_b]
+
+    def _full_desc(c: dict) -> str:
+        fixed    = c.get("fixed_description", "") or ""
+        variable = c.get("variable_description", "") or ""
+        return f"{fixed}, {variable}".strip(", ")
+
+    char_a_desc = _full_desc(char_a_data)
+    char_b_desc = _full_desc(char_b_data)
+
+    words_list = ", ".join(gen.get("words", []) or [])
+
+    template = project_type["description_for_prompt"]
+    prompt = template.format(
+        LEVEL                    = level,
+        LOCATION_KEY             = location_key,
+        LOCATION_DESC            = location_desc,
+        CHAR_A                   = char_a,
+        CHAR_B                   = char_b,
+        CHAR_A_DESC              = char_a_desc,
+        CHAR_B_DESC              = char_b_desc,
+        WORDS_LIST               = words_list,
+        PROVIDED_CONTEXT         = gen.get("provided_context", ""),
+        PROVIDED_LEARNING_POINTS = gen.get("provided_learning_points", ""),
+    )
+    return prompt
+
+
+# =============================================================================
+# REPETITION SELECTION (shadowing only — second GPT pass)
+# =============================================================================
+
+def _build_repetitions_prompt(dialog_texts: list[str], level: str) -> str:
+    numbered = "\n".join(f"  {i}. {t}" for i, t in enumerate(dialog_texts))
     return f"""
-    task: dialogue
-    lang: DE
-    level: {level}
+You are a German language learning expert selecting sentences for a shadowing exercise.
+Level: {level}
 
-    format:
-    <insights>
-    </insights>
-    <context>
-    </context>
-    <visual_context>
-    </visual_context>
-    <conversation>
-    char|mode|section|text|visual_context|stage
-    </conversation>
+Select exactly 3 sentences from the dialog below that are most pedagogically valuable
+for a {level} learner to shadow.
 
-    follow this conversation block scheme:
-    introduction
-    1. introduction: The narrator introduces the context
-    dialog
-    2. dialog element 1
-    3. dialog element 2
-    4. dialog element 3
-    repeat section
-    5. repeat introduction: bitte wiederholen
-    6. repeat element 1
-    7. repeat element 2
-    8. repeat element 3
+Criteria (in order of priority):
+1. Contains the key grammar structure or vocabulary being taught
+2. Natural spoken German that sounds good when repeated aloud
+3. Varied sentence structures across the 3 chosen lines
+4. Appropriate length — not too short (trivial) and not too long (hard to repeat)
 
-    rules:
-    - Write detailed learning insights based on the level {level}
-    - Use german characters, we can have UTF-8.
-    - The FIRST line of <conversation> MUST always be a Narrator line introducing the scene
-    - All conversations must have the introduction, the dialog and the repeating section.
-    - The speaker that requests/proposes uses faster speech; the one that replies/inquires uses slower speech.
-    - narrator introduces context at the start
-    - short, natural sentences
-    - include repetition section after dialog section
-    - in the repetition section the narrator uses a slower speak mode
-    - add sfx|||bell|| before each repetition phrase
-    - pauses: pause|||<ms>||  (no text) OR  pause||<subtitle_text>|<ms>||  (with subtitle)
-    - sfx: sfx|||<n>||
-    - output strictly in format, no markdown, no extra text
+Dialog lines:
+{numbered}
 
-    <visual_context> rules (global — establishing shot description):
-    - Describe the physical scene: location, time of day, lighting, atmosphere
-    - For each character: exact position (left/right), clothing, posture
-    - Describe furniture, objects, colors for consistency across images
-    - Write in English, concise but specific (3-6 sentences)
-    - Do not mention the topic of conversation
+Return ONLY valid JSON (no markdown, no backticks):
+{{
+  "repetitions": [
+    {{"text": "exact German sentence copied from the dialog lines above"}},
+    {{"text": "exact German sentence copied from the dialog lines above"}},
+    {{"text": "exact German sentence copied from the dialog lines above"}}
+  ]
+}}
 
-    per-line visual_context rules (field 5 — CHARACTER POSE ONLY, no environment):
-    - Describe ONLY the speaking character's pose, facing direction, angle, and expression
-    - Be explicit about angle: "facing left at 45 degrees", "full profile facing right",
-      "three-quarter view facing camera", "facing right at 90 degrees", etc.
-    - Include expression and body language: leaning forward, arms gesturing, hands on hips
-    - If talking ABOUT an action elsewhere, describe the character's reaction pose as if
-      interacting with/looking at that thing off-screen
-    - Characters in the same room MUST NOT switch left/right positions between scenes
-    - For narrator lines: describe both characters in their established room positions
-    - For repeat narrator lines: pose is optional, can be empty
-    - Keep to 1-2 sentences in English
-    - For pause/sfx lines: empty — end with two trailing pipes
-
-    per-line stage rules (field 6 — BACKGROUND ENVIRONMENT ONLY, no characters):
-    - Describe ONLY the physical background: location type, time of day, lighting,
-      key furniture/objects, color palette
-    - For all scenes in the SAME room: use the EXACT SAME stage string every time
-      (enables background caching — identical strings reuse the same background image)
-    - For action scenes in a different location: describe that new environment
-    - Keep to 1-2 sentences in English
-    - For pause/sfx lines AND repeat narrator lines: empty — end line with trailing pipe
-
-    example:
-
-    <insights>
-    In diesem Dialog werden einige fortgeschrittene Wörter verwendet:
-    - "Bericht" (Report) - ein schriftliches Dokument mit Daten und Analysen.
-    </insights>
-    <context>
-    Die Szene findet in einem deutschen Büro statt.
-    </context>
-    <visual_context>
-    Bright modern office, large windows with natural daylight on the left. Zahra stands on the left wearing a dark navy blazer and white blouse, arms slightly crossed. Olena sits at a light oak desk on the right, wearing a light grey cardigan, leaning forward attentively. The desk has a laptop, a white coffee mug, and a small potted plant. Walls are white with a framed abstract print in muted blues.
-    </visual_context>
-    <conversation>
-    Narrator|clear slow|introduction|In diesem Szenario ist Zahra die Chefin, die Olena einen Auftrag gibt.|ZahraBrezel on the left facing right at 45 degrees, calm posture; OlenaBrezel on the right facing left, leaning forward.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
-    pause|||2000||
-    Zahra|normal|dialog|Ich brauche einen Bericht bis Freitag.|ZahraBrezel facing right at 45 degrees, gesturing with right hand, direct and confident.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
-    pause|||700||
-    Olena|slower|dialog|Alles klar, ich fange sofort an.|OlenaBrezel facing left at 90 degrees, seated, turning toward keyboard, focused expression.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
-    pause|||700||
-    Zahra|normal|dialog|Perfekt. Danke.|ZahraBrezel facing right at 30 degrees, brief approving nod, slight smile.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
-    sfx|||bell||
-    Narrator|slower|repeat|Bitte wiederholen|ZahraBrezel on the left facing right; OlenaBrezel on the right facing left, seated.|Bright modern office, large windows on the left, light oak desk with laptop and white coffee mug, white walls, morning light.
-    pause|||800||
-    sfx|||bell||
-    Narrator|slower|repeat|Ich brauche einen Bericht bis Freitag.|||
-    pause||Ich brauche einen Bericht bis Freitag.|3500||
-    sfx|||bell||
-    Narrator|slower|repeat|Alles klar, ich fange sofort an.|||
-    pause||Alles klar, ich fange sofort an.|3500||
-    sfx|||bell||
-    Narrator|slower|repeat|Perfekt. Danke.|||
-    pause||Perfekt. Danke.|3500||
-    </conversation>
-
-    scene:
-    {scene}
-
-    learning points:
-    {learning}
-    """.strip()
+Rules:
+- Copy the text EXACTLY as it appears above — do not paraphrase or modify
+- Return exactly 3 items
+- Do NOT include "Bitte wiederholen" — that is a fixed pre-recorded intro handled separately
+- Output ONLY the JSON object
+""".strip()
 
 
-# =========================
-# TAG EXTRACTOR
-# =========================
-def extract_tag(content: str, tag: str) -> str:
-    pattern = rf"<{tag}>(.*?)</{tag}>"
-    match = re.search(pattern, content, re.DOTALL)
-    if not match:
-        logger.warning(f"Missing <{tag}>")
-        return ""
-    return match.group(1).strip()
+def _select_repetitions(
+    dialog_texts: list[str],
+    level: str,
+    model: str,
+) -> tuple[list[str], str]:
+    prompt = _build_repetitions_prompt(dialog_texts, level)
+    resp = client.chat.completions.create(
+        model           = model,
+        messages        = [{"role": "user", "content": prompt}],
+        response_format = {"type": "json_object"},
+        temperature     = 0.2,
+    )
+    data  = json.loads(resp.choices[0].message.content)
+    texts = [r["text"] for r in data.get("repetitions", []) if r.get("text")]
+    if len(texts) != 3:
+        logger.warning(f"Expected 3 repetitions, got {len(texts)}")
+    return texts, prompt
 
 
-# =========================
-# PARSE CONVERSATION → SCENES
-# =========================
-def parse_conversation(conversation: str):
-    scenes = []
-    lines  = [l.strip() for l in conversation.split("\n") if l.strip()]
+# =============================================================================
+# IMAGE PROMPT BUILDERS
+# =============================================================================
 
-    recent_characters = []
-    window_size = 3
+def _narrator_image_prompt(loc_desc: str) -> str:
+    _load_style_tokens()
+    return (
+        f"{_STYLE_TOKENS}\n"
+        f"FRAMING: {_FRAMING_TOKENS}\n\n"
+        f"Wide establishing shot. {loc_desc}. "
+        "Characters smaller in frame, environment clearly visible. "
+        "Storytelling mood. No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
+    )
 
-    for idx, line in enumerate(lines, start=1):
-        parts    = line.split("|")
-        scene_id = f"scene_{idx:03d}"
 
-        if len(parts) < 2:
-            logger.warning(f"Skipping malformed line {idx}: {line!r}")
-            continue
+def _action_single_prompt(char_name: str, char_data: dict, loc_desc: str, scene_visual: str) -> str:
+    """One character performing an action related to what they're saying."""
+    _load_style_tokens()
+    fixed = char_data.get("fixed_description", "") or ""
+    return (
+        f"{_STYLE_TOKENS}\n"
+        f"FRAMING: {_FRAMING_TOKENS}\n\n"
+        f"Scene at: {loc_desc}\n"
+        f"Character: {char_name} — {fixed}\n\n"
+        f"Action: {scene_visual}\n\n"
+        "Show the character actively engaged with the action described. "
+        "Match exact clothing, hair, and facial features from reference. "
+        "Integrate them naturally into the environment. "
+        "No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
+    )
 
-        char_raw = parts[0].strip()
-        char     = char_raw.lower()
 
-        # PAUSE  —  pause||subtitle|duration_ms||
-        if char == "pause":
-            subtitle = parts[2].strip() if len(parts) > 2 else ""
-            try:
-                duration = int(parts[3].strip()) if len(parts) > 3 and parts[3].strip() else 1000
-            except (ValueError, IndexError):
-                duration = 1000
-            scenes.append({
-                "id": scene_id, "type": "pause",
-                "text": subtitle, "duration_ms": duration
-            })
-            continue
+def _action_both_prompt(char_a: str, char_a_data: dict,
+                        char_b: str, char_b_data: dict,
+                        loc_desc: str, scene_visual: str) -> str:
+    """Both characters in a shared action scene."""
+    _load_style_tokens()
+    def _fixed(c): return c.get("fixed_description", "") or ""
+    return (
+        f"{_STYLE_TOKENS}\n"
+        f"FRAMING: {_FRAMING_TOKENS}\n\n"
+        f"Scene at: {loc_desc}\n"
+        f"{char_a}: {_fixed(char_a_data)}\n"
+        f"{char_b}: {_fixed(char_b_data)}\n\n"
+        f"Action: {scene_visual}\n\n"
+        "Show both characters actively engaged in the described scene. "
+        "Match exact clothing, hair, and facial features from reference. "
+        "Integrate them naturally into the environment. "
+        "No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
+    )
 
-        # SFX  —  sfx|||name||
-        if char == "sfx":
-            scenes.append({
-                "id": scene_id, "type": "sfx",
-                "name": parts[3].strip() if len(parts) > 3 else parts[-1].strip()
-            })
-            continue
 
-        # DIALOGUE  —  char|mode|section|text|visual_context|stage
-        if len(parts) < 4:
-            logger.warning(f"Skipping incomplete dialogue line {idx}: {line!r}")
-            continue
+# =============================================================================
+# SCENE LIST BUILDER
+# =============================================================================
 
-        speaker      = char_raw
-        mode         = parts[1].strip()
-        section      = parts[2].strip()
-        text         = parts[3].strip()
-        scene_visual = parts[4].strip() if len(parts) > 4 else ""
-        stage        = parts[5].strip() if len(parts) > 5 else ""
+def build_scene_list(
+    gpt_output: dict,
+    project_type: dict,
+    manifest: dict,
+    chars_data: dict,
+    all_locs: dict,
+    repetition_texts: list[str] | None = None,
+) -> list[dict]:
+    """
+    Convert GPT output + project_type rules into a flat list of universal scene objects.
+    """
+    rules      = project_type["scene_builder_rules"]
+    gen        = manifest["generation_config"]
+    pipe       = manifest["pipeline_config"]
+    loc_key    = gen["location_key"]
+    char_names = gen["characters"]
+    char_a, char_b = char_names[0], char_names[1]
+    char_a_data    = chars_data[char_a]
+    char_b_data    = chars_data[char_b]
+    loc_data       = all_locs[loc_key]
+    loc_desc       = loc_data["description"]
+    inter_ms       = pipe["inter_pause_ms"]
+    rep_factor     = pipe["repetition_pause_factor"]
 
-        if char != "narrator" and section == "dialog":
-            if speaker not in recent_characters:
-                recent_characters.append(speaker)
-            if len(recent_characters) > window_size:
-                recent_characters.pop(0)
+    narrator_voice = chars_data.get("Narrator", {}).get("voice_id", "")
+    char_a_voice   = char_a_data.get("voice_id", "")
+    char_b_voice   = char_b_data.get("voice_id", "")
 
-        scene_characters = [c for c in recent_characters if c.lower() != "narrator"]
-        is_narrator      = (char == "narrator")
+    def _voice(speaker: str) -> str:
+        if speaker == char_a: return char_a_voice
+        if speaker == char_b: return char_b_voice
+        return narrator_voice
 
+    scenes: list[dict] = []
+    idx = 1
+
+    def _sid() -> str:
+        nonlocal idx; s = f"scene_{idx:03d}"; idx += 1; return s
+
+    def _pause(ms: int) -> dict:
+        return {"id": _sid(), "description": "pause", "characters": [],
+                "image": None, "audio": None, "subtitle_text": None, "duration_ms": ms}
+
+    def _sfx(asset_key: str, path: str, desc: str) -> dict:
+        return {"id": _sid(), "description": desc, "characters": [], "image": None,
+                "audio": {"type": "sfx", "asset_key": asset_key, "file_path": path, "duration_ms": None},
+                "subtitle_text": None, "duration_ms": None}
+
+    # --- Narration ---
+    if rules.get("include_narration"):
+        nar_raw  = gpt_output.get("narration", {})
+        # GPT sometimes returns "narration": "text" (string) instead of {"text": "..."}
+        if isinstance(nar_raw, str):
+            nar_text = nar_raw
+        elif isinstance(nar_raw, dict):
+            nar_text = nar_raw.get("text", "")
+        else:
+            nar_text = ""
+        if not nar_text:
+            logger.warning("Narration text is empty — GPT may have omitted or misformatted it")
         scenes.append({
-            "id": scene_id, "type": "dialogue",
-            "character": speaker, "mode": mode, "section": section, "text": text,
-            "visual_context": scene_visual,
-            "stage": stage,
-            "characters": scene_characters, "is_narrator": is_narrator,
-            "audio": None, "image": None
+            "id": _sid(), "description": "narration", "characters": [char_a, char_b],
+            "_is_narration": True,
+            "image": {
+                "file_path": None,
+                "prompt_to_create": _narrator_image_prompt(loc_desc),
+                "reference_type": "both",
+            },
+            "audio": {"type": "tts", "file_path": None, "tts_text": nar_text,
+                      "voice_id": narrator_voice, "duration_ms": None},
+            "subtitle_text": nar_text, "duration_ms": None,
         })
+        if rules.get("inter_pause_between_scenes"):
+            scenes.append(_pause(inter_ms))
+
+    # --- Dialog ---
+    if rules.get("include_dialog"):
+        for i, item in enumerate(gpt_output.get("dialog", [])):
+            # GPT models sometimes use "character" instead of "speaker" — handle both
+            speaker = item.get("speaker") or item.get("character") or char_a
+            if not item.get("speaker") and not item.get("character"):
+                logger.warning(f"Dialog item {i} missing 'speaker'/'character' field — defaulting to {char_a}")
+            elif not item.get("speaker") and item.get("character"):
+                logger.warning(f"Dialog item {i} used 'character' key instead of 'speaker' — accepting it")
+            text           = item.get("text", "")
+            scene_visual   = item.get("scene_visual", "")
+            scene_chars    = item.get("scene_characters", "speaker_only")
+
+            if scene_chars == "both":
+                img_prompt     = _action_both_prompt(char_a, char_a_data, char_b, char_b_data, loc_desc, scene_visual)
+                reference_type = "both"
+            else:
+                spk_data       = char_a_data if speaker == char_a else char_b_data
+                img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual)
+                reference_type = "single_speaker"
+
+            scenes.append({
+                "id": _sid(),
+                "description": f"dialog_{i:03d} [{speaker}]",
+                "characters": [speaker],
+                "scene_visual":     scene_visual,    # stored for UI display
+                "scene_characters": scene_chars,     # stored for UI display
+                "image": {
+                    "file_path": None,
+                    "prompt_to_create": img_prompt,
+                    "reference_type": reference_type,
+                    "speaker": speaker,
+                },
+                "audio": {"type": "tts", "file_path": None, "tts_text": text,
+                          "voice_id": _voice(speaker), "duration_ms": None},
+                "subtitle_text": text, "duration_ms": None,
+            })
+            if rules.get("inter_pause_between_scenes"):
+                scenes.append(_pause(inter_ms))
+
+    # --- Repetition section ---
+    if rules.get("include_repetition_section") and repetition_texts:
+        scenes.append(_sfx("bitte_wiederholen", "assets/sfx/bitte_wiederholen.mp3", "bitte_wiederholen intro"))
+        if rules.get("inter_pause_between_scenes"):
+            scenes.append(_pause(inter_ms))
+
+        for rep_text in repetition_texts:
+            if rules.get("bell_before_repetition"):
+                scenes.append(_sfx("bell", "assets/sfx/bell.mp3", "bell"))
+            scenes.append({
+                "id": _sid(),
+                "description": f"repetition: {rep_text[:40]}",
+                "characters": [],
+                "image": None,
+                "audio": {"type": "tts", "file_path": None, "tts_text": rep_text,
+                          "voice_id": narrator_voice, "duration_ms": None},
+                "subtitle_text": rep_text, "duration_ms": None,
+                "_is_repetition": True,
+                "_rep_pause_factor": rep_factor,
+            })
 
     return scenes
 
 
-# =========================
-# OPENAI CALL
-# =========================
-def generate_script(prompt: str, model: str) -> str:
-    logger.info("Generating script from OpenAI...")
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    logger.debug(f"Raw response: {response}")
-    return response.choices[0].message.content
+# =============================================================================
+# MAIN ENTRY POINT
+# =============================================================================
 
-
-# =========================
-# MAIN
-# =========================
-def create_script(project_name: str):
-    projects_dir, model, level = load_config()
-    project_path  = projects_dir / project_name
+def create_script(
+    project_name: str,
+    char_a: str,
+    char_b: str,
+    location_key: str,
+    project_type_key: str | None = None,
+    prompt_override: str | None = None,
+    words: list[str] | None = None,
+) -> dict:
+    cfg           = load_config()
+    project_path  = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
 
     if not manifest_path.exists():
-        raise FileNotFoundError("project_manifest.json not found")
+        raise FileNotFoundError("project_manifest.json not found — run create_project first")
+
+    chars_data    = load_new_characters(cfg["assets_dir"])
+    project_types = load_project_types(cfg["assets_dir"])
+    all_locs      = get_new_locations_flat(cfg["assets_dir"])
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
-    scene    = manifest["inputs"]["scene"]
-    learning = manifest["inputs"]["learning_points"]
+    # project_type_key arg overrides the manifest value (lets the UI change it on the fly)
+    if project_type_key:
+        manifest["project_metadata"]["project_type_key"] = project_type_key
+    project_type_key = manifest["project_metadata"]["project_type_key"]
+    if project_type_key not in project_types:
+        raise ValueError(f"Project type '{project_type_key}' not found in project_types.json")
+    project_type = project_types[project_type_key]
 
-    prompt     = build_prompt(level, scene, learning)
-    raw_output = generate_script(prompt, model)
+    for name in (char_a, char_b):
+        if name not in chars_data:
+            raise ValueError(f"Character '{name}' not found in characters.json")
+    if location_key not in all_locs:
+        raise ValueError(f"Location '{location_key}' not found. Available: {sorted(all_locs.keys())}")
 
-    insights       = extract_tag(raw_output, "insights")
-    context        = extract_tag(raw_output, "context")
-    visual_context = extract_tag(raw_output, "visual_context")
-    conversation   = extract_tag(raw_output, "conversation")
+    manifest["generation_config"]["location_key"] = location_key
+    manifest["generation_config"]["characters"]   = [char_a, char_b]
+    if words:
+        manifest["generation_config"]["words"] = words
 
-    if not conversation:
-        raise ValueError("Model returned empty <conversation> block")
+    prompt = prompt_override or _build_prompt(project_type, manifest, chars_data, all_locs)
+    manifest["generation_config"]["prompt_script"] = prompt
 
-    first_dialogue = next(
-        (l for l in conversation.splitlines()
-         if l.strip() and "|" in l and l.split("|")[0].strip().lower() not in ("pause", "sfx")),
-        None
+    logger.info(f"Calling GPT ({cfg['script_model']}) for {project_name} …")
+    resp = client.chat.completions.create(
+        model           = cfg["script_model"],
+        messages        = [{"role": "user", "content": prompt}],
+        response_format = {"type": "json_object"},
     )
-    if first_dialogue and not first_dialogue.lower().startswith("narrator"):
-        logger.warning("First dialogue line is not Narrator — consider re-generating")
+    raw_content = resp.choices[0].message.content
 
-    (project_path / "insight.txt").write_text(insights, encoding="utf-8")
-    (project_path / "context.txt").write_text(context, encoding="utf-8")
-    (project_path / "visual_context.txt").write_text(visual_context, encoding="utf-8")
-    (project_path / "script.txt").write_text(conversation, encoding="utf-8")
+    # Save raw GPT response before parsing — useful for debugging parse failures
+    manifest["generation_config"]["raw_gpt_script"] = raw_content
 
-    scenes = parse_conversation(conversation)
+    gpt_output: dict = json.loads(raw_content)
 
-    manifest["script"] = {
-        "insights": insights,
-        "context": context,
-        "visual_context": visual_context,
-        "conversation_raw": conversation
-    }
-    manifest["scenes"] = scenes
+    manifest["video_info"]["title"]    = gpt_output.get("title")
+    manifest["video_info"]["tags"]     = gpt_output.get("tags")
+    manifest["video_info"]["insights"] = gpt_output.get("insights")
+
+    repetition_texts = None
+    if project_type["scene_builder_rules"].get("include_repetition_section"):
+        dialog_texts = [item.get("text", "") for item in gpt_output.get("dialog", []) if item.get("text")]
+        rep_texts, rep_prompt = _select_repetitions(
+            dialog_texts,
+            manifest["generation_config"]["level"],
+            cfg["script_model"],
+        )
+        repetition_texts = rep_texts
+        manifest["generation_config"]["prompt_repetitions"] = rep_prompt
+
+    manifest["scenes"] = build_scene_list(
+        gpt_output       = gpt_output,
+        project_type     = project_type,
+        manifest         = manifest,
+        chars_data       = chars_data,
+        all_locs         = all_locs,
+        repetition_texts = repetition_texts,
+    )
+
+    manifest["project_metadata"]["update_date"] = datetime.utcnow().isoformat()
 
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"Script + manifest updated ({len(scenes)} scenes)")
+    _write_script_txt(project_path, manifest, gpt_output, repetition_texts)
+
+    logger.info(
+        f"Script done — type={project_type_key}, location={location_key}, "
+        f"{len(gpt_output.get('dialog', []))} dialog lines, "
+        f"{len(repetition_texts or [])} repetitions, "
+        f"{len(manifest['scenes'])} total scenes"
+    )
     return manifest
 
 
-# =========================
-# CLI
-# =========================
-def main():
-    parser = argparse.ArgumentParser(description="Generate script and update project manifest")
-    parser.add_argument("project_name")
-    args = parser.parse_args()
-    create_script(args.project_name)
+def _write_script_txt(project_path, manifest, gpt_output, repetition_texts):
+    vi    = manifest["video_info"]
+    ptype = manifest["project_metadata"]["project_type_key"]
+    lines = [f"# {vi.get('title','')}", f"type: {ptype}", ""]
+    lines.append(f"[NARRATION] {gpt_output.get('narration',{}).get('text','')}")
+    lines.append("")
+    for d in gpt_output.get("dialog", []):
+        visual = f"  [VISUAL({d.get('scene_characters','speaker_only')}): {d.get('scene_visual','')}]" if d.get("scene_visual") else ""
+        lines.append(f"[{d.get('speaker','?')}] {d.get('text','')}{visual}")
+    if repetition_texts:
+        lines += ["", "[SHADOWING SECTION]"]
+        lines += [f"  → {t}" for t in repetition_texts]
+    (project_path / "script.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("project_name")
+    p.add_argument("--char-a",   required=True)
+    p.add_argument("--char-b",   required=True)
+    p.add_argument("--location-key", required=True, dest="location_key")
+    p.add_argument("--project-type",  default="story",  dest="project_type_key")
+    p.add_argument("--prompt-override", default=None,   dest="prompt_override")
+    a = p.parse_args()
+    create_script(
+        a.project_name, a.char_a, a.char_b, a.location_key,
+        project_type_key=a.project_type_key,
+        prompt_override=a.prompt_override,
+    )
+
 
 if __name__ == "__main__":
-    create_script("office_convo_6")
+    main()

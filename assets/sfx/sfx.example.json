@@ -1,0 +1,12 @@
+{
+  "sfx_key": {
+    "name": "sfx_key",
+    "description": "Short description of the sound effect, e.g. 'Short clear bell chime used to signal a shadowing repetition prompt.'",
+    "full_path": "sfx/sfx_key.mp3"
+  },
+  "another_sfx": {
+    "name": "another_sfx",
+    "description": "Another sound effect description.",
+    "full_path": "sfx/another_sfx.mp3"
+  }
+}

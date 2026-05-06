@@ -1,200 +1,134 @@
 """
 create_project.py
+=================
+Creates the project folder and the initial project_manifest.json skeleton.
 
-Creates a new project structure for the video pipeline.
-
-Features:
-- Creates project folder
-- Stores scene + learning inputs
-- Initializes project_manifest.json (single source of truth)
-- Uses config.ini for global paths
-- CLI support
-
-Usage:
-    python create_project.py my_project \
-        --scene "Office conversation" \
-        --learning "Practice formal requests"
+The manifest uses the new scene-first architecture:
+  project_metadata  — name, dates, project_type_key
+  video_info        — title, tags, video_format, insights (filled by create_script)
+  generation_config — location, characters, prompts (filled by create_script)
+  pipeline_config   — timing parameters
+  scenes            — flat list of universal scene objects (filled by create_script)
 """
 
 import json
-import argparse
 import logging
-import configparser
-from pathlib import Path
+import argparse
 from datetime import datetime
+from pathlib import Path
+from utils_config import load_config, load_project_types
 
-# =========================
-# 🔧 CONFIG
-# =========================
-LOG_LEVEL = logging.INFO
-
-# =========================
-# 🪵 LOGGING
-# =========================
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# =========================
-# ⚙️ CONFIG LOADER
-# =========================
-def load_config(config_path="config.ini"):
-    config = configparser.ConfigParser()
 
-    if not Path(config_path).exists():
-        raise FileNotFoundError("config.ini not found")
-
-    config.read(config_path)
-
-    projects_dir = Path(config["paths"]["projects_dir"])
-    assets_dir = Path(config["paths"]["assets_dir"])
-
-    return projects_dir, assets_dir
+VALID_LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
 
 
-# =========================
-# 📁 CREATE PROJECT
-# =========================
 def create_project(
     project_name: str,
-    scene_text: str = None,
-    learning_text: str = None,
-    scene_file: str = None,
-    learning_file: str = None
-):
+    project_type_key: str,
+    context: str,
+    learning_points: str = "",
+    level: str | None = None,
+) -> Path:
     """
-    Create a new project.
+    Create the project folder structure and initial manifest.
 
-    Args:
-        project_name (str)
-        scene_text (str)
-        learning_text (str)
-        scene_file (str)
-        learning_file (str)
+    Parameters
+    ----------
+    project_name     : Unique folder name for the project.
+    project_type_key : Key from assets/project_types/project_types.json
+                       (e.g. "shadowing", "story", "word_learning").
+    context          : Free-text description of the scene / video topic.
+    learning_points  : Optional learning objectives or word list.
+    level            : Target language level (A1–C2). Defaults to config value.
     """
-
-    projects_dir, assets_dir = load_config()
-
-    project_path = projects_dir / project_name
+    cfg          = load_config()
+    project_path = cfg["projects_dir"] / project_name
 
     if project_path.exists():
         raise FileExistsError(f"Project already exists: {project_path}")
 
-    logger.info(f"Creating project: {project_name}")
+    # Validate project type
+    project_types = load_project_types(cfg["assets_dir"])
+    if project_type_key not in project_types:
+        available = sorted(project_types.keys())
+        raise ValueError(
+            f"Unknown project_type_key '{project_type_key}'. "
+            f"Available: {available}"
+        )
 
-    # ----------------------
-    # 📁 Create folders
-    # ----------------------
-    project_path.mkdir(parents=True)
-    (project_path / "audio").mkdir()
-    (project_path / "images").mkdir()
+    # Resolve level — explicit arg wins, falls back to config default
+    resolved_level = (level or "").strip().upper() or cfg["level"]
+    if resolved_level not in VALID_LEVELS:
+        raise ValueError(f"Invalid level '{resolved_level}'. Must be one of {VALID_LEVELS}")
 
-    # ----------------------
-    # 📄 Load inputs
-    # ----------------------
-    if scene_file:
-        scene_text = Path(scene_file).read_text(encoding="utf-8")
+    logger.info(f"Creating project: {project_name} (type: {project_type_key}, level: {resolved_level})")
 
-    if learning_file:
-        learning_text = Path(learning_file).read_text(encoding="utf-8")
+    for d in ["audio", "images", "videos"]:
+        (project_path / d).mkdir(parents=True, exist_ok=True)
 
-    if not scene_text or not learning_text:
-        raise ValueError("You must provide scene and learning inputs")
+    now = datetime.utcnow().isoformat()
 
-    # ----------------------
-    # 💾 Save raw inputs
-    # ----------------------
-    (project_path / "scene.txt").write_text(scene_text, encoding="utf-8")
-    (project_path / "learning_points.txt").write_text(learning_text, encoding="utf-8")
-
-    # ----------------------
-    # 🧠 INITIAL MANIFEST
-    # ----------------------
     manifest = {
-        "project": {
-            "name": project_name,
-            "created_at": datetime.utcnow().isoformat(),
+        "project_metadata": {
+            "name":             project_name,
+            "creation_date":    now,
+            "update_date":      now,
+            "project_type_key": project_type_key,
         },
-        "paths": {
-            "project_root": str(project_path),
-            "assets_root": str(assets_dir)
+
+        # Filled by create_script
+        "video_info": {
+            "title":        None,
+            "tags":         None,
+            "video_format": "vertical",
+            "insights":     None,
         },
-        "inputs": {
-            "scene": scene_text,
-            "learning_points": learning_text
+
+        # Partially filled now, rest by create_script
+        "generation_config": {
+            "location_key":             None,
+            "characters":               [],
+            "level":                    resolved_level,
+            "provided_context":         context,
+            "provided_learning_points": learning_points,
+            "prompt_script":            None,
+            "prompt_repetitions":       None,
         },
-        "script": {
-            "insights": None,
-            "context": None,
-            "conversation": []
+
+        "pipeline_config": {
+            "inter_pause_ms":          cfg["inter_pause_ms"],
+            "repetition_pause_factor": cfg["repetition_pause_factor"],
         },
-        "scenes": []
+
+        # Filled by create_script — flat list of universal scene objects
+        "scenes": [],
     }
 
     manifest_path = project_path / "project_manifest.json"
-
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"Project created at: {project_path}")
     logger.info(f"Manifest created: {manifest_path}")
-
     return project_path
 
 
-# =========================
-# 🧭 CLI
-# =========================
-def main():
-    parser = argparse.ArgumentParser(
-        description="Create a new project for the video generation pipeline"
-    )
-
-    parser.add_argument(
-        "project_name",
-        help="Name of the project"
-    )
-
-    parser.add_argument(
-        "--scene",
-        help="Scene description text"
-    )
-
-    parser.add_argument(
-        "--learning",
-        help="Learning points text"
-    )
-
-    parser.add_argument(
-        "--scene-file",
-        help="Path to scene.txt"
-    )
-
-    parser.add_argument(
-        "--learning-file",
-        help="Path to learning_points.txt"
-    )
-
-    args = parser.parse_args()
-
-    create_project(
-        project_name=args.project_name,
-        scene_text=args.scene,
-        learning_text=args.learning,
-        scene_file=args.scene_file,
-        learning_file=args.learning_file
-    )
+def main() -> None:
+    p = argparse.ArgumentParser(description="Create a new video project")
+    p.add_argument("project_name")
+    p.add_argument("--type",     required=True, dest="project_type_key",
+                   help="Project type key (e.g. shadowing, story, word_learning)")
+    p.add_argument("--context",  required=True,
+                   help="Scene description / video topic")
+    p.add_argument("--learning", default="", dest="learning_points",
+                   help="Learning objectives or word list")
+    p.add_argument("--level", default=None,
+                   help=f"Target language level, e.g. B1 (default: config value). One of {VALID_LEVELS}")
+    a = p.parse_args()
+    create_project(a.project_name, a.project_type_key, a.context, a.learning_points, a.level)
 
 
-# =========================
-# ▶️ ENTRYPOINT
-# =========================
 if __name__ == "__main__":
-    create_project(
-        project_name="office_convo_6",
-        scene_text="Zahra is talking with Wiebke, Zahra states that the delivery of the product can't be achieved because of the lack of the new safety label, then Wiebke says that she is going to take care of it and the delivery is going to happen as planned ",
-        learning_text="the grammatical construction Um ... zu and The expression: ich kuemmere mich um",
-    )
-
+    main()

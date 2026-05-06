@@ -1,0 +1,12 @@
+{
+  "track_key": {
+    "name": "track_key",
+    "description": "Human-readable description of the audio track, e.g. 'Warm coffeeshop ambience with gentle background noise.'",
+    "full_path": "background_audio/track_key.mp3"
+  },
+  "another_track": {
+    "name": "another_track",
+    "description": "Another ambient audio track description.",
+    "full_path": "background_audio/another_track.mp3"
+  }
+}

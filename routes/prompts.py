@@ -1,0 +1,71 @@
+import json
+from flask import Blueprint, request, jsonify
+
+from core import PROJECTS_DIR, cfg
+from utils_config import load_new_characters, load_project_types, get_new_locations_flat
+
+bp = Blueprint("prompts", __name__, url_prefix="")
+
+
+@bp.route("/projects/<name>/prompt/script", methods=["POST"])
+def preview_script_prompt(name):
+    """
+    Build and return the GPT prompt that would be used for script generation,
+    WITHOUT actually calling GPT.  Lets the user inspect/edit it before running.
+
+    Accepts JSON body:
+      char_a           — character A name
+      char_b           — character B name
+      location_key     — location key
+      project_type_key — project type key (defaults to manifest value)
+    """
+    try:
+        data             = request.get_json() or {}
+        char_a           = data.get("char_a", "").strip()
+        char_b           = data.get("char_b", "").strip()
+        location_key     = data.get("location_key", "").strip()
+        project_type_key = data.get("project_type_key", "").strip()
+
+        if not char_a or not char_b or not location_key:
+            return jsonify({"error": "char_a, char_b and location_key are required"}), 400
+
+        # Load assets
+        assets_dir    = cfg["assets_dir"]
+        chars_data    = load_new_characters(assets_dir)
+        project_types = load_project_types(assets_dir)
+        all_locs      = get_new_locations_flat(assets_dir)
+
+        # Validate inputs
+        for cname in (char_a, char_b):
+            if cname not in chars_data:
+                return jsonify({"error": f"Character '{cname}' not found"}), 400
+        if location_key not in all_locs:
+            return jsonify({"error": f"Location '{location_key}' not found"}), 400
+
+        # Load manifest and temporarily patch generation_config with the preview values
+        mp = PROJECTS_DIR / name / "project_manifest.json"
+        if not mp.exists():
+            return jsonify({"error": "Project not found"}), 404
+
+        with open(mp, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        # Use the project_type_key from the request, or fall back to manifest
+        pt_key = project_type_key or manifest.get("project_metadata", {}).get("project_type_key", "shadowing")
+        if pt_key not in project_types:
+            return jsonify({"error": f"Project type '{pt_key}' not found"}), 400
+
+        # Patch manifest's generation_config with the preview selections
+        # (we do NOT write this to disk — it's just for building the prompt)
+        manifest.setdefault("generation_config", {})
+        manifest["generation_config"]["characters"]   = [char_a, char_b]
+        manifest["generation_config"]["location_key"] = location_key
+        if "level" not in manifest["generation_config"]:
+            manifest["generation_config"]["level"] = cfg.get("level", "B1")
+
+        from create_script import _build_prompt
+        prompt = _build_prompt(project_types[pt_key], manifest, chars_data, all_locs)
+        return jsonify({"prompt": prompt})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

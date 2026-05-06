@@ -1,0 +1,26 @@
+{
+  "Narrator": {
+    "name": "Narrator",
+    "voice_id": "YOUR_ELEVENLABS_VOICE_ID",
+    "fixed_description": null,
+    "variable_description": null,
+    "height_cm": null,
+    "ref_desc": null,
+    "artwork_file_path": null,
+    "art_34left_file_path": null,
+    "thumbnail_file_path": null,
+    "concept_art_file_path": null
+  },
+  "CharacterName": {
+    "name": "CharacterName",
+    "voice_id": "YOUR_ELEVENLABS_VOICE_ID",
+    "fixed_description": "Permanent physical appearance used in image prompts: nationality, age, eye colour, hair, skin tone, facial features.",
+    "variable_description": "Outfit and accessories used in the script prompt only (not in image prompts): clothing, shoes, accessories.",
+    "height_cm": 170,
+    "ref_desc": "Short label used internally, e.g. 'curly hair female'",
+    "artwork_file_path": "character_art/CharacterName_art.png",
+    "art_34left_file_path": "character_art/CharacterName34left.png",
+    "thumbnail_file_path": "character_art/CharacterNameThumbnail.png",
+    "concept_art_file_path": null
+  }
+}

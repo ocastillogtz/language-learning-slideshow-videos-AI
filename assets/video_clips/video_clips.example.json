@@ -1,0 +1,14 @@
+{
+  "intro": {
+    "name": "intro",
+    "description": "Channel intro branding clip shown at the start of the video.",
+    "video_file_path": "branding/intro.mp4",
+    "duration_ms": null
+  },
+  "outro": {
+    "name": "outro",
+    "description": "Channel outro branding clip shown at the end of the video.",
+    "video_file_path": "branding/outro.mp4",
+    "duration_ms": null
+  }
+}

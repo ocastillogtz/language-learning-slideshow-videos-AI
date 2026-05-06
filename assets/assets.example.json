@@ -1,0 +1,50 @@
+{
+  "characters": {
+    "Narrator": {
+      "config": "characters/characters.json#Narrator"
+    },
+    "CharacterName": {
+      "config": "characters/characters.json#CharacterName"
+    }
+  },
+  "locations": {
+    "location_key": {
+      "config": "locations/locations.json#location_key"
+    }
+  },
+  "project_types": {
+    "shadowing": {
+      "config": "project_types/project_types.json#shadowing"
+    },
+    "story": {
+      "config": "project_types/project_types.json#story"
+    },
+    "word_learning": {
+      "config": "project_types/project_types.json#word_learning"
+    },
+    "register_phrases": {
+      "config": "project_types/project_types.json#register_phrases"
+    },
+    "grammar_pairs": {
+      "config": "project_types/project_types.json#grammar_pairs"
+    }
+  },
+  "video_clips": {
+    "intro": {
+      "config": "video_clips/video_clips.json#intro"
+    },
+    "outro": {
+      "config": "video_clips/video_clips.json#outro"
+    }
+  },
+  "background_audio": {
+    "track_key": {
+      "config": "background_audio/background_audio.json#track_key"
+    }
+  },
+  "sfx": {
+    "sfx_key": {
+      "config": "sfx/sfx.json#sfx_key"
+    }
+  }
+}

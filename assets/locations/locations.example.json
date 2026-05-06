@@ -1,0 +1,24 @@
+{
+  "location_key": {
+    "name": "location_key",
+    "description": "Short scene description used in the GPT script prompt, e.g. 'cozy coffeeshop, characters sitting chatting'.",
+    "creation_prompt": "Text-to-image prompt used to generate the location background art. No people. E.g. 'A warm cozy European coffeeshop interior with wooden furniture and warm lighting. No people.'",
+    "artwork_file_path": "locations/location_key.png",
+    "characters_amount": 2,
+    "eligible_characters": [
+      "CharacterA",
+      "CharacterB"
+    ]
+  },
+  "another_location": {
+    "name": "another_location",
+    "description": "Another location description.",
+    "creation_prompt": "Text-to-image prompt for background art generation.",
+    "artwork_file_path": "locations/another_location.png",
+    "characters_amount": 2,
+    "eligible_characters": [
+      "CharacterA",
+      "CharacterB"
+    ]
+  }
+}

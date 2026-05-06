@@ -1,6 +1,0 @@
-
-## 🛠️ Requirements
-- Python 3.x
-- OpenAI API Key (for script and image generation)
-- FFmpeg (for video processing)
-- Google Cloud Credentials (for YouTube uploading)
