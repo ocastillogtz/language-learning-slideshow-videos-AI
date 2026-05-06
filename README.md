@@ -618,4 +618,33 @@ python upload_instagram.py --project my_project --caption "Im Café 🇩🇪"
 
 # Instagram one-time credential setup
 python upload_instagram.py --setup \
-  --app-id <ID> --app-secret <SECRET> --token <
+  --app-id <ID> --app-secret <SECRET> --token <SHORT_TOKEN>
+```
+
+---
+
+## Extending with New Video Types
+
+New project types are defined entirely in `assets/project_types/project_types.json` — no Python changes required.
+
+Each entry defines:
+- `description_for_prompt` — the GPT prompt template (uses `{PLACEHOLDER}` markers)
+- `output_json_schema` — enforces the expected GPT response shape via OpenAI structured outputs
+- `scene_builder_rules` — controls which scene types `build_scene_list()` generates (narration, dialog, repetition section, pauses, bell SFX)
+
+Available template placeholders: `{LEVEL}`, `{LOCATION_KEY}`, `{LOCATION_DESC}`, `{CHAR_A}`, `{CHAR_B}`, `{CHAR_A_DESC}`, `{CHAR_B_DESC}`, `{WORDS_LIST}`, `{PROVIDED_CONTEXT}`, `{PROVIDED_LEARNING_POINTS}`.
+
+**Important:** any literal `{` or `}` inside the prompt template (e.g. in JSON examples) must be escaped as `{{` and `}}` so Python's `.format()` does not treat them as placeholders.
+
+Every project type prompt should include a `VIDEO METADATA` section instructing GPT to return meaningful `title`, `tags`, and `insights` fields. `insights` is formatted for use as a YouTube/Instagram video description.
+
+---
+
+## Re-running Individual Steps
+
+Because all results are tracked in `project_manifest.json`, any step can be safely re-run:
+
+- **Script** — replaces `scenes[]` entirely; downstream `file_path` fields become stale until Audio/Images/Video are re-run
+- **Audio** — skips scenes whose `audio.file_path` is already set; editing scene text via the UI clears the path automatically
+- **Images** — skips scenes whose `image.file_path` is already set; use `--overwrite` or the Re-generate button per scene in the UI
+- **Video / Assemble** — use `--overwrite` to replace existing clips or the final video
