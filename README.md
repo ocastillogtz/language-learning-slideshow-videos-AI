@@ -6,6 +6,44 @@ A **web-based control panel** (`app.py`) lets you manage every project and asset
 
 ---
 
+## Web UI
+
+### Projects dashboard
+The sidebar lists all your projects with status indicators. Hit **+ New Project** to open the creation modal — pick a project type, language level, describe the scene, and optionally specify learning points.
+
+<p align="center">
+  <img src="readme_resources/initial_screen.png" width="780" alt="Projects dashboard">
+  &nbsp;&nbsp;
+  <img src="readme_resources/new_project.png" width="380" alt="New project modal">
+</p>
+
+### Pipeline tab
+Every pipeline step is a collapsible card showing its status (`idle` / `running` / `done` / `error`). Steps run in background threads — the UI stays responsive and polls for updates automatically.
+
+<p align="center">
+  <img src="readme_resources/all_pipeline_steps.png" width="600" alt="All pipeline steps">
+  &nbsp;&nbsp;
+  <img src="readme_resources/generate_script.png" width="600" alt="Generate script step expanded">
+</p>
+
+### Generated Items tab
+Every scene is shown as a card with its German text, image/audio status badges, and an Edit button. Expand any card to see the generated illustration, play the audio, edit the image prompt, and re-generate image or audio individually without re-running the full pipeline.
+
+<p align="center">
+  <img src="readme_resources/generated_items.png" width="580" alt="Generated items list">
+  &nbsp;&nbsp;
+  <img src="readme_resources/single_item.png" width="580" alt="Single item expanded with image, audio and prompt">
+</p>
+
+### Manifest tab
+A live read-only view of the project manifest — shows metadata, scene timeline, tags, video title, characters, and the provided context and learning points at a glance.
+
+<p align="center">
+  <img src="readme_resources/manifest_tab.png" width="600" alt="Manifest tab overview">
+</p>
+
+---
+
 ## Pipeline Overview
 
 ```
@@ -580,33 +618,4 @@ python upload_instagram.py --project my_project --caption "Im Café 🇩🇪"
 
 # Instagram one-time credential setup
 python upload_instagram.py --setup \
-  --app-id <ID> --app-secret <SECRET> --token <SHORT_TOKEN>
-```
-
----
-
-## Extending with New Video Types
-
-New project types are defined entirely in `assets/project_types/project_types.json` — no Python changes required.
-
-Each entry defines:
-- `description_for_prompt` — the GPT prompt template (uses `{PLACEHOLDER}` markers)
-- `output_json_schema` — enforces the expected GPT response shape via OpenAI structured outputs
-- `scene_builder_rules` — controls which scene types `build_scene_list()` generates (narration, dialog, repetition section, pauses, bell SFX)
-
-Available template placeholders: `{LEVEL}`, `{LOCATION_KEY}`, `{LOCATION_DESC}`, `{CHAR_A}`, `{CHAR_B}`, `{CHAR_A_DESC}`, `{CHAR_B_DESC}`, `{WORDS_LIST}`, `{PROVIDED_CONTEXT}`, `{PROVIDED_LEARNING_POINTS}`.
-
-**Important:** any literal `{` or `}` inside the prompt template (e.g. in JSON examples) must be escaped as `{{` and `}}` so Python's `.format()` does not treat them as placeholders.
-
-Every project type prompt should include a `VIDEO METADATA` section instructing GPT to return meaningful `title`, `tags`, and `insights` fields. `insights` is formatted for use as a YouTube/Instagram video description.
-
----
-
-## Re-running Individual Steps
-
-Because all results are tracked in `project_manifest.json`, any step can be safely re-run:
-
-- **Script** — replaces `scenes[]` entirely; downstream `file_path` fields become stale until Audio/Images/Video are re-run
-- **Audio** — skips scenes whose `audio.file_path` is already set; editing scene text via the UI clears the path automatically
-- **Images** — skips scenes whose `image.file_path` is already set; use `--overwrite` or the Re-generate button per scene in the UI
-- **Video / Assemble** — use `--overwrite` to replace existing clips or the final video
+  --app-id <ID> --app-secret <SECRET> --token <
