@@ -610,3 +610,4 @@ Because all results are tracked in `project_manifest.json`, any step can be safe
 - **Audio** — skips scenes whose `audio.file_path` is already set; editing scene text via the UI clears the path automatically
 - **Images** — skips scenes whose `image.file_path` is already set; use `--overwrite` or the Re-generate button per scene in the UI
 - **Video / Assemble** — use `--overwrite` to replace existing clips or the final video
+       
