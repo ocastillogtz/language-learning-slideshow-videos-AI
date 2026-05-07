@@ -21,6 +21,7 @@ pattern that scene_builder_rules cannot express.
 Prompt placeholders
 -------------------
 {LEVEL}                    — language level (e.g. B1)
+{LEVEL_LOWER}              — language level lowercased (e.g. b1), used in hashtags
 {LOCATION_KEY}             — location key (e.g. cafe)
 {LOCATION_DESC}            — location description
 {CHAR_A} / {CHAR_B}        — character names
@@ -115,6 +116,7 @@ def _build_prompt(
     template = project_type["description_for_prompt"]
     prompt = template.format(
         LEVEL                    = level,
+        LEVEL_LOWER              = level.lower(),
         LOCATION_KEY             = location_key,
         LOCATION_DESC            = location_desc,
         CHAR_A                   = char_a,
