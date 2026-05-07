@@ -150,7 +150,17 @@ Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`:
 | `"video_clip"` | Insert a raw `.mp4` file (e.g. intro/outro) |
 | `null` | Render a silent black pause of `scene.duration_ms` |
 
-**Subtitle markup:** subtitles support Pango markup via `_italic_` and `*bold*` markers. Styling attributes are configurable in `config.ini` under `markup_italic_attrs` and `markup_bold_attrs`.
+**Subtitle markup:** subtitles support three inline markers written directly into GPT-generated text:
+
+| Marker | Subtitle | TTS audio | Use for |
+|---|---|---|---|
+| `_text_` | italic + highlight colour | spoken normally | grammar features, key vocabulary |
+| `*text*` | bold | spoken normally | strong emphasis |
+| `-text-` | shown as plain text | **silent — not spoken** | speaker labels, section headings |
+
+The `-text-` marker lets you display text on screen without it being read aloud. For example `"-Sani:- Guten Morgen!"` renders the subtitle as `Sani: Guten Morgen!` but ElevenLabs only receives `Guten Morgen!`.
+
+Italic and bold styling attributes are configurable in `config.ini` under `markup_italic_attrs` and `markup_bold_attrs`.
 
 Subtitle style: narration/repetition scenes → centred; dialogue scenes → bottom-aligned.
 
@@ -642,9 +652,4 @@ Every project type prompt should include a `VIDEO METADATA` section instructing 
 
 ## Re-running Individual Steps
 
-Because all results are tracked in `project_manifest.json`, any step can be safely re-run:
-
-- **Script** — replaces `scenes[]` entirely; downstream `file_path` fields become stale until Audio/Images/Video are re-run
-- **Audio** — skips scenes whose `audio.file_path` is already set; editing scene text via the UI clears the path automatically
-- **Images** — skips scenes whose `image.file_path` is already set; use `--overwrite` or the Re-generate button per scene in the UI
-- **Video / Assemble** — use `--overwrite` to replace existing clips or the final video
+Because all result

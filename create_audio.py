@@ -23,7 +23,7 @@ from pydub import AudioSegment
 from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
 from utils_config import load_config
-from utils_markup import strip_markup
+from utils_markup import strip_for_tts
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,9 +55,9 @@ def create_audio(project_name: str) -> None:
     scenes = manifest["scenes"]
 
     # ── Build ordered list of TTS texts for prosody context ──────────────────
-    # strip_markup removes _italic_ and *bold* markers before sending to ElevenLabs
+    # strip_for_tts removes -silent- spans entirely and strips _italic_/*bold* markers
     tts_texts = [
-        strip_markup(s["audio"]["tts_text"])
+        strip_for_tts(s["audio"]["tts_text"])
         for s in scenes
         if s.get("audio") and s["audio"].get("type") == "tts"
     ]
@@ -121,7 +121,7 @@ def create_audio(project_name: str) -> None:
             # Derive filename from scene id
             filename = f"{scene['id']}.mp3"
             afile, dur_ms = _generate_tts(
-                text      = strip_markup(audio["tts_text"]),
+                text      = strip_for_tts(audio["tts_text"]),
                 voice_id  = audio["voice_id"],
                 filename  = filename,
                 prev_text = prev_t,
@@ -192,8 +192,8 @@ def create_audio_single(project_name: str, scene_id: str) -> None:
         s for s in manifest["scenes"]
         if s.get("audio") and s["audio"].get("type") == "tts"
     ]
-    # strip_markup so ElevenLabs never sees _italic_ or *bold* markers
-    tts_texts = [strip_markup(s["audio"]["tts_text"]) for s in tts_scenes]
+    # strip_for_tts: remove -silent- spans, strip _italic_/*bold* markers
+    tts_texts = [strip_for_tts(s["audio"]["tts_text"]) for s in tts_scenes]
     tts_pos   = next((i for i, s in enumerate(tts_scenes) if s["id"] == scene_id), None)
 
     prev_text = tts_texts[tts_pos - 1] if tts_pos and tts_pos > 0 else None
@@ -208,7 +208,7 @@ def create_audio_single(project_name: str, scene_id: str) -> None:
 
     logger.info(f"Regenerating audio for {scene_id} (prev={bool(prev_text)}, next={bool(next_text)}) …")
     result = eleven.text_to_speech.convert_with_timestamps(
-        text          = strip_markup(audio["tts_text"]),
+        text          = strip_for_tts(audio["tts_text"]),
         voice_id      = audio["voice_id"],
         model_id      = model,
         output_format = fmt,
