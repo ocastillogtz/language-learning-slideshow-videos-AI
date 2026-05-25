@@ -110,6 +110,21 @@ def _call_fal(prompt: str, image_url: str, model: str, image_size: str) -> bytes
     return data
 
 
+def _call_fal_text_only(prompt: str, model: str, image_size: str) -> bytes:
+    """Generate an image from text only — no reference composite."""
+    result = fal_client.subscribe(
+        model,
+        arguments={"prompt": prompt, "image_size": image_size},
+        with_logs=True,
+        on_queue_update=_log_progress,
+    )
+    url: str = result["images"][0]["url"]
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        data: bytes = resp.read()
+    logger.info(f"  Downloaded {len(data)//1024} KB")
+    return data
+
+
 def _save(data: bytes, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -124,6 +139,7 @@ def create_images(
     project_name: str,
     overwrite: bool = False,
     ignore_cache: bool = False,   # kept for API compat; has no effect (caching removed)
+    use_location_ref: bool = True,
 ) -> None:
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
@@ -145,13 +161,21 @@ def create_images(
     image_size = cfg["fal_image_size"]
     assets_dir = cfg["assets_dir"]
 
+    # Override image_size for horizontal (Full HD 16:9) projects
+    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
+    if video_format == "horizontal":
+        image_size = "landscape_16_9"
+        logger.info("Horizontal format detected — using landscape_16_9 image size")
+
     # Resolve character names and location from generation_config
     gen      = manifest["generation_config"]
     char_a   = gen["characters"][0]
     char_b   = gen["characters"][1]
-    loc_key  = gen["location_key"]
-    loc_data = all_locs[loc_key]
-    loc_file = assets_dir / loc_data["artwork_file_path"]
+    loc_key  = gen.get("location_key") or ""
+    loc_file = None
+    if loc_key and loc_key in all_locs:
+        loc_data = all_locs[loc_key]
+        loc_file = assets_dir / loc_data["artwork_file_path"]
 
     # Character art paths
     art_a = assets_dir / chars_data[char_a]["art_34left_file_path"]
@@ -175,18 +199,28 @@ def create_images(
         logger.info(f"Generating [{scene['id']}] reference_type={reference_type}")
 
         try:
-            if reference_type == "single_speaker":
+            if reference_type == "none":
+                # Text-only generation — no reference composite
+                data = _call_fal_text_only(prompt, model, image_size)
+            elif reference_type == "single_speaker":
                 speaker = img.get("speaker") or scene.get("characters", [char_a])[0]
                 art_spk = assets_dir / chars_data[speaker]["art_34left_file_path"]
-                comp    = build_composite(art_spk, loc_file)
+                if use_location_ref and loc_file:
+                    comp = build_composite(art_spk, loc_file)
+                else:
+                    comp = build_composite(art_spk)
+                url  = _upload(_to_bytes(comp))
+                data = _call_fal(prompt, url, model, image_size)
             else:
-                # "both" or any other value — use both characters + location
-                comp = build_composite(art_a, art_b, loc_file)
+                # "both" or any other value — use both characters + optional location
+                if use_location_ref and loc_file:
+                    comp = build_composite(art_a, art_b, loc_file)
+                else:
+                    comp = build_composite(art_a, art_b)
+                url  = _upload(_to_bytes(comp))
+                data = _call_fal(prompt, url, model, image_size)
 
-            url  = _upload(_to_bytes(comp))
-            data = _call_fal(prompt, url, model, image_size)
             _save(data, dest)
-
             img["file_path"] = f"images/{scene['id']}.png"
 
         except Exception as e:
@@ -202,9 +236,17 @@ def create_image_single(
     project_name: str,
     scene_id: str,
     prompt_override: str | None = None,
-    overwrite: bool = True,
+    use_location_ref: bool = True,
+    characters_override: str | None = None,
 ) -> None:
-    """Regenerate the image for a single scene by ID."""
+    """Regenerate the image for a single scene by ID.
+
+    Generates only the target scene directly, without touching any other scene.
+    When use_location_ref=False the location artwork is omitted from the
+    reference composite, letting the model invent its own background.
+    characters_override can be "none" (text-only), "single_speaker", or "both".
+    When None, the scene's stored reference_type is used.
+    """
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
@@ -218,11 +260,69 @@ def create_image_single(
     if not target.get("image"):
         raise ValueError(f"Scene '{scene_id}' has no image.")
 
-    if prompt_override:
-        target["image"]["prompt_to_create"] = prompt_override
+    chars_data = load_new_characters(cfg["assets_dir"])
+    all_locs   = get_new_locations_flat(cfg["assets_dir"])
 
-    # Clear file_path so the main loop regenerates it
-    target["image"]["file_path"] = None
+    images_dir = project_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    model      = cfg["fal_model"]
+    image_size = cfg["fal_image_size"]
+    assets_dir = cfg["assets_dir"]
+
+    # Override image_size for horizontal (Full HD 16:9) projects
+    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
+    if video_format == "horizontal":
+        image_size = "landscape_16_9"
+
+    gen      = manifest["generation_config"]
+    char_a   = gen["characters"][0]
+    char_b   = gen["characters"][1]
+    loc_key  = gen.get("location_key") or ""
+    loc_file = None
+    if loc_key and loc_key in all_locs:
+        loc_data = all_locs[loc_key]
+        loc_file = assets_dir / loc_data["artwork_file_path"]
+
+    art_a = assets_dir / chars_data[char_a]["art_34left_file_path"]
+    art_b = assets_dir / chars_data[char_b]["art_34left_file_path"]
+
+    img = target["image"]
+
+    if prompt_override:
+        img["prompt_to_create"] = prompt_override
+
+    prompt = img.get("prompt_to_create", "")
+    # Use characters_override if provided, otherwise fall back to stored reference_type
+    reference_type = characters_override if characters_override else img.get("reference_type", "both")
+    dest           = images_dir / f"{scene_id}.png"
+
+    logger.info(f"Re-generating [{scene_id}] reference_type={reference_type}")
+
+    if reference_type == "none":
+        # Text-only generation — no reference composite
+        data = _call_fal_text_only(prompt, model, image_size)
+    elif reference_type == "single_speaker":
+        speaker = img.get("speaker") or target.get("characters", [char_a])[0]
+        art_spk = assets_dir / chars_data[speaker]["art_34left_file_path"]
+        if use_location_ref and loc_file:
+            comp = build_composite(art_spk, loc_file)
+        else:
+            comp = build_composite(art_spk)
+        url  = _upload(_to_bytes(comp))
+        data = _call_fal(prompt, url, model, image_size)
+    else:
+        # "both" — use both characters + optional location
+        if use_location_ref and loc_file:
+            comp = build_composite(art_a, art_b, loc_file)
+        else:
+            comp = build_composite(art_a, art_b)
+        url  = _upload(_to_bytes(comp))
+        data = _call_fal(prompt, url, model, image_size)
+
+    _save(data, dest)
+
+    img["file_path"] = f"images/{scene_id}.png"
 
     # Invalidate the rendered video clip so the next render pass rebuilds it
     video_clip = project_path / "videos" / f"{scene_id}.mp4"
@@ -233,7 +333,7 @@ def create_image_single(
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    create_images(project_name, overwrite=overwrite)
+    logger.info(f"Single image regeneration complete for scene '{scene_id}'.")
 
 
 def main() -> None:

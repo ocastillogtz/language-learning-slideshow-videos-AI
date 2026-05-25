@@ -94,11 +94,19 @@ def _build_prompt(
     gen        = manifest["generation_config"]
     char_names = gen["characters"]
     char_a, char_b = char_names[0], char_names[1]
-    location_key   = gen["location_key"]
+    location_key   = gen.get("location_key") or ""
     level          = gen["level"]
+    dialog_count   = gen.get("dialog_count") or None
 
-    loc_data      = all_locs[location_key]
-    location_desc = loc_data["description"]
+    if location_key and location_key in all_locs:
+        loc_data      = all_locs[location_key]
+        location_desc = loc_data["description"]
+    else:
+        location_key  = ""
+        location_desc = (
+            "a suitable location that fits the scene — "
+            "choose naturally based on what the characters are discussing"
+        )
 
     char_a_data = chars_data[char_a]
     char_b_data = chars_data[char_b]
@@ -113,17 +121,24 @@ def _build_prompt(
 
     words_list = ", ".join(gen.get("words", []) or [])
 
+    # Dialog count: use provided value, or fall back to project_type default (or "4-6")
+    if dialog_count:
+        dialog_count_str = str(dialog_count)
+    else:
+        dialog_count_str = project_type.get("default_dialog_count", "4-6")
+
     template = project_type["description_for_prompt"]
     prompt = template.format(
         LEVEL                    = level,
         LEVEL_LOWER              = level.lower(),
-        LOCATION_KEY             = location_key,
+        LOCATION_KEY             = location_key or "(model's choice)",
         LOCATION_DESC            = location_desc,
         CHAR_A                   = char_a,
         CHAR_B                   = char_b,
         CHAR_A_DESC              = char_a_desc,
         CHAR_B_DESC              = char_b_desc,
         WORDS_LIST               = words_list,
+        DIALOG_COUNT             = dialog_count_str,
         PROVIDED_CONTEXT         = gen.get("provided_context", ""),
         PROVIDED_LEARNING_POINTS = gen.get("provided_learning_points", ""),
     )
@@ -192,24 +207,27 @@ def _select_repetitions(
 # IMAGE PROMPT BUILDERS
 # =============================================================================
 
-def _narrator_image_prompt(loc_desc: str) -> str:
+def _narrator_image_prompt(loc_desc: str, framing_tokens: str = None) -> str:
     _load_style_tokens()
+    framing = framing_tokens or _FRAMING_TOKENS
     return (
         f"{_STYLE_TOKENS}\n"
-        f"FRAMING: {_FRAMING_TOKENS}\n\n"
+        f"FRAMING: {framing}\n\n"
         f"Wide establishing shot. {loc_desc}. "
         "Characters smaller in frame, environment clearly visible. "
         "Storytelling mood. No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
     )
 
 
-def _action_single_prompt(char_name: str, char_data: dict, loc_desc: str, scene_visual: str) -> str:
+def _action_single_prompt(char_name: str, char_data: dict, loc_desc: str, scene_visual: str,
+                          framing_tokens: str = None) -> str:
     """One character performing an action related to what they're saying."""
     _load_style_tokens()
     fixed = char_data.get("fixed_description", "") or ""
+    framing = framing_tokens or _FRAMING_TOKENS
     return (
         f"{_STYLE_TOKENS}\n"
-        f"FRAMING: {_FRAMING_TOKENS}\n\n"
+        f"FRAMING: {framing}\n\n"
         f"Scene at: {loc_desc}\n"
         f"Character: {char_name} — {fixed}\n\n"
         f"Action: {scene_visual}\n\n"
@@ -222,13 +240,15 @@ def _action_single_prompt(char_name: str, char_data: dict, loc_desc: str, scene_
 
 def _action_both_prompt(char_a: str, char_a_data: dict,
                         char_b: str, char_b_data: dict,
-                        loc_desc: str, scene_visual: str) -> str:
+                        loc_desc: str, scene_visual: str,
+                        framing_tokens: str = None) -> str:
     """Both characters in a shared action scene."""
     _load_style_tokens()
     def _fixed(c): return c.get("fixed_description", "") or ""
+    framing = framing_tokens or _FRAMING_TOKENS
     return (
         f"{_STYLE_TOKENS}\n"
-        f"FRAMING: {_FRAMING_TOKENS}\n\n"
+        f"FRAMING: {framing}\n\n"
         f"Scene at: {loc_desc}\n"
         f"{char_a}: {_fixed(char_a_data)}\n"
         f"{char_b}: {_fixed(char_b_data)}\n\n"
@@ -258,15 +278,20 @@ def build_scene_list(
     rules      = project_type["scene_builder_rules"]
     gen        = manifest["generation_config"]
     pipe       = manifest["pipeline_config"]
-    loc_key    = gen["location_key"]
+    loc_key    = gen.get("location_key") or ""
     char_names = gen["characters"]
     char_a, char_b = char_names[0], char_names[1]
     char_a_data    = chars_data[char_a]
     char_b_data    = chars_data[char_b]
-    loc_data       = all_locs[loc_key]
-    loc_desc       = loc_data["description"]
+    if loc_key and loc_key in all_locs:
+        loc_data = all_locs[loc_key]
+        loc_desc = loc_data["description"]
+    else:
+        loc_desc = "a setting chosen by the model to fit the scene"
     inter_ms       = pipe["inter_pause_ms"]
     rep_factor     = pipe["repetition_pause_factor"]
+    # Framing tokens: use project type override for horizontal formats, else None (falls back to config)
+    framing_tokens = project_type.get("framing_tokens") or None
 
     narrator_voice = chars_data.get("Narrator", {}).get("voice_id", "")
     char_a_voice   = char_a_data.get("voice_id", "")
@@ -309,7 +334,7 @@ def build_scene_list(
             "_is_narration": True,
             "image": {
                 "file_path": None,
-                "prompt_to_create": _narrator_image_prompt(loc_desc),
+                "prompt_to_create": _narrator_image_prompt(loc_desc, framing_tokens),
                 "reference_type": "both",
             },
             "audio": {"type": "tts", "file_path": None, "tts_text": nar_text,
@@ -333,11 +358,11 @@ def build_scene_list(
             scene_chars    = item.get("scene_characters", "speaker_only")
 
             if scene_chars == "both":
-                img_prompt     = _action_both_prompt(char_a, char_a_data, char_b, char_b_data, loc_desc, scene_visual)
+                img_prompt     = _action_both_prompt(char_a, char_a_data, char_b, char_b_data, loc_desc, scene_visual, framing_tokens)
                 reference_type = "both"
             else:
                 spk_data       = char_a_data if speaker == char_a else char_b_data
-                img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual)
+                img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual, framing_tokens)
                 reference_type = "single_speaker"
 
             scenes.append({
@@ -391,10 +416,11 @@ def create_script(
     project_name: str,
     char_a: str,
     char_b: str,
-    location_key: str,
+    location_key: str | None = None,
     project_type_key: str | None = None,
     prompt_override: str | None = None,
     words: list[str] | None = None,
+    dialog_count: int | None = None,
 ) -> dict:
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
@@ -418,16 +444,28 @@ def create_script(
         raise ValueError(f"Project type '{project_type_key}' not found in project_types.json")
     project_type = project_types[project_type_key]
 
+    # Resolve base_type inheritance: long types reference a base type for description_for_prompt
+    # and output_json_schema, then override with their own fields (format, dialog_count, etc.)
+    base_type_key = project_type.get("base_type")
+    if base_type_key and base_type_key in project_types:
+        base = project_types[base_type_key]
+        project_type = {**base, **project_type}  # long type fields win over base
+
+    # Sync video_format in manifest from the (resolved) project type
+    manifest["video_info"]["video_format"] = project_type.get("format", "vertical")
+
     for name in (char_a, char_b):
         if name not in chars_data:
             raise ValueError(f"Character '{name}' not found in characters.json")
-    if location_key not in all_locs:
+    if location_key and location_key not in all_locs:
         raise ValueError(f"Location '{location_key}' not found. Available: {sorted(all_locs.keys())}")
 
-    manifest["generation_config"]["location_key"] = location_key
+    manifest["generation_config"]["location_key"] = location_key or ""
     manifest["generation_config"]["characters"]   = [char_a, char_b]
     if words:
         manifest["generation_config"]["words"] = words
+    if dialog_count:
+        manifest["generation_config"]["dialog_count"] = dialog_count
 
     prompt = prompt_override or _build_prompt(project_type, manifest, chars_data, all_locs)
     manifest["generation_config"]["prompt_script"] = prompt
@@ -477,7 +515,7 @@ def create_script(
     _write_script_txt(project_path, manifest, gpt_output, repetition_texts)
 
     logger.info(
-        f"Script done — type={project_type_key}, location={location_key}, "
+        f"Script done — type={project_type_key}, location={location_key or '(auto)'}, "
         f"{len(gpt_output.get('dialog', []))} dialog lines, "
         f"{len(repetition_texts or [])} repetitions, "
         f"{len(manifest['scenes'])} total scenes"
@@ -505,7 +543,7 @@ def main() -> None:
     p.add_argument("project_name")
     p.add_argument("--char-a",   required=True)
     p.add_argument("--char-b",   required=True)
-    p.add_argument("--location-key", required=True, dest="location_key")
+    p.add_argument("--location-key", required=False, default=None, dest="location_key")
     p.add_argument("--project-type",  default="story",  dest="project_type_key")
     p.add_argument("--prompt-override", default=None,   dest="prompt_override")
     a = p.parse_args()

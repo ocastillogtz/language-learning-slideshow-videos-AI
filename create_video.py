@@ -43,6 +43,8 @@ def create_videos(
     project_name: str,
     overwrite: bool = False,
     annotated_subtitles: bool = False,
+    footnote: str = "",
+    inter_pause_ms: int = None,
 ) -> None:
     cfg           = load_config()
     chars_data    = load_new_characters(cfg["assets_dir"])
@@ -55,6 +57,20 @@ def create_videos(
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
+
+    # Apply format-specific config overrides for horizontal (Full HD 16:9) projects
+    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
+    if video_format == "horizontal":
+        cfg.update({
+            "target_w":         1920,
+            "target_h":         1080,
+            "sub_fontsize":     54,
+            "nar_fontsize":     54,
+            "sub_margin_bottom": 70,
+            "icon_x":           1650,
+            "icon_y":           50,
+        })
+        logger.info("Horizontal format — canvas set to 1920×1080, subtitle/icon positions adjusted")
 
     videos_dir = project_path / "videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +96,8 @@ def create_videos(
                 scene, project_path, assets_dir,
                 cfg, chars_data, last_frame_np,
                 annotated_subtitles=annotated_subtitles,
+                global_footnote=footnote,
+                pause_override_ms=inter_pause_ms,
             )
         except Exception as e:
             logger.error(f"Failed to build {sid}: {e}")
@@ -116,6 +134,8 @@ def _build_clip(
     chars_data: dict,
     last_frame_np,
     annotated_subtitles: bool = False,
+    global_footnote: str = "",
+    pause_override_ms: int = None,
 ):
     """
     Returns (clip, new_last_frame_np).
@@ -150,7 +170,10 @@ def _build_clip(
     # null → silent pause
     # ------------------------------------------------------------------
     if atype is None:
-        dur_s = scene.get("duration_ms", cfg["inter_pause_ms"]) / 1000.0
+        # pause_override_ms (from UI) takes priority over the baked-in scene value
+        raw_ms = pause_override_ms if pause_override_ms is not None \
+                 else scene.get("duration_ms", cfg["inter_pause_ms"])
+        dur_s = raw_ms / 1000.0
         clip  = _freeze(dur_s)
         clip  = clip.set_audio(_silent(dur_s))
         return clip, last_frame_np
@@ -218,17 +241,37 @@ def _build_clip(
                 layers.append(icon)
 
         # Subtitle
+        sub_bg_bottom = None  # tracks bottom edge of subtitle bg for footnote placement
         if text:
             if annotated_subtitles and not is_narrator:
                 layers += _annotated_sub_layers(text, dur_s, cfg, W, H)
+                # Annotated sub uses a fixed height of 200 px
+                _ann_sub_h = 200
+                _ann_sub_y = H - cfg["sub_margin_bottom"] - _ann_sub_h
+                sub_bg_bottom = _ann_sub_y + _ann_sub_h + cfg["sub_bg_padding_y"]
             else:
                 sub = _subtitle(text, dur_s, is_narrator, cfg)
                 if is_narrator:
                     # Narrator text centered vertically
                     layers += _sub_layers(sub, cfg["sub_margin_left"], "center", dur_s, cfg)
+                    # bg center = H/2 → bg bottom = H/2 + (sub.h/2 + padding_y)
+                    sub_bg_bottom = H // 2 + sub.h // 2 + cfg["sub_bg_padding_y"]
                 else:
                     sub_y = H - cfg["sub_margin_bottom"] - sub.h
                     layers += _sub_layers(sub, cfg["sub_margin_left"], sub_y, dur_s, cfg)
+                    sub_bg_bottom = sub_y + sub.h + cfg["sub_bg_padding_y"]
+
+        # Footnote / disclaimer — rendered just below the subtitle background.
+        # Scene-level "footnote" field takes priority; the global_footnote (passed
+        # at render-time from the UI) is used as a fallback for narration scenes only.
+        footnote = scene.get("footnote", "").strip()
+        if not footnote and is_narrator:
+            footnote = global_footnote.strip()
+        if footnote:
+            if sub_bg_bottom is None:
+                # No subtitle text — anchor footnote to vertical center as fallback
+                sub_bg_bottom = H // 2 + cfg["sub_bg_padding_y"]
+            layers += _footnote_layers(footnote, sub_bg_bottom, dur_s, cfg, W)
 
         clip = CompositeVideoClip(layers, size=(W, H)).set_duration(dur_s)
 
@@ -299,6 +342,42 @@ def _sub_layers(sub: TextClip, x: int, y, duration: float, cfg: dict) -> list:
     if y == "center":
         return [bg.set_position((x - px, "center")), sub.set_position((x, "center"))]
     return [bg.set_position((x - px, y - py)), sub.set_position((x, y))]
+
+
+def _footnote_layers(text: str, sub_bg_bottom: int, duration: float, cfg: dict, W: int) -> list:
+    """
+    Render a small footnote/disclaimer text just below the main subtitle background.
+
+    sub_bg_bottom: y-coordinate of the bottom edge of the main subtitle's background box.
+    The footnote is placed cfg["fn_gap"] pixels below that point.
+    """
+    gap   = cfg.get("fn_gap", 16)
+    fn_y  = sub_bg_bottom + gap
+    fn_w  = W - cfg["sub_margin_left"] - cfg["sub_margin_right"]
+    font  = cfg.get("fn_font") or cfg["sub_font"]
+    sz    = cfg.get("fn_fontsize", 36)
+    col   = cfg.get("fn_color", "white")
+    scol  = cfg.get("fn_stroke_color", "black")
+    sw    = cfg.get("fn_stroke_width", 2)
+
+    fn_clip = TextClip(
+        text, font=font, fontsize=sz, color=col,
+        stroke_color=scol, stroke_width=sw,
+        method="caption", size=(fn_w, None), align="center",
+    ).set_duration(duration)
+
+    px, py  = cfg["sub_bg_padding_x"], cfg["sub_bg_padding_y"]
+    opacity = cfg.get("fn_bg_opacity", cfg["sub_bg_opacity"])
+    fn_bg   = (
+        ColorClip(size=(fn_clip.w + px * 2, fn_clip.h + py * 2), color=(0, 0, 0))
+        .set_duration(duration)
+        .set_opacity(opacity)
+    )
+    x = cfg["sub_margin_left"]
+    return [
+        fn_bg.set_position((x - px, fn_y - py)),
+        fn_clip.set_position((x, fn_y)),
+    ]
 
 
 def _annotated_sub_layers(text: str, duration: float, cfg: dict, W: int, H: int) -> list:
@@ -425,8 +504,23 @@ def main() -> None:
         default=False,
         help="Render grammar-annotated subtitles on dialog scenes.",
     )
+    p.add_argument(
+        "--footnote",
+        default="",
+        help="Disclaimer / footnote shown below the narration text on intro scenes.",
+    )
+    p.add_argument(
+        "--inter-pause-ms",
+        type=int,
+        default=None,
+        dest="inter_pause_ms",
+        help="Override silent-pause duration in milliseconds (e.g. 500).",
+    )
     a = p.parse_args()
-    create_videos(a.project_name, a.overwrite, annotated_subtitles=a.annotated_subtitles)
+    create_videos(a.project_name, a.overwrite,
+                  annotated_subtitles=a.annotated_subtitles,
+                  footnote=a.footnote,
+                  inter_pause_ms=a.inter_pause_ms)
 
 
 if __name__ == "__main__":

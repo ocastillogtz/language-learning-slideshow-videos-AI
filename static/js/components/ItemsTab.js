@@ -59,7 +59,7 @@ function AudioRegenBtn({ projectName, sceneId, onDone }) {
 
 // ── Per-scene image regen button ───────────────────────────────────────────────
 
-function ImageRegenBtn({ projectName, sceneId, promptId, onDone }) {
+function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charactersMode, onDone }) {
   const { toast, startPoll, reloadManifest } = useApp();
   const [running, setRunning] = useState(false);
   const [log,     setLog]     = useState("");
@@ -70,8 +70,10 @@ function ImageRegenBtn({ projectName, sceneId, promptId, onDone }) {
     setRunning(true); setLog("");
     try {
       const d = await apiPost(`/projects/${projectName}/run/image_scene`, {
-        scene_id:        sceneId,
-        prompt_override: promptOverride,
+        scene_id:            sceneId,
+        prompt_override:     promptOverride,
+        use_location_ref:    useLocationRef,
+        characters_override: charactersMode,
       });
       const stepKey = d.step_key || `image_${sceneId}`;
       startPoll(projectName, stepKey, async (s) => {
@@ -150,10 +152,27 @@ function SceneEditZone({ scene, projectName, onSaved }) {
 
 // ── Generic scene card ─────────────────────────────────────────────────────────
 
+// Map stored reference_type → UI selector value
+function _toCharMode(refType) {
+  if (refType === "none")          return "none";
+  if (refType === "single_speaker") return "single_speaker";
+  return "both";
+}
+
+const CHAR_MODE_OPTIONS = [
+  { value: "both",           label: "Both characters" },
+  { value: "single_speaker", label: "Speaker only"    },
+  { value: "none",           label: "None (text only)" },
+];
+
 function SceneCard({ scene, projectName, onChanged }) {
-  const [open,       setOpen]       = useState(false);
-  const [editing,    setEditing]    = useState(false);
-  const [imgVersion, setImgVersion] = useState(Date.now());
+  const [open,           setOpen]           = useState(false);
+  const [editing,        setEditing]        = useState(false);
+  const [imgVersion,     setImgVersion]     = useState(Date.now());
+  const [useLocationRef, setUseLocationRef] = useState(true);
+  const [charactersMode, setCharactersMode] = useState(
+    _toCharMode(scene.image?.reference_type)
+  );
 
   const isNarration  = !!scene._is_narration;
   const isRepetition = !!scene._is_repetition;
@@ -254,12 +273,70 @@ function SceneCard({ scene, projectName, onChanged }) {
             </>
           )}
 
+          {/* Image regen options (only for scenes with an image) */}
+          {scene.image && (
+            <div style={{marginTop:".8rem", display:"flex", flexDirection:"column", gap:".5rem"}}>
+              {/* Characters in image */}
+              <div>
+                <div style={{fontSize:".78rem", fontWeight:500, marginBottom:".3rem",
+                  color:"var(--fg)"}}>Characters in image</div>
+                <div style={{display:"flex", gap:".4rem", flexWrap:"wrap"}}>
+                  {CHAR_MODE_OPTIONS.map(opt => (
+                    <label key={opt.value}
+                      style={{
+                        display:"flex", alignItems:"center", gap:".3rem",
+                        fontSize:".76rem", cursor:"pointer",
+                        padding:".25rem .55rem",
+                        borderRadius:"5px",
+                        border:`1px solid ${charactersMode === opt.value ? "var(--accent)" : "var(--border)"}`,
+                        background: charactersMode === opt.value ? "rgba(var(--accent-rgb,99,102,241),.1)" : "var(--surface-2)",
+                        color: charactersMode === opt.value ? "var(--accent)" : "var(--muted)",
+                        transition:"border .15s, color .15s",
+                      }}>
+                      <input type="radio" name={`char-mode-${scene.id}`}
+                        value={opt.value}
+                        checked={charactersMode === opt.value}
+                        onChange={() => setCharactersMode(opt.value)}
+                        style={{display:"none"}}/>
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
+                {charactersMode === "none" && (
+                  <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".25rem",
+                    fontStyle:"italic"}}>
+                    Image generated from text only — no character reference art used.
+                  </div>
+                )}
+              </div>
+
+              {/* Location ref toggle */}
+              {charactersMode !== "none" && (
+                <div style={{display:"flex", flexDirection:"column", gap:".2rem"}}>
+                  <div className="toggle-row" style={{fontSize:".78rem"}}>
+                    <input type="checkbox" id={`loc-ref-${scene.id}`}
+                      checked={useLocationRef}
+                      onChange={e => setUseLocationRef(e.target.checked)}/>
+                    <label htmlFor={`loc-ref-${scene.id}`}>Include location in reference image</label>
+                  </div>
+                  {!useLocationRef && (
+                    <div style={{fontSize:".74rem", color:"var(--muted)", paddingLeft:"1.5rem",
+                      fontStyle:"italic"}}>
+                      Only character art will be sent — the model will invent the background.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Action buttons row */}
           {(scene.image || scene.audio?.type === "tts") && (
             <div className="run-row" style={{flexWrap:"wrap", gap:".5rem"}}>
               {scene.image && (
                 <ImageRegenBtn projectName={projectName} sceneId={scene.id}
-                  promptId={promptId}
+                  promptId={promptId} useLocationRef={useLocationRef}
+                  charactersMode={charactersMode}
                   onDone={m => { setImgVersion(Date.now()); onChanged && onChanged(m); }}/>
               )}
               {scene.audio?.type === "tts" && (
@@ -274,14 +351,82 @@ function SceneCard({ scene, projectName, onChanged }) {
   );
 }
 
+// ── Pause scene card ───────────────────────────────────────────────────────────
+
+function PauseCard({ scene, projectName, onChanged }) {
+  const { toast } = useApp();
+  const [durMs,   setDurMs]   = useState(String(scene.duration_ms ?? 350));
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+
+  const durNum  = parseInt(durMs, 10);
+  const isValid = !isNaN(durNum) && durNum >= 0 && durNum <= 10000;
+  const dirty   = durNum !== (scene.duration_ms ?? 350);
+
+  async function save() {
+    if (!isValid) return;
+    setSaving(true); setSaved(false);
+    try {
+      await apiPatch(`/projects/${projectName}/scenes/${scene.id}`, {
+        duration_ms: durNum,
+      });
+      toast("Saved", `Pause ${scene.id} set to ${durNum} ms.`, "ok");
+      setSaved(true);
+      onChanged && onChanged();
+    } catch(e) { toast("Error", e.message, "err"); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="item-card">
+      <div className="item-head" style={{cursor:"default"}}>
+        <div className="item-index"
+          style={{background:"var(--border)", color:"var(--muted)", fontSize:".62rem",
+                  letterSpacing:".04em"}}>
+          PSE
+        </div>
+        <div style={{flex:1, display:"flex", alignItems:"center", gap:".75rem"}}>
+          <span style={{color:"var(--muted)", fontSize:".82rem"}}>Silent pause</span>
+          <div style={{display:"flex", alignItems:"center", gap:".4rem"}}>
+            <input
+              type="number"
+              min="0"
+              max="10000"
+              step="50"
+              value={durMs}
+              onChange={e => { setDurMs(e.target.value); setSaved(false); }}
+              style={{
+                width:"90px", padding:".25rem .5rem", fontSize:".84rem",
+                borderRadius:"5px", border:"1px solid var(--border)",
+                background:"var(--surface-2)", color:"var(--fg)",
+                borderColor: isValid ? "var(--border)" : "var(--red, #f87171)",
+              }}
+            />
+            <span style={{color:"var(--muted)", fontSize:".78rem"}}>ms</span>
+          </div>
+          {saved && (
+            <span style={{fontSize:".74rem", color:"var(--green, #4ade80)"}}>✓ saved</span>
+          )}
+        </div>
+        {dirty && isValid && (
+          <button className="btn-edit" onClick={save} disabled={saving}
+            style={{marginLeft:".5rem"}}>
+            {saving ? "…" : "Save"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main tab ───────────────────────────────────────────────────────────────────
 
 function ItemsTab({ projectName }) {
   const { manifest, reloadManifest } = useApp();
 
   const scenes = (manifest?.scenes || []).filter(s =>
-    // Show TTS, SFX, and narration scenes — skip pure pause scenes
-    s.audio !== null || s.image !== null
+    // Show TTS, SFX, narration scenes AND pure pause scenes
+    s.audio !== null || s.image !== null || s.description === "pause"
   );
 
   async function handleChanged(newManifest) {
@@ -299,14 +444,23 @@ function ItemsTab({ projectName }) {
 
   return (
     <div className="items-grid">
-      {scenes.map(scene => (
-        <SceneCard
-          key={scene.id}
-          scene={scene}
-          projectName={projectName}
-          onChanged={handleChanged}
-        />
-      ))}
+      {scenes.map(scene =>
+        scene.description === "pause" ? (
+          <PauseCard
+            key={scene.id}
+            scene={scene}
+            projectName={projectName}
+            onChanged={handleChanged}
+          />
+        ) : (
+          <SceneCard
+            key={scene.id}
+            scene={scene}
+            projectName={projectName}
+            onChanged={handleChanged}
+          />
+        )
+      )}
     </div>
   );
 }

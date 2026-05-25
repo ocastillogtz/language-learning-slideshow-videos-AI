@@ -21,13 +21,16 @@ def preview_script_prompt(name):
     """
     try:
         data             = request.get_json() or {}
-        char_a           = data.get("char_a", "").strip()
-        char_b           = data.get("char_b", "").strip()
-        location_key     = data.get("location_key", "").strip()
-        project_type_key = data.get("project_type_key", "").strip()
+        char_a           = (data.get("char_a") or "").strip()
+        char_b           = (data.get("char_b") or "").strip()
+        location_key     = (data.get("location_key") or "").strip() or None
+        project_type_key = (data.get("project_type_key") or "").strip()
+        words            = data.get("words") or None   # list[str] for word_learning type
+        raw_count        = data.get("dialog_count")
+        dialog_count     = int(raw_count) if raw_count not in (None, "") else None
 
-        if not char_a or not char_b or not location_key:
-            return jsonify({"error": "char_a, char_b and location_key are required"}), 400
+        if not char_a or not char_b:
+            return jsonify({"error": "char_a and char_b are required"}), 400
 
         # Load assets
         assets_dir    = cfg["assets_dir"]
@@ -39,7 +42,7 @@ def preview_script_prompt(name):
         for cname in (char_a, char_b):
             if cname not in chars_data:
                 return jsonify({"error": f"Character '{cname}' not found"}), 400
-        if location_key not in all_locs:
+        if location_key and location_key not in all_locs:
             return jsonify({"error": f"Location '{location_key}' not found"}), 400
 
         # Load manifest and temporarily patch generation_config with the preview values
@@ -59,9 +62,13 @@ def preview_script_prompt(name):
         # (we do NOT write this to disk — it's just for building the prompt)
         manifest.setdefault("generation_config", {})
         manifest["generation_config"]["characters"]   = [char_a, char_b]
-        manifest["generation_config"]["location_key"] = location_key
+        manifest["generation_config"]["location_key"] = location_key or ""
         if "level" not in manifest["generation_config"]:
             manifest["generation_config"]["level"] = cfg.get("level", "B1")
+        if words is not None:
+            manifest["generation_config"]["words"] = words
+        if dialog_count is not None:
+            manifest["generation_config"]["dialog_count"] = dialog_count
 
         from create_script import _build_prompt
         prompt = _build_prompt(project_types[pt_key], manifest, chars_data, all_locs)

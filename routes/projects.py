@@ -110,9 +110,10 @@ def update_scene(name: str, scene_id: str):
     Patch writable fields on a scene by scene_id.
 
     Accepted JSON fields (all optional):
-      tts_text   — override the spoken/subtitle text for a TTS scene
-      speaker    — change the speaker character name
-      shot_type  — change shot_type (both | over_shoulder_A | over_shoulder_B)
+      tts_text    — override the spoken/subtitle text for a TTS scene
+      speaker     — change the speaker character name
+      shot_type   — change shot_type (both | over_shoulder_A | over_shoulder_B)
+      duration_ms — override the duration of a silent-pause scene (audio: null)
     """
     try:
         data = request.get_json() or {}
@@ -164,6 +165,17 @@ def update_scene(name: str, scene_id: str):
             if data["shot_type"] not in valid:
                 return jsonify({"error": f"shot_type must be one of {sorted(valid)}"}), 400
             scene["shot_type"] = data["shot_type"]
+
+        # duration_ms — for silent-pause scenes (audio: null)
+        if "duration_ms" in data:
+            ms = data["duration_ms"]
+            try:
+                ms = int(ms)
+            except (TypeError, ValueError):
+                return jsonify({"error": "duration_ms must be an integer"}), 400
+            if ms < 0 or ms > 10000:
+                return jsonify({"error": "duration_ms must be between 0 and 10000"}), 400
+            scene["duration_ms"] = ms
 
         with open(mp, "w", encoding="utf-8") as f:
             json.dump(m, f, indent=2, ensure_ascii=False)

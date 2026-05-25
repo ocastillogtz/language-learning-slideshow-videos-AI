@@ -13,18 +13,23 @@ def job_status(name, step):
 def run_script(name):
     try:
         data             = request.get_json() or {}
-        char_a           = data.get("char_a", "").strip()
-        char_b           = data.get("char_b", "").strip()
-        location_key     = data.get("location_key", "").strip()
-        project_type_key = data.get("project_type_key", "story").strip()
-        prompt_override  = data.get("prompt_override", "").strip() or None
-        if not char_a or not char_b or not location_key:
-            return jsonify({"error": "char_a, char_b, location_key required"}), 400
+        char_a           = (data.get("char_a") or "").strip()
+        char_b           = (data.get("char_b") or "").strip()
+        location_key     = (data.get("location_key") or "").strip() or None
+        project_type_key = (data.get("project_type_key") or "story").strip()
+        prompt_override  = (data.get("prompt_override") or "").strip() or None
+        words            = data.get("words") or None   # list[str] for word_learning type
+        raw_count        = data.get("dialog_count")
+        dialog_count     = int(raw_count) if raw_count not in (None, "") else None
+        if not char_a or not char_b:
+            return jsonify({"error": "char_a and char_b are required"}), 400
         from create_script import create_script
         run_job(name, "script", create_script, name,
                 char_a, char_b, location_key,
                 project_type_key=project_type_key,
-                prompt_override=prompt_override)
+                prompt_override=prompt_override,
+                words=words,
+                dialog_count=dialog_count)
         return jsonify({"message": "Script generation started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -44,10 +49,12 @@ def run_audio(name):
 def run_images(name):
     try:
         data = request.get_json() or {}
-        overwrite    = bool(data.get("overwrite", False))
-        ignore_cache = bool(data.get("ignore_cache", False))
+        overwrite         = bool(data.get("overwrite", False))
+        ignore_cache      = bool(data.get("ignore_cache", False))
+        use_location_ref  = bool(data.get("use_location_ref", True))
         from create_images import create_images
-        run_job(name, "images", create_images, name, overwrite, ignore_cache)
+        run_job(name, "images", create_images, name, overwrite, ignore_cache,
+                use_location_ref=use_location_ref)
         return jsonify({"message": "Image generation started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -71,15 +78,18 @@ def run_audio_scene(name):
 @bp.route("/projects/<name>/run/image_scene", methods=["POST"])
 def run_image_scene(name):
     try:
-        data            = request.get_json() or {}
-        scene_id        = data.get("scene_id", "").strip()
-        prompt_override = data.get("prompt_override", "").strip() or None
+        data                = request.get_json() or {}
+        scene_id            = data.get("scene_id", "").strip()
+        prompt_override     = data.get("prompt_override", "").strip() or None
+        use_location_ref    = bool(data.get("use_location_ref", True))
+        characters_override = data.get("characters_override") or None  # "none"|"single_speaker"|"both"
         if not scene_id:
             return jsonify({"error": "scene_id required"}), 400
         from create_images import create_image_single
         step_key = "image_" + scene_id
         run_job(name, step_key, create_image_single, name, scene_id,
-                prompt_override=prompt_override)
+                prompt_override=prompt_override, use_location_ref=use_location_ref,
+                characters_override=characters_override)
         return jsonify({"message": "Image regeneration started", "step_key": step_key})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -91,8 +101,12 @@ def run_video(name):
         data = request.get_json() or {}
         overwrite           = bool(data.get("overwrite", False))
         annotated_subtitles = bool(data.get("annotated_subtitles", False))
+        footnote            = str(data.get("footnote", "")).strip()
+        raw_pause           = data.get("inter_pause_ms")
+        inter_pause_ms      = int(raw_pause) if raw_pause not in (None, "") else None
         from create_video import create_videos
-        run_job(name, "video", create_videos, name, overwrite, annotated_subtitles)
+        run_job(name, "video", create_videos, name, overwrite, annotated_subtitles, footnote,
+                inter_pause_ms)
         return jsonify({"message": "Video rendering started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

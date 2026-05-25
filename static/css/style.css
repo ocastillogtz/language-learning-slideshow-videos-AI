@@ -118,7 +118,7 @@ body {
 .item-shot { font-size:.7rem; color:var(--muted); background:var(--s2); padding:.2rem .5rem; border-radius:4px; white-space:nowrap; flex-shrink:0; }
 .item-status-badge { font-size:.68rem; padding:.15rem .5rem; border-radius:20px; font-weight:600; flex-shrink:0; }
 .item-body { padding:0 1.2rem 1.2rem; border-top:1px solid var(--border); }
-.item-image { max-width:200px; border-radius:8px; border:1px solid var(--border); display:block; }
+.item-image { max-width:360px; max-height:240px; width:100%; object-fit:contain; border-radius:8px; border:1px solid var(--border); display:block; }
 .item-no-image { font-size:.8rem; color:var(--muted); font-style:italic; margin-top:.5rem; }
 
 /* ── Edit mode ── */

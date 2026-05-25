@@ -24,6 +24,24 @@ logger = logging.getLogger(__name__)
 
 VALID_LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
 
+# Project type keys (or their base types) that treat learning_points as a word list
+_WORD_LEARNING_TYPES = {"word_learning"}
+
+
+def _parse_words(project_type: dict, learning_points: str) -> list[str]:
+    """
+    For word_learning projects, parse the learning_points string into a word list
+    so it is immediately available in generation_config.words without the user
+    having to re-enter the words on the script step.
+
+    Returns an empty list for all other project types.
+    """
+    effective_name = project_type.get("base_type") or project_type.get("name", "")
+    if effective_name not in _WORD_LEARNING_TYPES:
+        return []
+    words = [w.strip() for w in learning_points.split(",") if w.strip()]
+    return words
+
 
 def create_project(
     project_name: str,
@@ -59,6 +77,13 @@ def create_project(
             f"Available: {available}"
         )
 
+    # Resolve the effective project type (inherit from base_type if set)
+    project_type = project_types[project_type_key]
+    base_type_key = project_type.get("base_type")
+    if base_type_key and base_type_key in project_types:
+        base = project_types[base_type_key]
+        project_type = {**base, **project_type}  # long type fields override base
+
     # Resolve level — explicit arg wins, falls back to config default
     resolved_level = (level or "").strip().upper() or cfg["level"]
     if resolved_level not in VALID_LEVELS:
@@ -83,7 +108,7 @@ def create_project(
         "video_info": {
             "title":        None,
             "tags":         None,
-            "video_format": "vertical",
+            "video_format": project_type.get("format", "vertical"),
             "insights":     None,
         },
 
@@ -94,6 +119,7 @@ def create_project(
             "level":                    resolved_level,
             "provided_context":         context,
             "provided_learning_points": learning_points,
+            "words": _parse_words(project_type, learning_points),
             "prompt_script":            None,
             "prompt_repetitions":       None,
         },

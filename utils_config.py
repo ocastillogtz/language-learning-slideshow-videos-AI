@@ -100,6 +100,15 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "icon_y":    _i("character_icon", "y",    200),
         "icon_size": _i("character_icon", "size", 200),
 
+        # Footnote overlay (optional disclaimer shown below the main subtitle)
+        "fn_font":         _p("footnote", "font",         ""),   # empty → falls back to sub_font
+        "fn_fontsize":     _i("footnote", "fontsize",     32),
+        "fn_color":        _p("footnote", "color",        "white"),
+        "fn_stroke_color": _p("footnote", "stroke_color", "white"),
+        "fn_stroke_width": _i("footnote", "stroke_width", 0),
+        "fn_gap":          _i("footnote", "gap",          50),   # px between sub bg-bottom and footnote
+        "fn_bg_opacity":   _f("footnote", "bg_opacity",   0.45),
+
         # Assembly
         "bg_audio_volume":    _f("assembly", "bg_audio_volume",    0.18),
         "crossfade_s":        _f("assembly", "crossfade_s",        0.35),

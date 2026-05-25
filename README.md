@@ -1,6 +1,13 @@
 # AI-Powered Language Learning Video Generator
 
-An automated pipeline for creating short-form educational videos for YouTube Shorts and Instagram Reels. Provide characters, a location, and a learning objective — the system writes the script, generates voiced audio, illustrates every scene with AI art, renders subtitled clips, and assembles a finished vertical video ready for upload.
+An automated pipeline for creating educational German language learning videos. Provide characters, a location, and a learning objective — the system writes the script, generates voiced audio, illustrates every scene with AI art, renders subtitled clips, and assembles a finished video ready for upload.
+
+Two output formats are supported:
+
+- **Vertical 1080×1920** (9:16) — short-form for YouTube Shorts and Instagram Reels
+- **Horizontal 1920×1080** (16:9 Full HD) — long-form for standard YouTube videos
+
+The output format is determined by the project type chosen at creation time. No per-project configuration is needed.
 
 A **web-based control panel** (`app.py`) lets you manage every project and asset and run every pipeline step from a browser with no command-line work required.
 
@@ -78,13 +85,29 @@ Calls GPT to generate structured dialogue, narration, and (for `shadowing` proje
 
 **Project types** are defined entirely in `assets/project_types/project_types.json` — adding a new video format requires no Python changes.
 
-| Project Type | Description |
-|---|---|
-| `shadowing` | Dialogue + 3-sentence repetition section. Good for pronunciation practice. |
-| `story` | Pure narrative dialogue, no repetitions. Good for comprehension. |
-| `word_learning` | One scene per vocabulary word; speaker says the word then uses it in a sentence. |
-| `register_phrases` | Paired sentences showing the same idea in two registers (e.g. formal vs. colloquial). Visual clothing change reinforces the register shift. |
-| `grammar_pairs` | Paired sentences showing a grammatical construction (e.g. present → Präteritum). Visual cues (sepia memory-bubble for past tenses, dreamy glow for Konjunktiv II) reinforce the transformation. |
+#### Vertical types (1080×1920, 9:16 — Shorts / Reels)
+
+| Project Type | Description | Default dialogue count |
+|---|---|---|
+| `shadowing` | Dialogue + 3-sentence repetition/shadowing section. Good for pronunciation practice. | 4–6 lines |
+| `story` | Pure narrative dialogue, no repetitions. Good for comprehension. | 4–6 lines |
+| `word_learning` | One scene per vocabulary word; speaker says the word then uses it in a sentence. | driven by word list |
+| `register_phrases` | Paired sentences showing the same idea in two registers (e.g. formal vs. colloquial). Visual clothing change reinforces the register shift. | 3 pairs |
+| `grammar_pairs` | Paired sentences showing a grammatical construction (e.g. present → Präteritum). Visual cues (sepia memory-bubble for past tenses, dreamy glow for Konjunktiv II) reinforce the transformation. | 5 pairs |
+
+#### Horizontal types (1920×1080 Full HD, 16:9 — YouTube long-form)
+
+Each `_long` type mirrors its vertical counterpart in content and structure, but generates wider scenes with a cinematic 16:9 framing and a higher default dialogue count for longer video runtime.
+
+| Project Type | Based on | Default dialogue count |
+|---|---|---|
+| `shadowing_long` | `shadowing` | 10–14 lines + repetition section |
+| `story_long` | `story` | 10–14 lines |
+| `word_learning_long` | `word_learning` | driven by word list |
+| `register_phrases_long` | `register_phrases` | 6 pairs |
+| `grammar_pairs_long` | `grammar_pairs` | 8 pairs |
+
+When a horizontal type is selected, the pipeline automatically applies Full HD settings at every stage: fal.ai generates `landscape_16_9` images, the video canvas is set to 1920×1080, and subtitle/icon positions are adjusted for the wider frame. The `video_format` field in the manifest is set to `"horizontal"` at project creation and propagates through all downstream steps.
 
 **How scene images work:** every dialogue line includes a `scene_visual` field — a concrete English description of what the speaking character is *doing* relative to what they're saying. This description drives the image prompt, producing action-based illustrations rather than static talking-head shots.
 
@@ -110,6 +133,10 @@ The raw GPT JSON response is saved to `generation_config.raw_gpt_script` before 
 
 **Character auto-detection:** when opening the Script step, the UI scans `provided_context` (your scene description) for known character names and pre-fills the Character A / Character B dropdowns automatically.
 
+**Optional location:** the location field is optional. When the "Use specific location" checkbox is unchecked, no location key is sent and GPT chooses an appropriate setting based on the scene content and learning objectives. The model's chosen setting is then reflected in the generated image prompts.
+
+**Dialogue count override:** you can specify exactly how many dialogue lines (or pairs, for `register_phrases`/`grammar_pairs`) to generate. Leave blank to use the project type's default range. The count is injected into the GPT prompt via the `{DIALOG_COUNT}` placeholder.
+
 ---
 
 ### 3. Audio Synthesis (`create_audio.py`)
@@ -130,8 +157,13 @@ Generates scene images via fal.ai for every scene with a non-null `image` object
 |---|---|
 | `both` | char A art + char B art + location background |
 | `single_speaker` | speaking character art + location background |
+| `none` | no reference image — image generated from text prompt only |
+
+The `none` mode uses a separate text-to-image call without any reference composite. This is useful for abstract or highly stylised scenes where character consistency is less important, or when no character reference art is available.
 
 Image prompts are pre-built by `create_script.py` and stored in `scene.image.prompt_to_create`. This module only builds the reference and calls the API.
+
+**Format-aware image size:** the `image_size` passed to fal.ai is selected automatically based on the manifest's `video_format` field — `portrait_16_9` for vertical projects and `landscape_16_9` for horizontal Full HD projects. The default from `config.ini` is used as a fallback.
 
 Flag: `--overwrite` — regenerate images even when the file already exists in `project/images/`.
 
@@ -141,7 +173,9 @@ Individual scenes can be regenerated via the web UI (Generated Items tab → Re-
 
 ### 5. Video Rendering (`create_video.py`)
 
-Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`:
+Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`.
+
+**Format-aware canvas:** before rendering begins the module reads `video_format` from the manifest. For horizontal projects the canvas is overridden to 1920×1080 and the subtitle/icon positions are adjusted accordingly (subtitle font size, bottom margin, icon position). Vertical projects use the values from `config.ini` unchanged.
 
 | `audio.type` | Behaviour |
 |---|---|
@@ -223,10 +257,10 @@ Seven collapsible step cards covering the full pipeline:
 
 | Step | Controls |
 |---|---|
-| 1 · Script | Character A/B (auto-detected from scene description), location, project type, prompt preview/override |
+| 1 · Script | Character A/B (auto-detected from scene description), **"Use specific location" checkbox + dropdown** (optional), project type, **dialogue count** (optional number, uses type default if blank), prompt preview/override |
 | 2 · Audio | Run all scenes |
 | 3 · Images | Overwrite flag, ignore-cache flag |
-| 4 · Video | Annotated subtitles flag |
+| 4 · Video | Annotated subtitles flag, footnote/disclaimer text (optional) |
 | 5 · Assemble | Background audio, speed factor, branding file, branding position (none/intro/outro/both), overwrite flag |
 | 6 · YouTube Upload | Privacy, title override, description override |
 | 7 · Instagram Upload | Caption override, share-to-feed toggle; credential setup (App ID, App Secret, token, optional IG User ID); token status banner; reset |
@@ -238,6 +272,8 @@ Steps run in background threads — the UI stays responsive during long operatio
 - One card per non-pause scene (narration, dialogue, SFX, repetitions)
 - Shows the scene's German text, the English `scene_visual` description, and image/audio status badges
 - Expands to show the generated image, audio player, and the editable image prompt
+- **Characters in image selector** — choose per scene how many character references to use: "Both characters", "Speaker only", or "None (text only)". "None" bypasses the reference composite entirely and generates from text prompt alone.
+- Location reference toggle — when using character references, optionally exclude the location artwork to let the model freely invent the background
 - Re-generate Image and Re-generate Audio buttons trigger single-scene re-runs with live polling per card
 - Text can be edited inline (clears the audio file path so audio is re-generated on the next audio step run)
 
@@ -272,12 +308,12 @@ Full CRUD for all asset types:
 |---|---|---|
 | `GET` | `/projects/<name>/status/<step>` | Poll job status |
 | `POST` | `/projects/<name>/prompt/script` | Preview GPT prompt (no API call) |
-| `POST` | `/projects/<name>/run/script` | Run script generation |
+| `POST` | `/projects/<name>/run/script` | Run script generation (`char_a`, `char_b`, optional `location_key`, `project_type_key`, `dialog_count`, `prompt_override`, `words`) |
 | `POST` | `/projects/<name>/run/audio` | Run audio generation (all scenes) |
 | `POST` | `/projects/<name>/run/audio_scene` | Re-generate audio for one scene (`scene_id`) |
-| `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) |
-| `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image (`scene_id`, optional `prompt_override`) |
-| `POST` | `/projects/<name>/run/video` | Render scene clips |
+| `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) — params: `overwrite`, `ignore_cache`, `use_location_ref` |
+| `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image — params: `scene_id`, `prompt_override`, `use_location_ref`, `characters_override` (`"both"` / `"single_speaker"` / `"none"`) |
+| `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`) |
 | `POST` | `/projects/<name>/run/assemble` | Assemble final video (`bg_audio_name`, `speed_factor`, `branding_file`, `branding_mode`, `overwrite`) |
 | `POST` | `/projects/<name>/run/upload` | Upload to YouTube (`privacy`, `title`, `description`) |
 | `POST` | `/projects/<name>/run/upload_instagram` | Upload to Instagram (`caption`, `share_to_feed`) |
@@ -327,17 +363,18 @@ Full CRUD for all asset types:
     "title": "...",
     "tags": "...",
     "insights": "...",
-    "video_format": "vertical"
+    "video_format": "vertical"   // "vertical" (1080×1920) or "horizontal" (1920×1080)
   },
   "generation_config": {
-    "location_key": "cafe",
+    "location_key": "cafe",       // empty string when no location was specified
     "characters": ["Wiebke", "Sani"],
     "level": "B1",
     "provided_context": "...",
     "provided_learning_points": "...",
+    "dialog_count": null,         // null = use project type default; integer = explicit override
+    "words": [],                  // word_learning type only
     "prompt_script": "...",
-    "raw_gpt_script": "{ ... }",
-    "words": []
+    "raw_gpt_script": { "..." }   // raw GPT JSON for debugging
   },
   "pipeline_config": {
     "inter_pause_ms": 350,
@@ -376,16 +413,20 @@ Full CRUD for all asset types:
 assets/
 ├── characters/
 │   ├── characters.json               ← all character definitions
-│   └── art/                          ← character reference artwork (.png)
+│   └── <CharacterName>/              ← per-character folder
+│       ├── art.png                   ← full turnaround sheet
+│       └── 34left.png                ← 3/4-left view (used as reference for scene compositing)
 ├── locations/
 │   ├── locations.json                ← all location definitions
 │   └── <location_key>.png            ← location background images
 ├── project_types/
-│   └── project_types.json            ← shadowing / story / word_learning / register_phrases / grammar_pairs
+│   └── project_types.json            ← vertical: shadowing / story / word_learning / register_phrases / grammar_pairs
+│                                        horizontal: shadowing_long / story_long / word_learning_long / register_phrases_long / grammar_pairs_long
 ├── background_audio/
-│   ├── background_audio_index.json
+│   ├── background_audio.json
 │   └── *.mp3
 ├── sfx/
+│   ├── sfx.json
 │   ├── bell.mp3
 │   └── bitte_wiederholen.mp3
 ├── branding/                         ← intro/outro video clips (.mp4 / .mov / .webm)
@@ -568,12 +609,13 @@ elevenlabs_model = eleven_multilingual_v2
 output_format    = mp3_44100_128
 
 [fal]
-model      = fal-ai/bytedance/seedream/v4.5/edit
-image_size = portrait_16_9
+model      = fal-ai/bytedance/seedream/v5/lite/edit          ; model used for scene images (image+reference → image)
+t2i_model  = fal-ai/bytedance/seedream/v5/lite/text-to-image ; model used for text-only generation and character/location art
+image_size = portrait_16_9                                   ; default for vertical projects; overridden to landscape_16_9 for horizontal projects
 
 [video]
-target_w             = 1080
-target_h             = 1920
+target_w             = 1080   ; default for vertical projects; overridden to 1920 for horizontal
+target_h             = 1920   ; default for vertical projects; overridden to 1080 for horizontal
 fps                  = 30
 markup_italic_attrs  = style='italic'
 markup_bold_attrs    = weight='bold'
@@ -596,10 +638,10 @@ python create_project.py my_project \
   --context "Wiebke and Sani are at a café discussing plans for Tag der Arbeit." \
   --learning "Genitive case: Tag der Arbeit, Werke des Künstlers"
 
-# Generate script
+# Generate script (location is optional — omit to let GPT choose)
 python create_script.py my_project \
   --char-a Wiebke --char-b Sani \
-  --location cafe
+  --location cafe            # omit this flag to let the model choose the setting
 
 # Generate audio
 python create_audio.py my_project
@@ -638,11 +680,36 @@ python upload_instagram.py --setup \
 New project types are defined entirely in `assets/project_types/project_types.json` — no Python changes required.
 
 Each entry defines:
-- `description_for_prompt` — the GPT prompt template (uses `{PLACEHOLDER}` markers)
-- `output_json_schema` — enforces the expected GPT response shape via OpenAI structured outputs
-- `scene_builder_rules` — controls which scene types `build_scene_list()` generates (narration, dialog, repetition section, pauses, bell SFX)
 
-Available template placeholders: `{LEVEL}`, `{LOCATION_KEY}`, `{LOCATION_DESC}`, `{CHAR_A}`, `{CHAR_B}`, `{CHAR_A_DESC}`, `{CHAR_B_DESC}`, `{WORDS_LIST}`, `{PROVIDED_CONTEXT}`, `{PROVIDED_LEARNING_POINTS}`.
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Key that identifies this type |
+| `format` | yes | `"vertical"` (1080×1920) or `"horizontal"` (1920×1080 Full HD) |
+| `self_description` | yes | Human-readable description shown in the UI |
+| `description_for_prompt` | yes* | GPT prompt template using `{PLACEHOLDER}` markers. *Can be omitted when `base_type` is set — the base type's template is inherited. |
+| `output_json_schema` | yes* | Enforces the expected GPT response shape via OpenAI structured outputs. *Inherited from `base_type` when omitted. |
+| `scene_builder_rules` | yes | Controls which scene types `build_scene_list()` generates (narration, dialog, repetition, pauses, bell SFX) |
+| `default_dialog_count` | no | Fallback count (e.g. `"4-6"`) used when no explicit count is requested |
+| `base_type` | no | Key of an existing type to inherit `description_for_prompt` and `output_json_schema` from. Fields defined directly on this entry override the inherited values. |
+| `framing_tokens` | no | Overrides the `image_framing_tokens` from `config.ini` when building image prompts for this type. Use to set orientation-appropriate framing (e.g. `"Horizontal 16:9 widescreen composition…"`). |
+| `video_config_overrides` | no | Key–value pairs merged into the pipeline config dict at runtime. Supported keys: `target_w`, `target_h`, `fal_image_size`, `sub_fontsize`, `sub_margin_bottom`, `icon_x`, `icon_y`. Not currently used at runtime — format detection in the pipeline uses `video_format` from the manifest directly. |
+
+**Using `base_type` for format variants:** the `_long` horizontal types each reference a vertical base type via `base_type`. At runtime, `create_script.py` merges the base type's `description_for_prompt` and `output_json_schema` with the long type's own fields (long type wins on conflict). This avoids duplicating large prompt templates when creating format variants.
+
+Available `description_for_prompt` template placeholders:
+
+| Placeholder | Value |
+|---|---|
+| `{LEVEL}` | Language level (A1–C2) |
+| `{LEVEL_LOWER}` | Language level lowercased (for hashtags) |
+| `{LOCATION_KEY}` | Location identifier, or `"(model's choice)"` if none specified |
+| `{LOCATION_DESC}` | Location description, or a fallback prompt to choose naturally |
+| `{CHAR_A}`, `{CHAR_B}` | Character names |
+| `{CHAR_A_DESC}`, `{CHAR_B_DESC}` | Character full descriptions (fixed + variable) |
+| `{WORDS_LIST}` | Comma-separated word list (`word_learning` only) |
+| `{DIALOG_COUNT}` | Number of dialogue lines/pairs to generate |
+| `{PROVIDED_CONTEXT}` | User-provided scene description |
+| `{PROVIDED_LEARNING_POINTS}` | User-provided learning objectives |
 
 **Important:** any literal `{` or `}` inside the prompt template (e.g. in JSON examples) must be escaped as `{{` and `}}` so Python's `.format()` does not treat them as placeholders.
 
@@ -652,4 +719,9 @@ Every project type prompt should include a `VIDEO METADATA` section instructing 
 
 ## Re-running Individual Steps
 
-Because all result
+Because all results are tracked in `project_manifest.json`, any step can be safely re-run:
+
+- **Script** — replaces `scenes[]` entirely; downstream `file_path` fields become stale until Audio/Images/Video are re-run
+- **Audio** — skips scenes whose `audio.file_path` is already set; editing scene text via the UI clears the path automatically
+- **Images** — skips scenes whose `image.file_path` is already set; use `--overwrite` or the Re-generate button per scene in the UI
+- **Video / Assemble** — use `--overwrite` to replace existing clips or the final video

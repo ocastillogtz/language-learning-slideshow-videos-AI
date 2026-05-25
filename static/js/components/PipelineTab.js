@@ -2,13 +2,27 @@
 const { useState, useEffect } = React;
 
 const SHOT_TYPES    = ["both", "over_shoulder_A", "over_shoulder_B"];
-const PROJECT_TYPES = [
-  { value: "shadowing",        label: "Shadowing (with repetitions)"          },
-  { value: "story",            label: "Story (no repetitions)"                },
-  { value: "word_learning",    label: "Word Learning (vocabulary)"            },
-  { value: "register_phrases", label: "Register Phrases (formal / slang / ...)"  },
-  { value: "grammar_pairs",   label: "Grammar Pairs (base → transformed)"      },
-];
+const PROJECT_TYPES = {
+  vertical: [
+    { value: "shadowing",        label: "Shadowing (with repetitions)"            },
+    { value: "story",            label: "Story (no repetitions)"                  },
+    { value: "word_learning",    label: "Word Learning (vocabulary)"              },
+    { value: "register_phrases", label: "Register Phrases (formal / slang / ...)" },
+    { value: "grammar_pairs",    label: "Grammar Pairs (base → transformed)"      },
+  ],
+  horizontal: [
+    { value: "shadowing_long",        label: "Shadowing — Long (with repetitions)"            },
+    { value: "story_long",            label: "Story — Long (no repetitions)"                  },
+    { value: "word_learning_long",    label: "Word Learning — Long (vocabulary)"              },
+    { value: "register_phrases_long", label: "Register Phrases — Long (formal / slang / ...)" },
+    { value: "grammar_pairs_long",    label: "Grammar Pairs — Long (base → transformed)"      },
+  ],
+};
+
+// Helper: does this project type key use a word list?
+const isWordLearningType = t => t === "word_learning" || t === "word_learning_long";
+// Helper: does this project type key use pairs (not line count)?
+const isPairsType = t => ["register_phrases","grammar_pairs","register_phrases_long","grammar_pairs_long"].includes(t);
 
 function StepCard({ step, projectName }) {
   const { toast, startPoll, reloadManifest, refreshSidebar } = useApp();
@@ -16,6 +30,8 @@ function StepCard({ step, projectName }) {
   const [status,  setStatus]  = useState("idle");
   const [log,     setLog]     = useState("");
   const [running, setRunning] = useState(false);
+
+  const disabledReason = step.disabledReason || null;
 
   // Fetch current status once on mount
   useEffect(() => {
@@ -68,8 +84,14 @@ function StepCard({ step, projectName }) {
       {open && (
         <div className="step-body">
           <step.Fields projectName={projectName} />
+          {disabledReason && (
+            <div className="step-log vis err" style={{marginBottom:".5rem"}}>
+              ⚠ {disabledReason}
+            </div>
+          )}
           <div className="run-row">
-            <button className="btn-primary" onClick={run} disabled={running}>
+            <button className="btn-primary" onClick={run} disabled={running || !!disabledReason}
+              title={disabledReason || undefined}>
               <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
                 <polygon points="1,0.5 10.5,5.5 1,10.5"/>
               </svg>
@@ -94,12 +116,15 @@ function ScriptFields({ projectName }) {
   const gen = m.generation_config || {};
   const meta= m.project_metadata  || {};
 
-  const [projType, setProjType] = useState(meta.project_type_key || gen.project_type_key || "story");
-  const [charA,    setCharA]    = useState((gen.characters||[])[0] || "");
-  const [charB,    setCharB]    = useState((gen.characters||[])[1] || "");
-  const [loc,      setLoc]      = useState(gen.location_key || "");
-  const [prompt,   setPrompt]   = useState(gen.prompt_script || "");
-  const [loading,  setLoading]  = useState(false);
+  const [projType,     setProjType]     = useState(meta.project_type_key || gen.project_type_key || "story");
+  const [charA,        setCharA]        = useState((gen.characters||[])[0] || "");
+  const [charB,        setCharB]        = useState((gen.characters||[])[1] || "");
+  const [useLocation,  setUseLocation]  = useState(!!(gen.location_key));
+  const [loc,          setLoc]          = useState(gen.location_key || "");
+  const [dialogCount,  setDialogCount]  = useState(String(gen.dialog_count || ""));
+  const [prompt,       setPrompt]       = useState(gen.prompt_script || "");
+  const [words,        setWords]        = useState((gen.words || []).join(", "));
+  const [loading,      setLoading]      = useState(false);
 
   // Auto-detect characters from scene description if not already set
   useEffect(() => {
@@ -114,24 +139,38 @@ function ScriptFields({ projectName }) {
   ScriptFields._getPayload = () => ({
     char_a:           charA,
     char_b:           charB,
-    location_key:     loc,
+    location_key:     useLocation ? loc : null,
     project_type_key: projType,
     prompt_override:  prompt.trim() || null,
+    dialog_count:     dialogCount !== "" ? parseInt(dialogCount, 10) : null,
+    words:            isWordLearningType(projType)
+                        ? words.split(",").map(w => w.trim()).filter(Boolean)
+                        : undefined,
   });
 
   async function loadPrompt() {
-    if (!charA || !charB || !loc) {
-      toast("Warning", "Select characters and location first.", "err"); return;
+    if (!charA || !charB || (useLocation && !loc)) {
+      toast("Warning", "Select characters" + (useLocation ? " and location" : "") + " first.", "err"); return;
     }
     setLoading(true);
     try {
       const d = await apiPost(`/projects/${projectName}/prompt/script`, {
-        char_a: charA, char_b: charB, location_key: loc, project_type_key: projType,
+        char_a: charA, char_b: charB,
+        location_key: useLocation ? loc : null,
+        project_type_key: projType,
+        dialog_count: dialogCount !== "" ? parseInt(dialogCount, 10) : null,
+        words: isWordLearningType(projType)
+          ? words.split(",").map(w => w.trim()).filter(Boolean)
+          : undefined,
       });
       setPrompt(d.prompt);
     } catch(e) { toast("Error", e.message, "err"); }
     finally { setLoading(false); }
   }
+
+  // Determine label for dialog count based on project type
+  const dialogLabel       = isPairsType(projType) ? "Number of pairs"        : "Number of dialog lines";
+  const dialogPlaceholder = isPairsType(projType) ? "e.g. 4 (default: 4–6)"  : "e.g. 5 (default: 4–6)";
 
   return (
     <div className="fields">
@@ -151,19 +190,70 @@ function ScriptFields({ projectName }) {
           </select>
         </div>
       </div>
-      <div className="field">
-        <label>Location</label>
-        <select value={loc} onChange={e=>setLoc(e.target.value)}>
-          <option value="">— select —</option>
-          {locations.map(l => <option key={l} value={l}>{l}</option>)}
-        </select>
+
+      {/* Location — optional via checkbox */}
+      <div>
+        <div className="toggle-row" style={{marginBottom:".4rem"}}>
+          <input type="checkbox" id="f_use_loc" checked={useLocation}
+            onChange={e => setUseLocation(e.target.checked)}/>
+          <label htmlFor="f_use_loc" style={{fontWeight:500}}>Use specific location</label>
+        </div>
+        {useLocation ? (
+          <div className="field" style={{marginTop:".1rem"}}>
+            <select value={loc} onChange={e=>setLoc(e.target.value)}>
+              <option value="">— select location —</option>
+              {locations.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div style={{fontSize:".76rem", color:"var(--muted)", paddingLeft:"1.6rem",
+            fontStyle:"italic", marginBottom:".6rem"}}>
+            The model will choose a suitable setting based on the scene content.
+          </div>
+        )}
       </div>
-      <div className="field">
-        <label>Project Type</label>
-        <select value={projType} onChange={e=>setProjType(e.target.value)}>
-          {PROJECT_TYPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
+
+      <div className="field-row">
+        <div className="field" style={{flex:2}}>
+          <label>Project Type</label>
+          <select value={projType} onChange={e=>setProjType(e.target.value)}>
+            <optgroup label="▸ Vertical — 1080×1920 (Shorts / Reels)">
+              {PROJECT_TYPES.vertical.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </optgroup>
+            <optgroup label="▸ Horizontal — 1920×1080 Full HD (YouTube)">
+              {PROJECT_TYPES.horizontal.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </optgroup>
+          </select>
+        </div>
+        <div className="field" style={{flex:1}}>
+          <label>{dialogLabel}
+            <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(optional)</span>
+          </label>
+          <input
+            type="number" min="1" max="20" step="1"
+            value={dialogCount}
+            onChange={e => setDialogCount(e.target.value)}
+            placeholder={dialogPlaceholder}
+          />
+        </div>
       </div>
+
+      {isWordLearningType(projType) && (
+        <div className="field">
+          <label>
+            Words to teach{" "}
+            <span style={{color:"var(--muted)",fontWeight:300}}>(comma-separated)</span>
+          </label>
+          <textarea
+            className="prompt-editor"
+            rows={3}
+            value={words}
+            onChange={e => setWords(e.target.value)}
+            placeholder="e.g. laufen, rennen, der Bahnhof, ankommen"
+            style={{fontFamily:"inherit"}}
+          />
+        </div>
+      )}
       <div className="prompt-section">
         <div className="prompt-header">
           <span>GPT Prompt Override (optional)</span>
@@ -189,9 +279,14 @@ function AudioFields() {
 }
 
 function ImagesFields() {
-  const [overwrite,    setOverwrite]    = useState(false);
-  const [ignoreCache,  setIgnoreCache]  = useState(false);
-  ImagesFields._getPayload = () => ({ overwrite, ignore_cache: ignoreCache });
+  const [overwrite,       setOverwrite]       = useState(false);
+  const [ignoreCache,     setIgnoreCache]     = useState(false);
+  const [useLocationRef,  setUseLocationRef]  = useState(true);
+  ImagesFields._getPayload = () => ({
+    overwrite,
+    ignore_cache:      ignoreCache,
+    use_location_ref:  useLocationRef,
+  });
   return (
     <div className="fields">
       <div className="toggle-row">
@@ -204,6 +299,17 @@ function ImagesFields() {
           onChange={e=>setIgnoreCache(e.target.checked)}/>
         <label htmlFor="f_ic">Ignore shared cache (always call fal.ai)</label>
       </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_loc_ref" checked={useLocationRef}
+          onChange={e=>setUseLocationRef(e.target.checked)}/>
+        <label htmlFor="f_loc_ref">Include location in reference image</label>
+      </div>
+      {!useLocationRef && (
+        <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:"-.3rem",
+          paddingLeft:"1.6rem", fontStyle:"italic"}}>
+          Only character art will be used as reference — the model will invent the background.
+        </div>
+      )}
     </div>
   );
 }
@@ -211,7 +317,8 @@ function ImagesFields() {
 function VideoFields() {
   const [overwrite, setOverwrite] = useState(false);
   const [annotated, setAnnotated] = useState(false);
-  VideoFields._getPayload = () => ({ overwrite, annotated_subtitles: annotated });
+  const [footnote,  setFootnote]  = useState("");
+  VideoFields._getPayload = () => ({ overwrite, annotated_subtitles: annotated, footnote });
   return (
     <div className="fields">
       <div className="toggle-row">
@@ -224,12 +331,26 @@ function VideoFields() {
           onChange={e=>setAnnotated(e.target.checked)}/>
         <label htmlFor="f_ann">Grammar-annotated subtitles</label>
       </div>
+      <div className="field" style={{marginTop:".5rem"}}>
+        <label>
+          Footnote / Disclaimer{" "}
+          <span style={{color:"var(--muted)",fontWeight:300}}>(optional — shown below narration text)</span>
+        </label>
+        <textarea
+          rows={2}
+          value={footnote}
+          onChange={e => setFootnote(e.target.value)}
+          placeholder="e.g. * AI-generated content. Not a substitute for professional instruction."
+          style={{resize:"vertical"}}
+        />
+      </div>
     </div>
   );
 }
 
 function AssembleFields() {
   const [bgAudio,       setBgAudio]       = useState("office");
+  const [bgAudioTracks, setBgAudioTracks] = useState([]);
   const [speedFactor,   setSpeedFactor]   = useState("1.0");
   const [overwrite,     setOverwrite]     = useState(false);
   const [brandingFile,  setBrandingFile]  = useState("");
@@ -245,6 +366,16 @@ function AssembleFields() {
   });
 
   useEffect(() => {
+    fetch("/assets/background-audio")
+      .then(r => r.json())
+      .then(d => {
+        const tracks = Object.values(d).sort((a, b) => a.name.localeCompare(b.name));
+        setBgAudioTracks(tracks);
+        if (tracks.length > 0 && !tracks.find(t => t.name === bgAudio)) {
+          setBgAudio(tracks[0].name);
+        }
+      })
+      .catch(() => {});
     fetch("/assets/branding/list")
       .then(r => r.json())
       .then(d => {
@@ -268,8 +399,16 @@ function AssembleFields() {
       <div className="field-row">
         <div className="field" style={{flex:2}}>
           <label>Background Audio</label>
-          <input value={bgAudio} onChange={e=>setBgAudio(e.target.value)}
-            placeholder="e.g. office, elevator"/>
+          {bgAudioTracks.length > 0 ? (
+            <select value={bgAudio} onChange={e=>setBgAudio(e.target.value)}>
+              {bgAudioTracks.map(t => (
+                <option key={t.name} value={t.name}>{t.name} — {t.description}</option>
+              ))}
+            </select>
+          ) : (
+            <input value={bgAudio} onChange={e=>setBgAudio(e.target.value)}
+              placeholder="e.g. office, elevator"/>
+          )}
         </div>
         <div className="field" style={{flex:1}}>
           <label>Speed Factor
@@ -389,7 +528,11 @@ function UploadFields() {
 
 // ── Step definitions ───────────────────────────────────────────────────────────
 
-function makeSteps(projectName) {
+function makeSteps(projectName, manifest) {
+  const videoFormat = (manifest?.video_info?.video_format) || "vertical";
+  const igDisabled  = videoFormat === "horizontal"
+    ? "Instagram only supports vertical 9:16 Reels. Export to YouTube instead."
+    : null;
   return [
     {
       id:"script", num:1,
@@ -446,12 +589,14 @@ function makeSteps(projectName) {
       Fields: InstagramUploadFields,
       payload: () => InstagramUploadFields._getPayload?.() || {},
       endpoint: n => `/projects/${n}/run/upload_instagram`,
+      disabledReason: igDisabled,
     },
   ];
 }
 
 function PipelineTab({ projectName }) {
-  const steps = makeSteps(projectName);
+  const { manifest } = useApp();
+  const steps = makeSteps(projectName, manifest);
   return (
     <div className="pipeline">
       {steps.map(step => (

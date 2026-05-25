@@ -158,14 +158,28 @@ def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
     """
     Extract title, description, and tags from the project manifest.
 
+    Supports both the current nested format (video_info / generation_config)
+    and the legacy flat format for older projects.
+
     Returns (title, description, tags)
     """
-    title = manifest.get("title") or "German Learning Video"
+    # ── nested (current) format ──────────────────────────────────────────────
+    vi  = manifest.get("video_info") or {}
+    gc  = manifest.get("generation_config") or {}
 
-    insights = manifest.get("insights", "") or ""
-    location = manifest.get("location-key", "") or ""
-    style    = manifest.get("style", "") or ""
-    chars    = [c["name"] for c in manifest.get("characters", [])]
+    # ── field resolution: nested first, fall back to flat legacy keys ────────
+    title    = vi.get("title")    or manifest.get("title")    or "German Learning Video"
+    insights = vi.get("insights") or manifest.get("insights", "") or ""
+    location = gc.get("location_key") or manifest.get("location-key", "") or ""
+    style    = (manifest.get("project_metadata") or {}).get("project_type_key") \
+               or manifest.get("style", "") or ""
+
+    # Characters: new format stores them as a list of strings; legacy as list of dicts
+    raw_chars = gc.get("characters") or manifest.get("characters", [])
+    if raw_chars and isinstance(raw_chars[0], dict):
+        chars = [c["name"] for c in raw_chars]
+    else:
+        chars = [c for c in raw_chars if isinstance(c, str)]
     chars_str = " & ".join(chars) if chars else ""
 
     # Build a rich description
@@ -188,7 +202,7 @@ def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
     description = "\n".join(desc_parts)
 
     # Tags from manifest + automatic language tags
-    raw_tags = manifest.get("tags", "") or ""
+    raw_tags = vi.get("tags") or manifest.get("tags", "") or ""
     # raw_tags is like "#germanlearning #deutschlernen ..." — strip # and split
     auto_tags = [t.lstrip("#") for t in raw_tags.split() if t.startswith("#")]
     extra_tags = ["german", "deutsch", "learnGerman", "deutschlernen", "shorts",
