@@ -23,6 +23,9 @@ const PROJECT_TYPES = {
 const isWordLearningType = t => t === "word_learning" || t === "word_learning_long";
 // Helper: does this project type key use pairs (not line count)?
 const isPairsType = t => ["register_phrases","grammar_pairs","register_phrases_long","grammar_pairs_long"].includes(t);
+// Helper: does this project type support more than two characters in the conversation?
+const isMultiCharType = t => ["story","story_long","register_phrases","register_phrases_long",
+                              "word_learning","word_learning_long"].includes(t);
 
 function StepCard({ step, projectName }) {
   const { toast, startPoll, reloadManifest, refreshSidebar } = useApp();
@@ -119,6 +122,8 @@ function ScriptFields({ projectName }) {
   const [projType,     setProjType]     = useState(meta.project_type_key || gen.project_type_key || "story");
   const [charA,        setCharA]        = useState((gen.characters||[])[0] || "");
   const [charB,        setCharB]        = useState((gen.characters||[])[1] || "");
+  // Extra cast beyond A and B (multi-character conversational types).
+  const [extraChars,   setExtraChars]   = useState(() => (gen.characters || []).slice(2));
   const [useLocation,  setUseLocation]  = useState(!!(gen.location_key));
   const [loc,          setLoc]          = useState(gen.location_key || "");
   const [dialogCount,  setDialogCount]  = useState(String(gen.dialog_count || ""));
@@ -136,9 +141,17 @@ function ScriptFields({ projectName }) {
     if (found.length >= 2 && !charB) setCharB(found[1]);
   }, [characters]);
 
+  // Full cast (A + B + extras), de-duplicated, blanks removed.
+  const fullCast = () => {
+    const out = [];
+    [charA, charB, ...extraChars].forEach(c => { if (c && !out.includes(c)) out.push(c); });
+    return out;
+  };
+
   ScriptFields._getPayload = () => ({
     char_a:           charA,
     char_b:           charB,
+    characters:       isMultiCharType(projType) ? fullCast() : undefined,
     location_key:     useLocation ? loc : null,
     project_type_key: projType,
     prompt_override:  prompt.trim() || null,
@@ -156,6 +169,7 @@ function ScriptFields({ projectName }) {
     try {
       const d = await apiPost(`/projects/${projectName}/prompt/script`, {
         char_a: charA, char_b: charB,
+        characters: isMultiCharType(projType) ? fullCast() : undefined,
         location_key: useLocation ? loc : null,
         project_type_key: projType,
         dialog_count: dialogCount !== "" ? parseInt(dialogCount, 10) : null,
@@ -190,6 +204,37 @@ function ScriptFields({ projectName }) {
           </select>
         </div>
       </div>
+
+      {/* Additional characters — only for multi-character conversational types */}
+      {isMultiCharType(projType) && (
+        <div>
+          <label style={{fontWeight:500, fontSize:".82rem"}}>
+            Additional characters{" "}
+            <span style={{color:"var(--muted)",fontWeight:300}}>(optional — for a 3+ person conversation)</span>
+          </label>
+          <div style={{display:"flex", gap:".4rem", flexWrap:"wrap", marginTop:".35rem"}}>
+            {characters.filter(c => c !== charA && c !== charB && c !== "Narrator").map(c => {
+              const on = extraChars.includes(c);
+              return (
+                <label key={c}
+                  style={{display:"flex", alignItems:"center", gap:".3rem", fontSize:".76rem",
+                    cursor:"pointer", padding:".25rem .55rem", borderRadius:"5px",
+                    border:`1px solid ${on ? "var(--accent)" : "var(--border)"}`,
+                    background: on ? "rgba(var(--accent-rgb,99,102,241),.1)" : "var(--surface-2)",
+                    color: on ? "var(--accent)" : "var(--muted)"}}>
+                  <input type="checkbox" checked={on} style={{display:"none"}}
+                    onChange={() => setExtraChars(prev =>
+                      prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}/>
+                  {on ? "✓ " : ""}{c}
+                </label>
+              );
+            })}
+          </div>
+          <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".3rem", fontStyle:"italic"}}>
+            Any selected character can speak and appear on screen. Leave empty for a normal two-person dialog.
+          </div>
+        </div>
+      )}
 
       {/* Location — optional via checkbox */}
       <div>
@@ -271,9 +316,32 @@ function ScriptFields({ projectName }) {
 }
 
 function AudioFields() {
+  const [overwrite, setOverwrite] = useState(false);
+
+  AudioFields._getPayload = () => ({ overwrite });
+
   return (
-    <div style={{color:"var(--muted)",fontSize:".84rem",padding:".4rem 0"}}>
-      No parameters needed — voices are defined in <code>characters.json</code>.
+    <div className="fields">
+      <div style={{color:"var(--muted)",fontSize:".84rem",marginBottom:".2rem"}}>
+        Voices are defined in <code>characters.json</code>.
+      </div>
+
+      <div className="toggle-row">
+        <input type="checkbox" id="f_ow_audio" checked={overwrite}
+          onChange={e=>setOverwrite(e.target.checked)}/>
+        <label htmlFor="f_ow_audio">Redo all (re-synthesize audio that already exists)</label>
+      </div>
+      <div style={{fontSize:".76rem", color:"var(--muted)", paddingLeft:"1.6rem",
+        fontStyle:"italic", marginTop:"-.2rem"}}>
+        {overwrite
+          ? "Every TTS line is regenerated, overwriting existing files."
+          : "Only lines without audio yet are generated; existing files are reused."}
+      </div>
+
+      <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".5rem"}}>
+        Interrupted run? Use <strong>⟳ Check for updates</strong> at the top of the project to
+        import audio/images already on disk into the manifest.
+      </div>
     </div>
   );
 }
@@ -314,11 +382,52 @@ function ImagesFields() {
   );
 }
 
+// Shared control: annotation text size multiplier (only meaningful when grammar
+// annotations are on). Renders a labelled number input.
+function AnnotScaleInput({ id, value, onChange }) {
+  return (
+    <div className="field" style={{maxWidth:"19rem", marginTop:".1rem", marginLeft:"1.6rem"}}>
+      <label htmlFor={id}>Annotation text size
+        <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(× scale · 1.0 = default)</span>
+      </label>
+      <input id={id} type="number" min="0.5" max="2.5" step="0.05"
+        value={value} onChange={e=>onChange(e.target.value)}/>
+      <div style={{fontSize:".74rem",color:"var(--muted)",marginTop:".25rem"}}>
+        Scales the grammar subtitle text — word plus the tense/case/infinitive labels — together.
+        The wrap width stays fixed, so a larger size just wraps onto more lines.
+      </div>
+    </div>
+  );
+}
+
+// Shared control: "regenerate annotations" checkbox + hint. Forces fresh OpenAI
+// annotations (ignores the cache) and re-renders the clips so the change shows.
+function AnnotRegenToggle({ id, checked, onChange }) {
+  return (
+    <div style={{marginLeft:"1.6rem"}}>
+      <div className="toggle-row">
+        <input type="checkbox" id={id} checked={checked} onChange={e=>onChange(e.target.checked)}/>
+        <label htmlFor={id}>Regenerate annotations (ignore cache)</label>
+      </div>
+      <div style={{fontSize:".74rem",color:"var(--muted)",marginTop:"-.1rem",paddingLeft:"1.6rem",fontStyle:"italic"}}>
+        Re-prompts OpenAI for every sentence and re-renders the clips. Leave off to reuse
+        cached annotations. To redo just one sentence, use “Redo annotation” on its card in
+        the Generated Items tab.
+      </div>
+    </div>
+  );
+}
+
 function VideoFields() {
   const [overwrite, setOverwrite] = useState(false);
   const [annotated, setAnnotated] = useState(false);
+  const [regen,     setRegen]     = useState(false);
   const [footnote,  setFootnote]  = useState("");
-  VideoFields._getPayload = () => ({ overwrite, annotated_subtitles: annotated, footnote });
+  const [fontScale, setFontScale] = useState("1.0");
+  VideoFields._getPayload = () => ({
+    overwrite, annotated_subtitles: annotated, footnote,
+    annot_font_scale: parseFloat(fontScale) || 1.0, regen_annotations: regen,
+  });
   return (
     <div className="fields">
       <div className="toggle-row">
@@ -331,6 +440,8 @@ function VideoFields() {
           onChange={e=>setAnnotated(e.target.checked)}/>
         <label htmlFor="f_ann">Grammar-annotated subtitles</label>
       </div>
+      {annotated && <AnnotScaleInput id="f_ann_fs" value={fontScale} onChange={setFontScale}/>}
+      {annotated && <AnnotRegenToggle id="f_ann_regen" checked={regen} onChange={setRegen}/>}
       <div className="field" style={{marginTop:".5rem"}}>
         <label>
           Footnote / Disclaimer{" "}
@@ -526,6 +637,317 @@ function UploadFields() {
   );
 }
 
+// ── reading_together step fields ───────────────────────────────────────────────
+
+function ReadingBuildFields() {
+  const [maxWords, setMaxWords] = React.useState("16");
+  ReadingBuildFields._getPayload = () => ({
+    max_words: maxWords !== "" ? parseInt(maxWords, 10) : null,
+  });
+  return (
+    <div className="fields">
+      <div className="field"><label>Max words / sentence</label>
+        <input type="number" min="5" max="40" value={maxWords} onChange={e=>setMaxWords(e.target.value)}/></div>
+      <div style={{fontSize:".8rem",color:"var(--muted)"}}>
+        Modernizes the pasted story, splits it into sentences, casts characters, and plans one illustration per sentence.
+        How many sentences go into each vertical part is chosen later, in “Assemble Parts + Long”.
+      </div>
+    </div>
+  );
+}
+
+function ReadingCastFields() {
+  const { manifest }              = useApp();
+  const [regen, setRegen]         = React.useState(false);
+  const [reanalyze, setReanalyze] = React.useState(true);
+  const [allChars, setAllChars]   = React.useState({});
+
+  const reading    = manifest?.generation_config?.reading || {};
+  const storyChars = reading.characters || [];
+  const [mapping, setMapping] = React.useState(() => ({ ...(reading.cast_mapping || {}) }));
+
+  // Existing characters the user can cast in a role (exclude the Narrator and the
+  // auto-generated rt_ story assets).
+  React.useEffect(() => {
+    fetch("/assets/characters").then(r => r.json()).then(d => setAllChars(d || {})).catch(() => {});
+  }, []);
+  const existingKeys = Object.keys(allChars)
+    .filter(k => k !== "Narrator" && !k.startsWith("rt_"))
+    .sort((a, b) => a.localeCompare(b));
+
+  ReadingCastFields._getPayload = () => ({ regenerate: regen, reanalyze, cast_mapping: mapping });
+
+  const setRole = (name, key) => setMapping(m => {
+    const next = { ...m };
+    if (key) next[name] = key; else delete next[name];
+    return next;
+  });
+
+  return (
+    <div className="fields">
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_reanalyze" checked={reanalyze} onChange={e=>setReanalyze(e.target.checked)}/>
+        <label htmlFor="f_rt_reanalyze">Re-detect characters from the story (merge — keeps existing)</label>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_regen" checked={regen} onChange={e=>setRegen(e.target.checked)}/>
+        <label htmlFor="f_rt_regen">Regenerate reference images (overwrites existing art)</label>
+      </div>
+
+      {/* Cast your own characters in the story's roles */}
+      <div style={{marginTop:".3rem"}}>
+        <div style={{fontSize:".82rem", fontWeight:600, marginBottom:".35rem"}}>Cast characters in roles</div>
+        {storyChars.length === 0 ? (
+          <div style={{fontSize:".78rem", color:"var(--muted)"}}>
+            No story characters yet — run <strong>Build Reading Source</strong> first, then re-open this step.
+          </div>
+        ) : (
+          <div style={{display:"flex", flexDirection:"column", gap:".4rem"}}>
+            {storyChars.map(c => (
+              <div key={c.name} style={{display:"flex", alignItems:"center", gap:".5rem"}}>
+                <div style={{minWidth:"120px", fontSize:".8rem"}}>
+                  <span style={{fontWeight:600}}>{c.name}</span>
+                  <span style={{color:"var(--muted)"}}> · {c.kind}</span>
+                </div>
+                <select value={mapping[c.name] || ""} onChange={e => setRole(c.name, e.target.value)}
+                  style={{flex:1, padding:".3rem .4rem", borderRadius:"5px",
+                    border:"1px solid var(--border)", background:"var(--surface-2)", color:"var(--fg)"}}>
+                  <option value="">Auto-generate a new character</option>
+                  {existingKeys.map(k => (
+                    <option key={k} value={k}>{(allChars[k] && allChars[k].name) || k}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{fontSize:".75rem", color:"var(--muted)", marginTop:".35rem", fontStyle:"italic"}}>
+          Pick one of your own characters to play a role, or leave it on “Auto-generate”. Mapped roles use that
+          character’s existing reference art — no new image is created for them.
+        </div>
+      </div>
+
+      <div style={{fontSize:".8rem",color:"var(--muted)"}}>
+        Creates one reusable reference image per auto-generated story character — humans and animals. Safe to
+        re-run: newly found characters are added and existing ones (and their images) are kept, unless you tick
+        “Regenerate reference images”.
+      </div>
+    </div>
+  );
+}
+
+function ReadingVideoFields() {
+  const [overwrite, setOverwrite] = React.useState(false);
+  const [annotated, setAnnotated] = React.useState(true);
+  const [regen,     setRegen]     = React.useState(false);
+  const [fontScale, setFontScale] = React.useState("1.0");
+  ReadingVideoFields._getPayload = () => ({
+    overwrite, annotated_subtitles: annotated,
+    annot_font_scale: parseFloat(fontScale) || 1.0, regen_annotations: regen,
+  });
+  return (
+    <div className="fields">
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_ow" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}/>
+        <label htmlFor="f_rt_ow">Overwrite existing clips</label>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_ann" checked={annotated} onChange={e=>setAnnotated(e.target.checked)}/>
+        <label htmlFor="f_rt_ann">Grammar-annotated subtitles</label>
+      </div>
+      {annotated && <AnnotScaleInput id="f_rt_fs" value={fontScale} onChange={setFontScale}/>}
+      {annotated && <AnnotRegenToggle id="f_rt_regen" checked={regen} onChange={setRegen}/>}
+    </div>
+  );
+}
+
+function ReadingHorizFields() {
+  const [overwrite, setOverwrite] = React.useState(false);
+  const [annotated, setAnnotated] = React.useState(true);
+  const [regen,     setRegen]     = React.useState(false);
+  const [fontScale, setFontScale] = React.useState("1.0");
+  ReadingHorizFields._getPayload = () => ({
+    overwrite, annotated_subtitles: annotated, format_override: "horizontal", out_subdir: "h",
+    annot_font_scale: parseFloat(fontScale) || 1.0, regen_annotations: regen,
+  });
+  return (
+    <div className="fields">
+      <div style={{fontSize:".8rem",color:"var(--muted)",marginBottom:".4rem"}}>
+        Renders a 16:9 copy of every scene into <code>videos/h/</code> for the long video.
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_owh" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}/>
+        <label htmlFor="f_rt_owh">Overwrite existing horizontal clips</label>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_annh" checked={annotated} onChange={e=>setAnnotated(e.target.checked)}/>
+        <label htmlFor="f_rt_annh">Grammar-annotated subtitles</label>
+      </div>
+      {annotated && <AnnotScaleInput id="f_rt_fsh" value={fontScale} onChange={setFontScale}/>}
+      {annotated && <AnnotRegenToggle id="f_rt_regenh" checked={regen} onChange={setRegen}/>}
+    </div>
+  );
+}
+
+function ReadingAssembleFields() {
+  const [bg, setBg]             = React.useState("office");
+  const [overwrite, setOverwrite] = React.useState(false);
+  const [parts, setParts]       = React.useState(true);
+  const [long, setLong]         = React.useState(true);
+  const [perPart, setPerPart]   = React.useState("6");
+  const [speedFactor, setSpeedFactor] = React.useState("1.0");
+  const [brandingOn, setBrandingOn]     = React.useState(false);
+  const [brandingFile, setBrandingFile] = React.useState("");
+  const [brandingFiles, setBrandingFiles] = React.useState([]);
+  ReadingAssembleFields._getPayload = () => ({
+    bg_audio_name: bg, overwrite, make_parts: parts, make_long: long,
+    branding_mode: brandingOn && brandingFile ? "intro" : "none",
+    branding_file: brandingOn ? brandingFile : null,
+    per_part: perPart !== "" ? parseInt(perPart, 10) : null,
+    speed_factor: speedFactor !== "" ? parseFloat(speedFactor) : null,
+  });
+
+  React.useEffect(() => {
+    fetch("/assets/branding/list")
+      .then(r => r.json())
+      .then(d => {
+        const files = d.files || [];
+        setBrandingFiles(files);
+        if (files.length > 0 && !brandingFile) setBrandingFile(files[0]);
+      })
+      .catch(() => {});
+  }, []);
+
+  const speedNum   = parseFloat(speedFactor);
+  const speedValid = !isNaN(speedNum) && speedNum > 0.1 && speedNum <= 2.0;
+  const speedHint  = speedValid && Math.abs(speedNum - 1.0) > 0.001
+    ? speedNum < 1.0
+      ? `${((1 - speedNum) * 100).toFixed(1)} % slower`
+      : `${((speedNum - 1) * 100).toFixed(1)} % faster`
+    : "normal speed";
+
+  return (
+    <div className="fields">
+      <div className="field-row">
+        <div className="field"><label>Background Audio</label>
+          <input value={bg} onChange={e=>setBg(e.target.value)} placeholder="e.g. office, park"/></div>
+        <div className="field"><label>Sentences per vertical part</label>
+          <input type="number" min="1" max="20" value={perPart} onChange={e=>setPerPart(e.target.value)}/></div>
+      </div>
+      <div className="field-row">
+        <div className="field"><label>Speed Factor
+            <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
+              ({speedHint})
+            </span>
+          </label>
+          <input
+            type="number" min="0.1" max="2.0" step="0.01"
+            value={speedFactor}
+            onChange={e => setSpeedFactor(e.target.value)}
+            style={{borderColor: speedValid ? "" : "var(--red, #f87171)"}}
+          />
+          <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".25rem", fontStyle:"italic"}}>
+            Applies to both vertical parts and the long video. 0.95 = 5 % slower.
+          </div>
+        </div>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_parts" checked={parts} onChange={e=>setParts(e.target.checked)}/>
+        <label htmlFor="f_rt_parts">Build vertical parts (6 sentences each)</label>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_long" checked={long} onChange={e=>setLong(e.target.checked)}/>
+        <label htmlFor="f_rt_long">Build long horizontal video</label>
+      </div>
+
+      <div style={{borderTop:"1px solid var(--border)", paddingTop:".75rem", marginTop:".25rem"}}>
+        <div className="toggle-row">
+          <input type="checkbox" id="f_rt_brand" checked={brandingOn} onChange={e=>setBrandingOn(e.target.checked)}/>
+          <label htmlFor="f_rt_brand">Add branding intro (vertical parts + long video)</label>
+        </div>
+        {brandingOn && (
+          <div className="field" style={{marginTop:".4rem", marginLeft:"1.6rem", maxWidth:"22rem"}}>
+            <label>Branding file</label>
+            {brandingFiles.length > 0 ? (
+              <select value={brandingFile} onChange={e=>setBrandingFile(e.target.value)}>
+                {brandingFiles.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            ) : (
+              <input value={brandingFile} onChange={e=>setBrandingFile(e.target.value)}
+                placeholder="e.g. intro.mp4"/>
+            )}
+            <div style={{fontSize:".74rem", color:"var(--muted)", marginTop:".25rem", fontStyle:"italic"}}>
+              Prepended as an intro to every vertical part and the long video.
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="toggle-row">
+        <input type="checkbox" id="f_rt_owa" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}/>
+        <label htmlFor="f_rt_owa">Overwrite existing outputs</label>
+      </div>
+    </div>
+  );
+}
+
+// ── promotional step fields ─────────────────────────────────────────────────────
+
+function PromoBuildFields() {
+  const { manifest, characters } = useApp();
+  const gen   = manifest?.generation_config || {};
+  const promo = gen.promotional || {};
+  const [character, setCharacter] = React.useState(promo.character || (gen.characters || [])[0] || "");
+  const [situation, setSituation] = React.useState(promo.situation || gen.provided_context || "");
+  const [text,      setText]      = React.useState(promo.text || "");
+
+  PromoBuildFields._getPayload = () => ({ character, situation, text });
+
+  return (
+    <div className="fields">
+      <div className="field">
+        <label>Character</label>
+        <select value={character} onChange={e=>setCharacter(e.target.value)}>
+          <option value="">— select —</option>
+          {characters.filter(c => c !== "Narrator").map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="field">
+        <label>Image situation
+          <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(what the still shows)</span>
+        </label>
+        <textarea rows={3} value={situation} onChange={e=>setSituation(e.target.value)}
+          placeholder="e.g. standing in a cozy café holding a coffee, smiling warmly at the camera"/>
+      </div>
+      <div className="field">
+        <label>Text to say
+          <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(spoken + subtitle)</span>
+        </label>
+        <textarea rows={3} value={text} onChange={e=>setText(e.target.value)}
+          placeholder="e.g. Willst du dein Deutsch verbessern? Schau dir mein neues Video an!"/>
+      </div>
+      <div style={{fontSize:".78rem",color:"var(--muted)"}}>
+        Builds one vertical 9:16 scene: the character image, their voice, and the subtitle.
+        No intro and no horizontal version.
+      </div>
+    </div>
+  );
+}
+
+function PromoVideoFields() {
+  const [overwrite, setOverwrite] = React.useState(false);
+  // Plain subtitles (no grammar annotation) for a promo line.
+  PromoVideoFields._getPayload = () => ({ overwrite, annotated_subtitles: false });
+  return (
+    <div className="fields">
+      <div className="toggle-row">
+        <input type="checkbox" id="f_promo_ow" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}/>
+        <label htmlFor="f_promo_ow">Overwrite existing clip</label>
+      </div>
+    </div>
+  );
+}
+
 // ── Step definitions ───────────────────────────────────────────────────────────
 
 function makeSteps(projectName, manifest) {
@@ -533,6 +955,61 @@ function makeSteps(projectName, manifest) {
   const igDisabled  = videoFormat === "horizontal"
     ? "Instagram only supports vertical 9:16 Reels. Export to YouTube instead."
     : null;
+
+  const ptype = manifest?.project_metadata?.project_type_key;
+  if (ptype === "reading_together") {
+    return [
+      { id:"reading_build", num:1, title:"Build Reading Source",
+        desc:"Modernize the story, split sentences, cast characters, plan illustrations.",
+        Fields: ReadingBuildFields, payload:()=>ReadingBuildFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/reading_build` },
+      { id:"audio", num:2, title:"Generate Audio", desc:"ElevenLabs narrates each sentence.",
+        Fields: AudioFields, payload:()=>AudioFields._getPayload?.()||{}, endpoint:n=>`/projects/${n}/run/audio` },
+      { id:"reading_cast", num:3, title:"Cast Characters",
+        desc:"Create one reusable reference image per story character (animals included).",
+        Fields: ReadingCastFields, payload:()=>ReadingCastFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/reading_cast` },
+      { id:"images", num:4, title:"Generate Images", desc:"fal.ai illustrates each sentence.",
+        Fields: ImagesFields, payload:()=>ImagesFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/images` },
+      { id:"video", num:5, title:"Render Vertical Clips", desc:"One 9:16 clip per sentence (annotated).",
+        Fields: ReadingVideoFields, payload:()=>ReadingVideoFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/video` },
+      { id:"video_h", num:6, title:"Render Horizontal Clips", desc:"16:9 copies into videos/h/ for the long video.",
+        Fields: ReadingHorizFields, payload:()=>ReadingHorizFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/video` },
+      { id:"reading_assemble", num:7, title:"Assemble Parts + Long",
+        desc:"final_part1..N.mp4 (vertical) + final_long.mp4 (horizontal).",
+        Fields: ReadingAssembleFields, payload:()=>ReadingAssembleFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/reading_assemble` },
+      { id:"upload", num:8, title:"Upload to YouTube", desc:"Metadata auto-read from manifest.",
+        Fields: UploadFields, payload:()=>UploadFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/upload` },
+    ];
+  }
+
+  if (ptype === "promotional") {
+    return [
+      { id:"promo_build", num:1, title:"Build Promotional Scene",
+        desc:"Pick the character, describe the image, and write the line they say.",
+        Fields: PromoBuildFields, payload:()=>PromoBuildFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/promo_build` },
+      { id:"audio", num:2, title:"Generate Audio", desc:"ElevenLabs voices the line.",
+        Fields: AudioFields, payload:()=>AudioFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/audio` },
+      { id:"images", num:3, title:"Generate Image", desc:"fal.ai illustrates the character in the scene.",
+        Fields: ImagesFields, payload:()=>ImagesFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/images` },
+      { id:"video", num:4, title:"Render Video", desc:"Still image + voice + subtitle (vertical 9:16).",
+        Fields: PromoVideoFields, payload:()=>PromoVideoFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/video` },
+      { id:"assemble", num:5, title:"Assemble Final Video",
+        desc:"Optional background music; no intro.",
+        Fields: AssembleFields, payload:()=>AssembleFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/assemble` },
+    ];
+  }
+
   return [
     {
       id:"script", num:1,
@@ -547,7 +1024,7 @@ function makeSteps(projectName, manifest) {
       title:"Generate Audio",
       desc:"ElevenLabs TTS for narration, dialogue, and repetitions.",
       Fields: AudioFields,
-      payload: () => ({}),
+      payload: () => AudioFields._getPayload?.() || {},
       endpoint: n => `/projects/${n}/run/audio`,
     },
     {

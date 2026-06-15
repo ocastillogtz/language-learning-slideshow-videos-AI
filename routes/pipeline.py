@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from core import run_job, get_job
+from core import run_job, get_job, PROJECTS_DIR
 
 bp = Blueprint("pipeline", __name__, url_prefix="")
 
@@ -15,6 +15,9 @@ def run_script(name):
         data             = request.get_json() or {}
         char_a           = (data.get("char_a") or "").strip()
         char_b           = (data.get("char_b") or "").strip()
+        # Optional extra/full cast for multi-character conversational types.
+        raw_chars        = data.get("characters")
+        characters       = [c for c in raw_chars if c] if isinstance(raw_chars, list) else None
         location_key     = (data.get("location_key") or "").strip() or None
         project_type_key = (data.get("project_type_key") or "story").strip()
         prompt_override  = (data.get("prompt_override") or "").strip() or None
@@ -29,7 +32,8 @@ def run_script(name):
                 project_type_key=project_type_key,
                 prompt_override=prompt_override,
                 words=words,
-                dialog_count=dialog_count)
+                dialog_count=dialog_count,
+                characters=characters)
         return jsonify({"message": "Script generation started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -38,8 +42,10 @@ def run_script(name):
 @bp.route("/projects/<name>/run/audio", methods=["POST"])
 def run_audio(name):
     try:
+        data      = request.get_json(silent=True) or {}
+        overwrite = bool(data.get("overwrite", False))
         from create_audio import create_audio
-        run_job(name, "audio", create_audio, name)
+        run_job(name, "audio", create_audio, name, overwrite)
         return jsonify({"message": "Audio generation started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -83,13 +89,18 @@ def run_image_scene(name):
         prompt_override     = data.get("prompt_override", "").strip() or None
         use_location_ref    = bool(data.get("use_location_ref", True))
         characters_override = data.get("characters_override") or None  # "none"|"single_speaker"|"both"
+        cast_override       = data.get("cast")  # list[str] of asset keys (reading_cast scenes) or None
+        if isinstance(cast_override, list):
+            cast_override = [str(x) for x in cast_override]
+        else:
+            cast_override = None
         if not scene_id:
             return jsonify({"error": "scene_id required"}), 400
         from create_images import create_image_single
         step_key = "image_" + scene_id
         run_job(name, step_key, create_image_single, name, scene_id,
                 prompt_override=prompt_override, use_location_ref=use_location_ref,
-                characters_override=characters_override)
+                characters_override=characters_override, cast_override=cast_override)
         return jsonify({"message": "Image regeneration started", "step_key": step_key})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -104,10 +115,177 @@ def run_video(name):
         footnote            = str(data.get("footnote", "")).strip()
         raw_pause           = data.get("inter_pause_ms")
         inter_pause_ms      = int(raw_pause) if raw_pause not in (None, "") else None
+        # Optional format override + output subdir (reading_together horizontal long pass)
+        fmt    = (data.get("format_override") or "").strip() or None
+        subdir = (data.get("out_subdir") or "").strip()
+        step   = "video_h" if subdir else "video"
+        # Annotation text size multiplier (1.0 = default). Clamped to a sane range.
+        raw_fs           = data.get("annot_font_scale")
+        try:
+            annot_font_scale = float(raw_fs) if raw_fs not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            annot_font_scale = 1.0
+        annot_font_scale = max(0.5, min(2.5, annot_font_scale))
+        regen_annotations = bool(data.get("regen_annotations", False))
+        # reading_together pre-pause (ms) before each sentence's narration, except
+        # the first. None → use the config default; explicit value (incl. 0) wins.
+        raw_pre_pause     = data.get("read_pre_pause_ms")
+        read_pre_pause_ms = int(raw_pre_pause) if raw_pre_pause not in (None, "") else None
         from create_video import create_videos
-        run_job(name, "video", create_videos, name, overwrite, annotated_subtitles, footnote,
-                inter_pause_ms)
-        return jsonify({"message": "Video rendering started"})
+        run_job(name, step, create_videos, name, overwrite, annotated_subtitles, footnote,
+                inter_pause_ms, fmt, subdir, annot_font_scale, regen_annotations,
+                read_pre_pause_ms)
+        return jsonify({"message": "Video rendering started", "step_key": step})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/annotations/reset", methods=["POST"])
+def reset_annotations(name):
+    """Clear cached grammar annotation(s) so they re-prompt OpenAI on the next render.
+
+    Body: {"scene_id": "<id>"} resets one scene; omit scene_id to reset all.
+    Also deletes the affected rendered clip(s) so a normal re-render (no global
+    overwrite needed) rebuilds them with the fresh annotation.
+    """
+    try:
+        data     = request.get_json(silent=True) or {}
+        scene_id = (data.get("scene_id") or "").strip()
+        videos   = PROJECTS_DIR / name / "videos"
+        removed_cache = 0
+        removed_clips = 0
+        if videos.exists():
+            # annotation JSON + PNG live in any videos/**/_annot directory
+            for annot_dir in videos.rglob("_annot"):
+                if not annot_dir.is_dir():
+                    continue
+                patterns = ([f"{scene_id}.json", f"{scene_id}.png"]
+                            if scene_id else ["*.json", "*.png"])
+                for pat in patterns:
+                    for f in annot_dir.glob(pat):
+                        try:
+                            f.unlink(); removed_cache += 1
+                        except Exception:
+                            pass
+            # delete the rendered clip(s) so they rebuild on the next render
+            if scene_id:
+                for clip in videos.rglob(f"{scene_id}.mp4"):
+                    try:
+                        clip.unlink(); removed_clips += 1
+                    except Exception:
+                        pass
+        return jsonify({"scene_id": scene_id or None,
+                        "removed_cache": removed_cache,
+                        "removed_clips": removed_clips})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/annotations/<scene_id>", methods=["GET"])
+def get_scene_annotation(name, scene_id):
+    """Return the grammar annotation (tokens + spans) for one scene, from cache."""
+    try:
+        from annotation_store import read_scene_annotation
+        return jsonify(read_scene_annotation(name, scene_id))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/annotations/<scene_id>", methods=["POST"])
+def save_scene_annotation_route(name, scene_id):
+    """Save an edited annotation, or (with {"regenerate": true}) re-prompt OpenAI.
+
+    Either path rewrites the per-scene cache and deletes the rendered clip(s) so a
+    normal re-render applies the change. Editing reuses the cache → no API call.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        if data.get("regenerate"):
+            from annotation_store import regenerate_scene_annotation
+            return jsonify(regenerate_scene_annotation(name, scene_id, force=True))
+        from annotation_store import save_scene_annotation
+        return jsonify(save_scene_annotation(name, scene_id,
+                                             data.get("tokens"), data.get("spans")))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── promotional pipeline ───────────────────────────────────────────────────────
+
+@bp.route("/projects/<name>/run/promo_build", methods=["POST"])
+def run_promo_build(name):
+    try:
+        data      = request.get_json() or {}
+        character = (data.get("character") or "").strip()
+        situation = (data.get("situation") or "").strip()
+        text      = (data.get("text") or "").strip()
+        if not character or not text:
+            return jsonify({"error": "character and text are required"}), 400
+        from create_promotional import build_promotional_project
+        run_job(name, "promo_build", build_promotional_project, name, character, situation, text)
+        return jsonify({"message": "Promotional scene build started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── reading_together pipeline ──────────────────────────────────────────────────
+
+@bp.route("/projects/<name>/run/reading_build", methods=["POST"])
+def run_reading_build(name):
+    try:
+        data      = request.get_json() or {}
+        raw_pp    = data.get("per_part")
+        raw_mw    = data.get("max_words")
+        per_part  = int(raw_pp) if raw_pp not in (None, "") else None
+        max_words = int(raw_mw) if raw_mw not in (None, "") else None
+        from create_reading_source import build_reading_project
+        run_job(name, "reading_build", build_reading_project, name, per_part, max_words)
+        return jsonify({"message": "Reading source build started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/run/reading_cast", methods=["POST"])
+def run_reading_cast(name):
+    try:
+        data       = request.get_json() or {}
+        regenerate = bool(data.get("regenerate", False))
+        reanalyze  = bool(data.get("reanalyze", True))
+        # {story_role: existing_character_key} — cast your own characters in roles.
+        raw_map      = data.get("cast_mapping")
+        cast_mapping = raw_map if isinstance(raw_map, dict) else None
+        from create_reading_source import materialize_reading_cast
+        run_job(name, "reading_cast", materialize_reading_cast, name, regenerate, reanalyze,
+                cast_mapping)
+        return jsonify({"message": "Cast materialization started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/run/reading_assemble", methods=["POST"])
+def run_reading_assemble(name):
+    try:
+        data          = request.get_json() or {}
+        # Use (x or "") so an explicit JSON null (e.g. branding_file when mode is
+        # "none") doesn't blow up on .strip().
+        bg_audio_name = (data.get("bg_audio_name") or "office").strip() or "office"
+        overwrite     = bool(data.get("overwrite", False))
+        raw_speed     = data.get("speed_factor")
+        speed_factor  = float(raw_speed) if raw_speed not in (None, "") else None
+        branding_file = (data.get("branding_file") or "").strip() or None
+        branding_mode = (data.get("branding_mode") or "none").strip() or "none"
+        if branding_mode not in ("none", "intro", "outro", "both"):
+            branding_mode = "none"
+        make_parts    = bool(data.get("make_parts", True))
+        make_long     = bool(data.get("make_long", True))
+        raw_pp        = data.get("per_part")
+        per_part      = int(raw_pp) if raw_pp not in (None, "") else None
+        from assemble_reading import assemble_reading
+        run_job(name, "reading_assemble", assemble_reading, name, bg_audio_name, overwrite,
+                speed_factor, branding_file, branding_mode, make_parts, make_long, per_part)
+        return jsonify({"message": "Reading assembly started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -116,12 +294,14 @@ def run_video(name):
 def run_assemble(name):
     try:
         data          = request.get_json() or {}
-        bg_audio_name = data.get("bg_audio_name", "office").strip()
+        # Use (x or "") so an explicit JSON null (e.g. branding_file when mode is
+        # "none") doesn't blow up on .strip().
+        bg_audio_name = (data.get("bg_audio_name") or "office").strip() or "office"
         overwrite     = bool(data.get("overwrite", False))
         raw_speed     = data.get("speed_factor")
         speed_factor  = float(raw_speed) if raw_speed not in (None, "") else None
-        branding_file = data.get("branding_file", "").strip() or None
-        branding_mode = data.get("branding_mode", "none").strip() or "none"
+        branding_file = (data.get("branding_file") or "").strip() or None
+        branding_mode = (data.get("branding_mode") or "none").strip() or "none"
         if branding_mode not in ("none", "intro", "outro", "both"):
             branding_mode = "none"
         from assemble_video import assemble_video

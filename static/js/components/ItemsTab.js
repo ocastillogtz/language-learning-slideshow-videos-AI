@@ -1,5 +1,5 @@
 // ItemsTab.js  — displays scenes[] from the new manifest schema
-const { useState } = React;
+const { useState, useEffect } = React;
 
 // ── URL helpers ────────────────────────────────────────────────────────────────
 
@@ -57,9 +57,167 @@ function AudioRegenBtn({ projectName, sceneId, onDone }) {
   );
 }
 
+// ── Grammar annotation viewer / editor ─────────────────────────────────────────
+
+function Chip({ label, title, onRemove }) {
+  return (
+    <span title={title} style={{display:"inline-flex", alignItems:"center", gap:".3rem",
+      fontSize:".72rem", padding:".12rem .45rem", borderRadius:"5px",
+      background:"var(--surface-2)", border:"1px solid var(--border)", color:"var(--fg)"}}>
+      {label}
+      {onRemove && (
+        <span onClick={onRemove} title="Remove" role="button"
+          style={{cursor:"pointer", color:"var(--muted)", fontWeight:700, lineHeight:1}}>×</span>
+      )}
+    </span>
+  );
+}
+
+function AnnotationPanel({ projectName, sceneId }) {
+  const { toast } = useApp();
+  const [open,    setOpen]    = useState(false);
+  const [state,   setState]   = useState(null);   // {exists, annotatable, text}
+  const [tokens,  setTokens]  = useState([]);
+  const [spans,   setSpans]   = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [busy,    setBusy]    = useState(false);
+  const [dirty,   setDirty]   = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const d = await fetch(`/projects/${projectName}/annotations/${sceneId}`).then(r => r.json());
+      if (d.error) throw new Error(d.error);
+      setState(d); setTokens(d.tokens || []); setSpans(d.spans || []); setDirty(false);
+    } catch (e) { toast("Error", e.message, "err"); }
+    finally { setLoading(false); }
+  }
+  function toggle() { const n = !open; setOpen(n); if (n && state === null) load(); }
+
+  function removeAttr(i, key) {
+    setTokens(ts => ts.map((t, idx) => {
+      if (idx !== i) return t;
+      const c = { ...t }; delete c[key];
+      if (key === "case") delete c.gender;   // gender only meaningful with a case
+      return c;
+    }));
+    setDirty(true);
+  }
+  function removeSpan(si) { setSpans(ss => ss.filter((_, idx) => idx !== si)); setDirty(true); }
+
+  async function save() {
+    setBusy(true);
+    try {
+      const d = await apiPost(`/projects/${projectName}/annotations/${sceneId}`, { tokens, spans });
+      setState(d); setTokens(d.tokens || []); setSpans(d.spans || []); setDirty(false);
+      toast("Saved", "Annotation updated — re-render this scene's clips to apply.", "ok");
+    } catch (e) { toast("Error", e.message, "err"); }
+    finally { setBusy(false); }
+  }
+  async function regenerate() {
+    setBusy(true);
+    try {
+      const d = await apiPost(`/projects/${projectName}/annotations/${sceneId}`, { regenerate: true });
+      setState(d); setTokens(d.tokens || []); setSpans(d.spans || []); setDirty(false);
+      toast("Regenerated", "Fresh annotation from OpenAI — re-render to apply.", "ok");
+    } catch (e) { toast("Error", e.message, "err"); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{marginTop:".8rem", borderTop:"1px solid var(--border)", paddingTop:".6rem"}}>
+      <div onClick={toggle} style={{display:"flex", alignItems:"center", gap:".4rem",
+        cursor:"pointer", fontSize:".8rem", fontWeight:600, color:"var(--fg)"}}>
+        <span>{open ? "▾" : "▸"}</span> Grammar annotation
+        <span style={{fontWeight:400, color:"var(--muted)", fontSize:".74rem"}}>
+          (view &amp; edit — remove what you don’t want)
+        </span>
+      </div>
+
+      {open && (
+        <div style={{marginTop:".5rem"}}>
+          {loading && <div style={{fontSize:".78rem", color:"var(--muted)"}}>Loading…</div>}
+
+          {!loading && state && !state.annotatable && (
+            <div style={{fontSize:".78rem", color:"var(--muted)"}}>
+              This scene isn’t grammar-annotated (narration/repetition or non-dialogue).
+            </div>
+          )}
+
+          {!loading && state && state.annotatable && !state.exists && (
+            <div style={{fontSize:".78rem", color:"var(--muted)"}}>
+              No annotation cached for this sentence yet.
+              <div style={{marginTop:".5rem"}}>
+                <button className="btn-ghost" onClick={regenerate} disabled={busy}
+                  style={{fontSize:".8rem"}}>
+                  {busy ? "Generating…" : "✨ Generate annotation (OpenAI)"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!loading && state && state.exists && (
+            <>
+              <div style={{display:"flex", flexDirection:"column"}}>
+                {tokens.map((t, i) => (
+                  <div key={i} style={{display:"flex", alignItems:"center", gap:".4rem",
+                    flexWrap:"wrap", padding:".22rem 0", borderBottom:"1px solid var(--border)"}}>
+                    <span style={{minWidth:"7.5rem", fontWeight:600}}>{t.text}</span>
+                    {t.case && <Chip label={`${t.case}${t.gender ? " · " + t.gender : ""}`}
+                      title="case · gender" onRemove={() => removeAttr(i, "case")}/>}
+                    {t.role && <Chip label={t.role} title="role" onRemove={() => removeAttr(i, "role")}/>}
+                    {t.tense && <Chip label={t.tense} title="tense" onRemove={() => removeAttr(i, "tense")}/>}
+                    {t.infinitive && <Chip label={"→ " + t.infinitive} title="infinitive"
+                      onRemove={() => removeAttr(i, "infinitive")}/>}
+                    {t.group_id && <Chip label={"grp " + t.group_id} title="separable-verb group"
+                      onRemove={() => removeAttr(i, "group_id")}/>}
+                  </div>
+                ))}
+              </div>
+
+              {spans.length > 0 && (
+                <div style={{marginTop:".5rem"}}>
+                  <div style={{fontSize:".74rem", color:"var(--muted)", marginBottom:".25rem"}}>
+                    Subordinate-clause boxes
+                  </div>
+                  <div style={{display:"flex", flexWrap:"wrap", gap:".4rem"}}>
+                    {spans.map((s, si) => {
+                      const words = (s.token_ids || []).map(id => tokens[id]?.text).filter(Boolean).join(" ");
+                      return <Chip key={si} label={`${(s.type || "").toUpperCase()}: ${words}`}
+                        title="Nebensatz box" onRemove={() => removeSpan(si)}/>;
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="run-row" style={{marginTop:".7rem", gap:".5rem", flexWrap:"wrap"}}>
+                <button className="btn-primary" onClick={save} disabled={busy || !dirty}
+                  style={{fontSize:".8rem"}}>
+                  {busy ? "Saving…" : "Save annotation"}
+                </button>
+                <button className="btn-ghost" onClick={regenerate} disabled={busy}
+                  style={{fontSize:".8rem"}}
+                  title="Discard edits and re-prompt OpenAI for a fresh annotation">
+                  ↻ Regenerate (OpenAI)
+                </button>
+                {dirty && <span style={{fontSize:".74rem", color:"var(--muted)", alignSelf:"center"}}>
+                  unsaved changes
+                </span>}
+              </div>
+              <div style={{fontSize:".72rem", color:"var(--muted)", marginTop:".4rem", fontStyle:"italic"}}>
+                Edits are cached (no OpenAI call) and applied on the next render of this scene’s clips.
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Per-scene image regen button ───────────────────────────────────────────────
 
-function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charactersMode, onDone }) {
+function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charactersMode, cast, onDone }) {
   const { toast, startPoll, reloadManifest } = useApp();
   const [running, setRunning] = useState(false);
   const [log,     setLog]     = useState("");
@@ -69,12 +227,14 @@ function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charact
     const promptOverride = promptEl?.value.trim() || null;
     setRunning(true); setLog("");
     try {
-      const d = await apiPost(`/projects/${projectName}/run/image_scene`, {
+      const body = {
         scene_id:            sceneId,
         prompt_override:     promptOverride,
         use_location_ref:    useLocationRef,
         characters_override: charactersMode,
-      });
+      };
+      if (cast != null) body.cast = cast;   // reading scenes: explicit character selection
+      const d = await apiPost(`/projects/${projectName}/run/image_scene`, body);
       const stepKey = d.step_key || `image_${sceneId}`;
       startPoll(projectName, stepKey, async (s) => {
         setRunning(false);
@@ -156,6 +316,7 @@ function SceneEditZone({ scene, projectName, onSaved }) {
 function _toCharMode(refType) {
   if (refType === "none")          return "none";
   if (refType === "single_speaker") return "single_speaker";
+  if (refType === "reading_cast")   return "reading_cast";
   return "both";
 }
 
@@ -165,7 +326,7 @@ const CHAR_MODE_OPTIONS = [
   { value: "none",           label: "None (text only)" },
 ];
 
-function SceneCard({ scene, projectName, onChanged }) {
+function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
   const [open,           setOpen]           = useState(false);
   const [editing,        setEditing]        = useState(false);
   const [imgVersion,     setImgVersion]     = useState(Date.now());
@@ -173,6 +334,16 @@ function SceneCard({ scene, projectName, onChanged }) {
   const [charactersMode, setCharactersMode] = useState(
     _toCharMode(scene.image?.reference_type)
   );
+  // Cast-picker scenes: reading_together scenes AND multi-character dialog scenes
+  // both choose which characters appear from a list (vs the none/single/both radio).
+  const isReadingCast = scene.image?.reference_type === "reading_cast"
+    || scene.image?.reference_type === "multi" || !!scene._reading;
+  const [selectedCast, setSelectedCast] = useState(() => new Set(scene.image?._cast || []));
+  const toggleCast = (key) => setSelectedCast(prev => {
+    const n = new Set(prev);
+    n.has(key) ? n.delete(key) : n.add(key);
+    return n;
+  });
 
   const isNarration  = !!scene._is_narration;
   const isRepetition = !!scene._is_repetition;
@@ -202,6 +373,11 @@ function SceneCard({ scene, projectName, onChanged }) {
   return (
     <div className={"item-card" + (open ? " open" : "")}>
       <div className="item-head" onClick={() => setOpen(o => !o)}>
+        {num != null && (
+          <div className="item-seq" style={{color:"var(--muted)", fontSize:".72rem",
+            fontWeight:600, minWidth:"2rem", textAlign:"right",
+            fontVariantNumeric:"tabular-nums"}}>#{num}</div>
+        )}
         <div className="item-index" style={labelStyle}>{label}</div>
         <div className="item-text" style={{flex:1}}>{text}</div>
         {hasImg && (
@@ -277,6 +453,41 @@ function SceneCard({ scene, projectName, onChanged }) {
           {scene.image && (
             <div style={{marginTop:".8rem", display:"flex", flexDirection:"column", gap:".5rem"}}>
               {/* Characters in image */}
+              {isReadingCast ? (
+              <div>
+                <div style={{fontSize:".78rem", fontWeight:500, marginBottom:".3rem",
+                  color:"var(--fg)"}}>Characters in image</div>
+                {(castOptions && castOptions.length) ? (
+                  <div style={{display:"flex", gap:".4rem", flexWrap:"wrap"}}>
+                    {castOptions.map(opt => {
+                      const on = selectedCast.has(opt.key);
+                      return (
+                        <label key={opt.key}
+                          style={{display:"flex", alignItems:"center", gap:".3rem",
+                            fontSize:".76rem", cursor:"pointer", padding:".25rem .55rem",
+                            borderRadius:"5px",
+                            border:`1px solid ${on ? "var(--accent)" : "var(--border)"}`,
+                            background: on ? "rgba(var(--accent-rgb,99,102,241),.1)" : "var(--surface-2)",
+                            color: on ? "var(--accent)" : "var(--muted)"}}>
+                          <input type="checkbox" checked={on}
+                            onChange={() => toggleCast(opt.key)}
+                            style={{display:"none"}}/>
+                          {on ? "✓ " : ""}{opt.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{fontSize:".76rem", color:"var(--muted)"}}>
+                    No cast yet — run the <strong>Cast Characters</strong> step first.
+                  </div>
+                )}
+                <div style={{fontSize:".72rem", color:"var(--muted)", marginTop:".25rem",
+                  fontStyle:"italic"}}>
+                  Pick which characters to composite into this scene. None selected → scenery only.
+                </div>
+              </div>
+              ) : (
               <div>
                 <div style={{fontSize:".78rem", fontWeight:500, marginBottom:".3rem",
                   color:"var(--fg)"}}>Characters in image</div>
@@ -309,9 +520,10 @@ function SceneCard({ scene, projectName, onChanged }) {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Location ref toggle */}
-              {charactersMode !== "none" && (
+              {charactersMode !== "none" && !isReadingCast && (
                 <div style={{display:"flex", flexDirection:"column", gap:".2rem"}}>
                   <div className="toggle-row" style={{fontSize:".78rem"}}>
                     <input type="checkbox" id={`loc-ref-${scene.id}`}
@@ -337,6 +549,7 @@ function SceneCard({ scene, projectName, onChanged }) {
                 <ImageRegenBtn projectName={projectName} sceneId={scene.id}
                   promptId={promptId} useLocationRef={useLocationRef}
                   charactersMode={charactersMode}
+                  cast={isReadingCast ? Array.from(selectedCast) : null}
                   onDone={m => { setImgVersion(Date.now()); onChanged && onChanged(m); }}/>
               )}
               {scene.audio?.type === "tts" && (
@@ -344,6 +557,11 @@ function SceneCard({ scene, projectName, onChanged }) {
                   onDone={m => { onChanged && onChanged(m); }}/>
               )}
             </div>
+          )}
+
+          {/* Grammar annotation viewer / editor (dialogue & reading sentences) */}
+          {scene.audio?.type === "tts" && !isNarration && !isRepetition && (
+            <AnnotationPanel projectName={projectName} sceneId={scene.id}/>
           )}
         </div>
       )}
@@ -353,7 +571,7 @@ function SceneCard({ scene, projectName, onChanged }) {
 
 // ── Pause scene card ───────────────────────────────────────────────────────────
 
-function PauseCard({ scene, projectName, onChanged }) {
+function PauseCard({ scene, projectName, onChanged, num }) {
   const { toast } = useApp();
   const [durMs,   setDurMs]   = useState(String(scene.duration_ms ?? 350));
   const [saving,  setSaving]  = useState(false);
@@ -380,6 +598,11 @@ function PauseCard({ scene, projectName, onChanged }) {
   return (
     <div className="item-card">
       <div className="item-head" style={{cursor:"default"}}>
+        {num != null && (
+          <div className="item-seq" style={{color:"var(--muted)", fontSize:".72rem",
+            fontWeight:600, minWidth:"2rem", textAlign:"right",
+            fontVariantNumeric:"tabular-nums"}}>#{num}</div>
+        )}
         <div className="item-index"
           style={{background:"var(--border)", color:"var(--muted)", fontSize:".62rem",
                   letterSpacing:".04em"}}>
@@ -419,10 +642,82 @@ function PauseCard({ scene, projectName, onChanged }) {
   );
 }
 
+// ── Reading cast gallery ───────────────────────────────────────────────────────
+
+function ReadingCastGallery({ castChars, castAssets, allChars }) {
+  if (!castChars || !castChars.length) return null;
+  return (
+    <div className="item-card" style={{padding:".9rem 1rem", marginBottom:".7rem"}}>
+      <div style={{fontWeight:600, marginBottom:".6rem"}}>
+        Story cast <span style={{color:"var(--muted)", fontWeight:400}}>({castChars.length})</span>
+      </div>
+      <div style={{display:"flex", gap:".8rem", flexWrap:"wrap"}}>
+        {castChars.map(c => {
+          const key = castAssets ? castAssets[c.name] : null;
+          const ch  = (key && allChars) ? allChars[key] : null;
+          // Auto-generated rt_ characters expose ref_image_file_path; an existing
+          // character cast in this role uses its own thumbnail / 3-4 art instead.
+          const ref = ch && (ch.ref_image_file_path || ch.thumbnail_file_path || ch.art_34left_file_path);
+          const mapped = !!(key && !String(key).startsWith("rt_"));
+          return (
+            <div key={c.name} style={{width:"118px", display:"flex", flexDirection:"column", alignItems:"center"}}>
+              <div style={{width:"118px", height:"118px", borderRadius:"8px", overflow:"hidden",
+                background:"var(--surface-2)", border:"1px solid var(--border)",
+                display:"flex", alignItems:"center", justifyContent:"center"}}>
+                {ref ? (
+                  <img src={`/asset-files/${ref}?t=${Date.now()}`} alt={c.name}
+                    style={{width:"100%", height:"100%", objectFit:"cover"}}/>
+                ) : (
+                  <span style={{fontSize:".7rem", color:"var(--muted)", textAlign:"center", padding:"0 .3rem"}}>
+                    not generated
+                  </span>
+                )}
+              </div>
+              <div style={{fontSize:".82rem", fontWeight:600, marginTop:".35rem", textAlign:"center"}}>{c.name}</div>
+              <div style={{fontSize:".7rem", color:"var(--muted)"}}>{c.kind}</div>
+              {mapped && (
+                <div style={{fontSize:".66rem", color:"var(--accent)", fontWeight:600, marginTop:".1rem",
+                  textAlign:"center"}}>
+                  ★ played by {(ch && ch.name) || key}
+                </div>
+              )}
+              <div title={c.description}
+                style={{fontSize:".7rem", color:"var(--muted)", textAlign:"center", marginTop:".15rem",
+                  display:"-webkit-box", WebkitLineClamp:3, WebkitBoxOrient:"vertical", overflow:"hidden"}}>
+                {c.description}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Main tab ───────────────────────────────────────────────────────────────────
 
 function ItemsTab({ projectName }) {
   const { manifest, reloadManifest } = useApp();
+  const [allChars, setAllChars] = useState({});
+
+  useEffect(() => {
+    fetch("/assets/characters").then(r => r.json()).then(d => setAllChars(d || {})).catch(() => {});
+  }, [projectName]);
+
+  // Number every scene by its position in the manifest order (matches scene_NNN / video order)
+  const numById = {};
+  (manifest?.scenes || []).forEach((s, i) => { numById[s.id] = i + 1; });
+
+  // reading_together cast: descriptions + asset-key map (for the gallery + per-scene picker)
+  const reading     = manifest?.generation_config?.reading || {};
+  const castChars   = reading.characters || [];
+  const castAssets  = reading.cast_assets || {};
+  // Per-scene character picker options: reading projects use the rt_ cast-asset map;
+  // multi-character conversational projects fall back to the project's character list.
+  const projectCast = manifest?.generation_config?.characters || [];
+  const castOptions = Object.keys(castAssets).length
+    ? Object.entries(castAssets).map(([name, key]) => ({ key, label: name }))
+    : projectCast.map(c => ({ key: c, label: c }));
 
   const scenes = (manifest?.scenes || []).filter(s =>
     // Show TTS, SFX, narration scenes AND pure pause scenes
@@ -444,11 +739,13 @@ function ItemsTab({ projectName }) {
 
   return (
     <div className="items-grid">
+      <ReadingCastGallery castChars={castChars} castAssets={castAssets} allChars={allChars}/>
       {scenes.map(scene =>
         scene.description === "pause" ? (
           <PauseCard
             key={scene.id}
             scene={scene}
+            num={numById[scene.id]}
             projectName={projectName}
             onChanged={handleChanged}
           />
@@ -456,6 +753,8 @@ function ItemsTab({ projectName }) {
           <SceneCard
             key={scene.id}
             scene={scene}
+            num={numById[scene.id]}
+            castOptions={castOptions}
             projectName={projectName}
             onChanged={handleChanged}
           />

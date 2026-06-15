@@ -98,8 +98,25 @@ def get_project(name):
         mp = PROJECTS_DIR / name / "project_manifest.json"
         if not mp.exists():
             return jsonify({"error": "Not found"}), 404
+        # Self-heal: back-fill image/audio paths for files that exist on disk but
+        # were never written to the manifest (e.g. an interrupted generation run).
+        try:
+            from reconcile import reconcile_media_paths
+            reconcile_media_paths(name)
+        except Exception as _e:
+            pass
         with open(mp, encoding="utf-8") as f:
             return jsonify(json.load(f))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/reconcile", methods=["POST"])
+def reconcile_project(name):
+    """Scan images/ and audio/ and back-fill any missing file paths into the manifest."""
+    try:
+        from reconcile import reconcile_media_paths
+        return jsonify(reconcile_media_paths(name))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

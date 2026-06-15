@@ -66,6 +66,12 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 _STYLE_TOKENS:   str = ""
 _FRAMING_TOKENS: str = ""
 
+# Max distinct characters drawn into ONE scene image. The video's overall cast can be
+# larger (multi-character types); each individual scene is capped here so the image
+# model keeps every character on-model. Overridable via config.ini [script]
+# max_scene_characters. Keep >= 1 (1 = always solo, 2 = speaker + one other, …).
+MAX_SCENE_CHARACTERS = 2
+
 
 def _load_style_tokens() -> None:
     """Populate module-level style/framing vars from config (called once)."""
@@ -86,6 +92,7 @@ def _build_prompt(
     manifest: dict,
     chars_data: dict,
     all_locs: dict,
+    max_scene_chars: int = MAX_SCENE_CHARACTERS,
 ) -> str:
     """
     Inject runtime values into the project_type's description_for_prompt template.
@@ -142,6 +149,32 @@ def _build_prompt(
         PROVIDED_CONTEXT         = gen.get("provided_context", ""),
         PROVIDED_LEARNING_POINTS = gen.get("provided_learning_points", ""),
     )
+
+    # Multi-character conversational types: introduce any extra cast members and the
+    # multi-speaker rules by APPENDING to the (untouched) two-person template above.
+    cast = gen.get("characters", []) or []
+    if project_type.get("supports_multi_character") and len(cast) > 2:
+        def _cast_desc(nm):
+            cd = chars_data.get(nm, {})
+            return f"{cd.get('fixed_description','') or ''}, {cd.get('variable_description','') or ''}".strip(", ")
+        extra_lines = "\n".join(f"  {nm} — {_cast_desc(nm)}" for nm in cast[2:])
+        roster = ", ".join(cast)
+        prompt += (
+            "\n\n=== ADDITIONAL CHARACTERS (multi-character conversation) ===\n"
+            f"This conversation has MORE than two participants. The full cast is: {roster}.\n"
+            f"In addition to {char_a} and {char_b} (described above), these characters also take "
+            f"part and may speak and appear on screen:\n{extra_lines}\n\n"
+            "Rules when there are multiple characters:\n"
+            f"- ANY cast member ({roster}) may be the speaker of a line. Put that character's "
+            "EXACT name in the \"speaker\" field.\n"
+            "- Distribute the lines naturally among the participants; don't silently drop anyone.\n"
+            "- For EVERY dialog line, ALSO include a \"present_characters\" array with the EXACT names "
+            "of the characters visible in that line's illustration. Always include the speaker. To keep "
+            f"each illustration clean, list AT MOST {max_scene_chars} characters per line (the speaker "
+            f"plus up to {max(0, max_scene_chars - 1)} other). The conversation as a whole still "
+            "involves the full cast — just don't crowd a single image. Use this instead of "
+            "\"scene_characters\".\n"
+        )
     return prompt
 
 
@@ -260,6 +293,27 @@ def _action_both_prompt(char_a: str, char_a_data: dict,
     )
 
 
+def _action_multi_prompt(present: list, chars_data: dict, loc_desc: str, scene_visual: str,
+                         framing_tokens: str = None) -> str:
+    """N present characters sharing an action scene (multi-character conversation)."""
+    _load_style_tokens()
+    framing = framing_tokens or _FRAMING_TOKENS
+    roster  = "\n".join(
+        f"{nm}: {chars_data.get(nm, {}).get('fixed_description', '') or ''}" for nm in present
+    )
+    return (
+        f"{_STYLE_TOKENS}\n"
+        f"FRAMING: {framing}\n\n"
+        f"Scene at: {loc_desc}\n"
+        f"{roster}\n\n"
+        f"Action: {scene_visual}\n\n"
+        "Show all of the listed characters actively engaged in the described scene. "
+        "Match exact clothing, hair, and facial features from reference. "
+        "Integrate them naturally into the environment. "
+        "No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
+    )
+
+
 # =============================================================================
 # SCENE LIST BUILDER
 # =============================================================================
@@ -271,6 +325,7 @@ def build_scene_list(
     chars_data: dict,
     all_locs: dict,
     repetition_texts: list[str] | None = None,
+    max_scene_chars: int = MAX_SCENE_CHARACTERS,
 ) -> list[dict]:
     """
     Convert GPT output + project_type rules into a flat list of universal scene objects.
@@ -280,6 +335,8 @@ def build_scene_list(
     pipe       = manifest["pipeline_config"]
     loc_key    = gen.get("location_key") or ""
     char_names = gen["characters"]
+    cast       = list(char_names)
+    multi      = bool(project_type.get("supports_multi_character")) and len(cast) > 2
     char_a, char_b = char_names[0], char_names[1]
     char_a_data    = chars_data[char_a]
     char_b_data    = chars_data[char_b]
@@ -294,13 +351,11 @@ def build_scene_list(
     framing_tokens = project_type.get("framing_tokens") or None
 
     narrator_voice = chars_data.get("Narrator", {}).get("voice_id", "")
-    char_a_voice   = char_a_data.get("voice_id", "")
-    char_b_voice   = char_b_data.get("voice_id", "")
+    # Voice per cast member (covers any number of speakers, not just A/B).
+    voices = {nm: chars_data.get(nm, {}).get("voice_id", "") for nm in cast}
 
     def _voice(speaker: str) -> str:
-        if speaker == char_a: return char_a_voice
-        if speaker == char_b: return char_b_voice
-        return narrator_voice
+        return voices.get(speaker) or narrator_voice
 
     scenes: list[dict] = []
     idx = 1
@@ -329,14 +384,17 @@ def build_scene_list(
             nar_text = ""
         if not nar_text:
             logger.warning("Narration text is empty — GPT may have omitted or misformatted it")
+        nar_img = {
+            "file_path": None,
+            "prompt_to_create": _narrator_image_prompt(loc_desc, framing_tokens),
+            "reference_type": "multi" if multi else "both",
+        }
+        if multi:
+            nar_img["_cast"] = list(cast)[:max_scene_chars]
         scenes.append({
-            "id": _sid(), "description": "narration", "characters": [char_a, char_b],
+            "id": _sid(), "description": "narration", "characters": list(cast),
             "_is_narration": True,
-            "image": {
-                "file_path": None,
-                "prompt_to_create": _narrator_image_prompt(loc_desc, framing_tokens),
-                "reference_type": "both",
-            },
+            "image": nar_img,
             "audio": {"type": "tts", "file_path": None, "tts_text": nar_text,
                       "voice_id": narrator_voice, "duration_ms": None},
             "subtitle_text": nar_text, "duration_ms": None,
@@ -356,8 +414,28 @@ def build_scene_list(
             text           = item.get("text", "")
             scene_visual   = item.get("scene_visual", "")
             scene_chars    = item.get("scene_characters", "speaker_only")
+            img_extra      = {}
 
-            if scene_chars == "both":
+            if multi:
+                # Resolve who is visible in this line's illustration. Prefer the
+                # model's "present_characters"; always ensure the speaker is included.
+                present = item.get("present_characters")
+                names   = []
+                if isinstance(present, list):
+                    for nm in present:
+                        nm = nm.strip() if isinstance(nm, str) else ""
+                        if nm in chars_data and nm not in names:
+                            names.append(nm)
+                if speaker in chars_data and speaker not in names:
+                    names.insert(0, speaker)
+                if not names:
+                    names = [speaker] if speaker in chars_data else cast[:1]
+                # Cap how many characters share a single illustration (speaker kept first).
+                names = names[:max(1, max_scene_chars)]
+                img_prompt     = _action_multi_prompt(names, chars_data, loc_desc, scene_visual, framing_tokens)
+                reference_type = "multi"
+                img_extra      = {"_cast": names}
+            elif scene_chars == "both":
                 img_prompt     = _action_both_prompt(char_a, char_a_data, char_b, char_b_data, loc_desc, scene_visual, framing_tokens)
                 reference_type = "both"
             else:
@@ -365,18 +443,20 @@ def build_scene_list(
                 img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual, framing_tokens)
                 reference_type = "single_speaker"
 
+            image_obj = {
+                "file_path": None,
+                "prompt_to_create": img_prompt,
+                "reference_type": reference_type,
+                "speaker": speaker,
+            }
+            image_obj.update(img_extra)
             scenes.append({
                 "id": _sid(),
                 "description": f"dialog_{i:03d} [{speaker}]",
                 "characters": [speaker],
                 "scene_visual":     scene_visual,    # stored for UI display
                 "scene_characters": scene_chars,     # stored for UI display
-                "image": {
-                    "file_path": None,
-                    "prompt_to_create": img_prompt,
-                    "reference_type": reference_type,
-                    "speaker": speaker,
-                },
+                "image": image_obj,
                 "audio": {"type": "tts", "file_path": None, "tts_text": text,
                           "voice_id": _voice(speaker), "duration_ms": None},
                 "subtitle_text": text, "duration_ms": None,
@@ -421,6 +501,7 @@ def create_script(
     prompt_override: str | None = None,
     words: list[str] | None = None,
     dialog_count: int | None = None,
+    characters: list[str] | None = None,
 ) -> dict:
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
@@ -454,20 +535,29 @@ def create_script(
     # Sync video_format in manifest from the (resolved) project type
     manifest["video_info"]["video_format"] = project_type.get("format", "vertical")
 
-    for name in (char_a, char_b):
+    # Full speaking cast: char_a + char_b first, then any extra characters (multi-
+    # character conversational types). Order preserved, de-duplicated, blanks dropped.
+    cast = []
+    for nm in [char_a, char_b, *(characters or [])]:
+        nm = (nm or "").strip()
+        if nm and nm not in cast:
+            cast.append(nm)
+    for name in cast:
         if name not in chars_data:
             raise ValueError(f"Character '{name}' not found in characters.json")
     if location_key and location_key not in all_locs:
         raise ValueError(f"Location '{location_key}' not found. Available: {sorted(all_locs.keys())}")
 
     manifest["generation_config"]["location_key"] = location_key or ""
-    manifest["generation_config"]["characters"]   = [char_a, char_b]
+    manifest["generation_config"]["characters"]   = cast
     if words:
         manifest["generation_config"]["words"] = words
     if dialog_count:
         manifest["generation_config"]["dialog_count"] = dialog_count
 
-    prompt = prompt_override or _build_prompt(project_type, manifest, chars_data, all_locs)
+    max_scene_chars = int(cfg.get("max_scene_characters") or MAX_SCENE_CHARACTERS)
+    prompt = prompt_override or _build_prompt(project_type, manifest, chars_data, all_locs,
+                                              max_scene_chars=max_scene_chars)
     manifest["generation_config"]["prompt_script"] = prompt
 
     logger.info(f"Calling GPT ({cfg['script_model']}) for {project_name} …")
@@ -487,6 +577,17 @@ def create_script(
     manifest["video_info"]["tags"]     = gpt_output.get("tags")
     manifest["video_info"]["insights"] = gpt_output.get("insights")
 
+    # Compact plain-text dialog for grammar review — no markup, easy to copy-paste
+    manifest["generation_config"]["compact_dialog"] = _build_compact_dialog(gpt_output)
+
+    # Auto-evaluate grammar and naturality of each dialog line
+    logger.info("Evaluating dialog grammar/naturality …")
+    manifest["generation_config"]["dialog_auto_evaluation"] = _evaluate_dialog(
+        compact_dialog = manifest["generation_config"]["compact_dialog"],
+        level          = manifest["generation_config"]["level"],
+        model          = cfg["script_model"],
+    )
+
     repetition_texts = None
     if project_type["scene_builder_rules"].get("include_repetition_section"):
         dialog_texts = [item.get("text", "") for item in gpt_output.get("dialog", []) if item.get("text")]
@@ -505,6 +606,7 @@ def create_script(
         chars_data       = chars_data,
         all_locs         = all_locs,
         repetition_texts = repetition_texts,
+        max_scene_chars  = max_scene_chars,
     )
 
     manifest["project_metadata"]["update_date"] = datetime.utcnow().isoformat()
@@ -521,6 +623,97 @@ def create_script(
         f"{len(manifest['scenes'])} total scenes"
     )
     return manifest
+
+
+def _strip_fancy_notation(text: str) -> str:
+    """
+    Remove markdown-style emphasis and other decorative notation from dialog text.
+    E.g. _Stillleben_ → Stillleben, **word** → word.
+    Returns plain readable text suitable for grammar review.
+    """
+    import re
+    # Remove **bold** and __bold__
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__",     r"\1", text)
+    # Remove *italic* and _italic_
+    text = re.sub(r"\*(.+?)\*",     r"\1", text)
+    text = re.sub(r"_(.+?)_",       r"\1", text)
+    # Remove backtick code spans
+    text = re.sub(r"`(.+?)`",       r"\1", text)
+    return text.strip()
+
+
+# =============================================================================
+# DIALOG AUTO-EVALUATION (third GPT pass)
+# =============================================================================
+
+def _build_evaluation_prompt(compact_dialog: str, level: str) -> str:
+    return f"""You are a German language expert evaluating dialog written for a {level} learner.
+
+Evaluate EACH line of the dialog below for grammar correctness and natural spoken German.
+For each line use the key format "dialog_N" (0-indexed, matching line order, skip the narrator line).
+
+Return ONLY valid JSON (no markdown, no backticks):
+{{
+  "dialog_0": "excellent — natural phrasing, grammar is correct",
+  "dialog_1": "bad — 'ich bin gegangen nach Hause' is wrong; correct form is 'ich bin nach Hause gegangen' (verb-final in subordinate position)",
+  ...
+}}
+
+Rules:
+- Be concise: one sentence per line max
+- If a line is correct and natural, say "excellent" or "good" and briefly say why
+- If a line has an issue, describe the problem and give the corrected version
+- Do NOT include the narrator / Erzähler line in your evaluation
+- Output ONLY the JSON object
+
+Dialog:
+{compact_dialog}
+""".strip()
+
+
+def _evaluate_dialog(compact_dialog: str, level: str, model: str) -> dict:
+    prompt = _build_evaluation_prompt(compact_dialog, level)
+    resp = client.chat.completions.create(
+        model           = model,
+        messages        = [{"role": "user", "content": prompt}],
+        response_format = {"type": "json_object"},
+        temperature     = 0.2,
+    )
+    try:
+        return json.loads(resp.choices[0].message.content)
+    except json.JSONDecodeError as e:
+        logger.warning(f"dialog_auto_evaluation parse failed: {e}")
+        return {}
+
+
+def _build_compact_dialog(gpt_output: dict) -> str:
+    """
+    Build a plain, copy-pasteable dialog string from GPT output.
+    Includes narration and all dialog lines — no scene visuals, no metadata,
+    no markup. Intended for grammar review.
+    """
+    lines = []
+
+    # Narration
+    nar_raw = gpt_output.get("narration", {})
+    if isinstance(nar_raw, str):
+        nar_text = nar_raw
+    elif isinstance(nar_raw, dict):
+        nar_text = nar_raw.get("text", "")
+    else:
+        nar_text = ""
+    if nar_text:
+        lines.append(f"[Erzähler] {_strip_fancy_notation(nar_text)}")
+        lines.append("")
+
+    # Dialog
+    for item in gpt_output.get("dialog", []):
+        speaker = item.get("speaker") or item.get("character") or "?"
+        text    = _strip_fancy_notation(item.get("text", ""))
+        lines.append(f"{speaker}: {text}")
+
+    return "\n".join(lines)
 
 
 def _write_script_txt(project_path, manifest, gpt_output, repetition_texts):
@@ -543,6 +736,9 @@ def main() -> None:
     p.add_argument("project_name")
     p.add_argument("--char-a",   required=True)
     p.add_argument("--char-b",   required=True)
+    p.add_argument("--character", action="append", dest="characters", metavar="NAME",
+                   help="Extra cast member for multi-character conversational types "
+                        "(repeatable, e.g. --character Mario --character Olena).")
     p.add_argument("--location-key", required=False, default=None, dest="location_key")
     p.add_argument("--project-type",  default="story",  dest="project_type_key")
     p.add_argument("--prompt-override", default=None,   dest="prompt_override")
@@ -551,6 +747,7 @@ def main() -> None:
         a.project_name, a.char_a, a.char_b, a.location_key,
         project_type_key=a.project_type_key,
         prompt_override=a.prompt_override,
+        characters=a.characters,
     )
 
 

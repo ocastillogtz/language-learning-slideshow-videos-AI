@@ -2,8 +2,28 @@
 const { useState } = React;
 
 function ProjectView() {
-  const { currentProject, manifest } = useApp();
+  const { currentProject, manifest, reloadManifest, toast } = useApp();
   const [tab, setTab] = useState("pipeline");
+  const [checking, setChecking] = useState(false);
+
+  async function checkForUpdates() {
+    setChecking(true);
+    try {
+      const d = await apiPost(`/projects/${currentProject}/reconcile`, {});
+      await reloadManifest(currentProject);
+      const n = (d.images_added || 0) + (d.audio_added || 0);
+      toast(
+        n ? "Updated" : "Up to date",
+        n ? `Found ${d.images_added || 0} image(s) and ${d.audio_added || 0} audio file(s) on disk.`
+          : "Manifest already matches the files on disk.",
+        "ok"
+      );
+    } catch (e) {
+      toast("Error", e.message, "err");
+    } finally {
+      setChecking(false);
+    }
+  }
 
   if (!currentProject) {
     return (
@@ -36,9 +56,16 @@ function ProjectView() {
 
   return (
     <div>
-      <div className="proj-hdr">
-        <h2>{title}</h2>
-        <div className="sub">{loc} · {style} · {level} · {chars}</div>
+      <div className="proj-hdr" style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:"1rem"}}>
+        <div>
+          <h2>{title}</h2>
+          <div className="sub">{loc} · {style} · {level} · {chars}</div>
+        </div>
+        <button className="btn-ghost" onClick={checkForUpdates} disabled={checking}
+          title="Scan the project folder and import any images/audio that were created but not recorded"
+          style={{whiteSpace:"nowrap", fontSize:".8rem", padding:".4rem .8rem"}}>
+          {checking ? "Checking…" : "⟳ Check for updates"}
+        </button>
       </div>
 
       <div className="tabs">

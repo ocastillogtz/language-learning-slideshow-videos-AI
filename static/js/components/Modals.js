@@ -16,6 +16,12 @@ const NEW_PROJ_TYPES = {
     { value: "register_phrases_long", label: "Register Phrases — Long (formal / slang / ...)" },
     { value: "grammar_pairs_long",    label: "Grammar Pairs — Long (base → transformed)"      },
   ],
+  reading: [
+    { value: "reading_together", label: "Reading Together (story → annotated parts + long)" },
+  ],
+  promotional: [
+    { value: "promotional", label: "Promotional (character speaks → IG story)" },
+  ],
 };
 
 const LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"];
@@ -32,11 +38,17 @@ function NewProjectModal({ open, onClose }) {
 
   const isWordLearning = projType === "word_learning" || projType === "word_learning_long";
   const isHorizontal   = projType.endsWith("_long");
+  const isReading      = projType === "reading_together";
+  const isPromotional  = projType === "promotional";
 
   async function save() {
     setErr("");
-    if (!name.trim() || !context.trim()) {
-      setErr("Project name and scene description are required."); return;
+    // Promotional projects gather their inputs (character, situation, text) in the
+    // Build step, so the scene description here is optional.
+    if (!name.trim() || (!context.trim() && !isPromotional)) {
+      setErr(isPromotional
+        ? "Project name is required."
+        : "Project name and scene description are required."); return;
     }
     if (isWordLearning && !learning.trim()) {
       setErr("Word Learning projects require a list of words to teach."); return;
@@ -78,7 +90,11 @@ function NewProjectModal({ open, onClose }) {
             <div className="field" style={{flex:2}}>
               <label style={{display:"flex", alignItems:"center", gap:6}}>
                 Project Type
-                {isHorizontal
+                {isReading
+                  ? <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--green,#10b981)",color:"#fff",letterSpacing:"0.03em"}}>Reading</span>
+                  : isPromotional
+                  ? <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--pink,#ec4899)",color:"#fff",letterSpacing:"0.03em"}}>Promo</span>
+                  : isHorizontal
                   ? <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--accent,#3b82f6)",color:"#fff",letterSpacing:"0.03em"}}>HD 16:9</span>
                   : <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--muted-bg,#e5e7eb)",color:"var(--muted,#6b7280)",letterSpacing:"0.03em"}}>9:16 Short</span>
                 }
@@ -90,6 +106,12 @@ function NewProjectModal({ open, onClose }) {
                 <optgroup label="▸ Horizontal — 1920×1080 Full HD (YouTube)">
                   {NEW_PROJ_TYPES.horizontal.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </optgroup>
+                <optgroup label="▸ Reading — story → vertical parts + horizontal long">
+                  {NEW_PROJ_TYPES.reading.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </optgroup>
+                <optgroup label="▸ Promotional — single image, character speaks (IG story)">
+                  {NEW_PROJ_TYPES.promotional.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </optgroup>
               </select>
             </div>
             <div className="field" style={{flex:1}}>
@@ -100,11 +122,17 @@ function NewProjectModal({ open, onClose }) {
             </div>
           </div>
           <div className="field">
-            <label>Scene Description</label>
-            <textarea rows={4} value={context} onChange={e=>setContext(e.target.value)}
-              placeholder="Describe the scene setting and topic…"/>
+            <label>{isReading ? "Story text (paste a public-domain story)"
+              : isPromotional ? "What the video is about (optional)"
+              : "Scene Description"}</label>
+            <textarea rows={isReading ? 10 : 4} value={context} onChange={e=>setContext(e.target.value)}
+              placeholder={isReading
+                ? "Paste the full story here. Old spelling is fine — it will be modernized and split into sentences."
+                : isPromotional
+                ? "Optional note. You'll pick the character, image situation, and the exact line in the Build step."
+                : "Describe the scene setting and topic…"}/>
           </div>
-          <div className="field">
+          {!isReading && !isPromotional && <div className="field">
             <label>
               {isWordLearning ? "Words to Teach" : "Learning Points"}
               {!isWordLearning && <span style={{color:"var(--muted)",fontWeight:300}}> (optional)</span>}
@@ -119,7 +147,7 @@ function NewProjectModal({ open, onClose }) {
                 One word per entry, comma-separated. The video will cover them in this order.
               </span>
             )}
-          </div>
+          </div>}
           {err && <div className="err-msg" style={{display:"block"}}>{err}</div>}
         </div>
         <div className="modal-footer">

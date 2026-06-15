@@ -15,6 +15,8 @@ Repetition scenes (flagged with _is_repetition: true) also get an
 after_pause_ms field = duration_ms * _rep_pause_factor.
 
 Reuses existing audio files — skips if audio.file_path is set and file exists.
+Pass overwrite=True to force every TTS line to be re-synthesized regardless of
+what already exists (the default, overwrite=False, only fills in what's missing).
 """
 
 import io, json, logging, argparse, os, base64, tempfile
@@ -38,7 +40,7 @@ def _write_manifest(manifest_path: Path, manifest: dict) -> None:
     tmp.replace(manifest_path)
 
 
-def create_audio(project_name: str) -> None:
+def create_audio(project_name: str, overwrite: bool = False) -> None:
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
@@ -73,9 +75,10 @@ def create_audio(project_name: str) -> None:
         return prev, next_
 
     def _generate_tts(text: str, voice_id: str, filename: str,
-                       prev_text: str | None, next_text: str | None) -> tuple[str, int]:
+                       prev_text: str | None, next_text: str | None,
+                       force: bool = False) -> tuple[str, int]:
         out_path = audio_dir / filename
-        if out_path.exists():
+        if out_path.exists() and not force:
             logger.info(f"  Audio exists: {filename}")
             audio_bytes = out_path.read_bytes()
         else:
@@ -114,7 +117,7 @@ def create_audio(project_name: str) -> None:
             prev_t, next_t = _prosody(tts_pos)
             tts_pos += 1
 
-            if audio.get("file_path") and (project_path / audio["file_path"]).exists():
+            if not overwrite and audio.get("file_path") and (project_path / audio["file_path"]).exists():
                 logger.info(f"  [{scene['id']}] TTS exists, skipping.")
                 continue
 
@@ -126,6 +129,7 @@ def create_audio(project_name: str) -> None:
                 filename  = filename,
                 prev_text = prev_t,
                 next_text = next_t,
+                force     = overwrite,
             )
             audio["file_path"]   = afile
             audio["duration_ms"] = dur_ms
@@ -244,11 +248,13 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("project_name")
     p.add_argument("--scene-id", dest="scene_id", default=None)
+    p.add_argument("--overwrite", action="store_true",
+                   help="re-synthesize every TTS line, overwriting existing audio")
     a = p.parse_args()
     if a.scene_id:
         create_audio_single(a.project_name, a.scene_id)
     else:
-        create_audio(a.project_name)
+        create_audio(a.project_name, overwrite=a.overwrite)
 
 
 if __name__ == "__main__":

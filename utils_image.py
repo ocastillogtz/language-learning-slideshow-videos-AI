@@ -51,7 +51,16 @@ def _scale_to_fill(img, tw, th):
 def pad_image_to_frame(img: Image.Image, cfg: dict) -> Image.Image:
     W,H = cfg["target_w"],cfg["target_h"]
     br  = cfg["margin_blur_radius"]; blend=cfg["blend_px"]
-    sw,sh = img.size; scale=W/sw; nh=int(sh*scale)
+    sw,sh = img.size
+
+    # Landscape canvas + portrait illustration (reading_together horizontal long
+    # video): show the FULL 9:16 illustration flush against the right edge, and
+    # fill the remaining width with a blurred, centered, expanded copy of the
+    # same illustration.
+    if W > H and sh > sw:
+        return _portrait_in_landscape(img, W, H, br, blend)
+
+    scale=W/sw; nh=int(sh*scale)
     img = img.resize((W,nh),Image.LANCZOS)
     if nh>=H: return img.crop((0,0,W,H))
     bgs=H/sh; bgw=int(sw*bgs); bg=img.resize((bgw,H),Image.LANCZOS)
@@ -67,9 +76,82 @@ def pad_image_to_frame(img: Image.Image, cfg: dict) -> Image.Image:
     return Image.fromarray(arr.astype(np.uint8))
 
 
+def _portrait_in_landscape(img: Image.Image, W: int, H: int,
+                           blur_radius: int, blend: int) -> Image.Image:
+    """
+    Compose a portrait (9:16) illustration onto a landscape (16:9) canvas:
+
+      * Foreground: the full illustration scaled to the canvas height and pinned
+        flush against the RIGHT edge (nothing cropped).
+      * Background: a centered, expanded ("cover") copy of the same illustration
+        scaled to fill the whole canvas, then Gaussian-blurred.
+
+    A short horizontal feather softens the seam where the sharp foreground meets
+    the blurred background.
+    """
+    img = img.convert("RGB")
+
+    # Foreground — fit entire illustration to the canvas height.
+    fg_scale = H / img.height
+    fg_w     = max(1, int(round(img.width * fg_scale)))
+    fg       = img.resize((fg_w, H), Image.LANCZOS)
+    if fg_w > W:                      # unusually wide portrait — clamp to canvas
+        left = (fg_w - W) // 2
+        fg   = fg.crop((left, 0, left + W, H))
+        fg_w = W
+
+    # Background — centered, expanded copy that covers the full canvas, blurred.
+    bg = _scale_to_fill(img, W, H).filter(ImageFilter.GaussianBlur(blur_radius))
+
+    fg_x = W - fg_w
+    res  = bg.copy()
+    res.paste(fg, (fg_x, 0))
+
+    # Feather the left seam of the foreground into the blurred background.
+    if blend > 0 and fg_x > 0:
+        arr = np.array(res, dtype=np.float32)
+        blr = np.array(res.filter(ImageFilter.GaussianBlur(blur_radius)), dtype=np.float32)
+        span = min(blend, fg_w)
+        for i in range(span):
+            x = fg_x + i
+            if 0 <= x < W:
+                a = i / span
+                arr[:, x] = (1 - a) * blr[:, x] + a * arr[:, x]
+        res = Image.fromarray(arr.astype(np.uint8))
+
+    return res
+
+
 def blur_image(img, radius): return img.filter(ImageFilter.GaussianBlur(radius))
 def pil_to_numpy(img): return np.array(img.convert("RGB"))
 def bytes_to_pil(data, mode="RGBA"): return Image.open(io.BytesIO(data)).convert(mode)
+
+
+def make_corner_icon_clip(icon_rel_path, assets_dir, size, x, y, duration_s):
+    """
+    Build a static icon overlay (e.g. the reading "book" cue) pinned to a corner.
+
+    `icon_rel_path` is a path RELATIVE to assets_dir (e.g. "icons/book.png"); a
+    leading "assets/" is tolerated and stripped. The icon keeps its aspect ratio
+    and is scaled to fit within a size×size box. Returns an ImageClip positioned at
+    (x, y), or None if the file is missing.
+    """
+    from moviepy.editor import ImageClip
+    if not icon_rel_path:
+        return None
+    p = Path(icon_rel_path)
+    if p.parts and p.parts[0] == "assets":
+        p = Path(*p.parts[1:])
+    fp = assets_dir / p
+    if not fp.exists():
+        logger.warning(f"Pre-pause icon not found: {fp}")
+        return None
+    icon = Image.open(fp).convert("RGBA")
+    w, h = icon.size
+    scale = min(size / w, size / h)
+    icon = icon.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+    return (ImageClip(np.array(icon), ismask=False)
+            .set_duration(duration_s).set_position((x, y)))
 
 
 def make_icon_clip(character, characters_data, assets_dir, duration_s, cfg):

@@ -142,6 +142,47 @@ function ManifestTab() {
         </div>
       )}
 
+      {/* Compact dialog */}
+      {gen.compact_dialog && (
+        <div className="mf-card full">
+          <div className="mf-label">Compact Dialog</div>
+          <div className="mf-val" style={{whiteSpace:"pre-wrap"}}>{gen.compact_dialog}</div>
+        </div>
+      )}
+
+      {/* Dialog auto-evaluation */}
+      {gen.dialog_auto_evaluation && Object.keys(gen.dialog_auto_evaluation).length > 0 && (
+        <div className="mf-card full">
+          <div className="mf-label">Dialog Auto-Evaluation</div>
+          {Object.entries(gen.dialog_auto_evaluation).map(([key, verdict]) => {
+            const idx     = parseInt(key.replace("dialog_", ""), 10);
+            const scene   = dialogScenes[idx];
+            const speaker = scene?.characters?.[0] || "—";
+            const text    = scene?.subtitle_text   || "";
+            const lower   = (verdict || "").toLowerCase();
+            const isGood  = lower.startsWith("excellent") || lower.startsWith("good") || lower.startsWith("great") || lower.startsWith("natural");
+            const isBad   = lower.startsWith("bad") || lower.startsWith("wrong") || lower.startsWith("incorrect") || lower.startsWith("error");
+            const dotColor = isGood ? "var(--green)" : isBad ? "var(--red)" : "var(--orange)";
+            return (
+              <div key={key} style={{
+                display:"flex", flexDirection:"column", gap:".3rem",
+                padding:".6rem .75rem", marginBottom:".45rem",
+                background:"var(--s2)", borderRadius:"8px",
+                borderLeft:`3px solid ${dotColor}`,
+              }}>
+                <div style={{display:"flex", alignItems:"center", gap:".5rem", fontSize:".78rem"}}>
+                  <span className="dlg-sp" style={{fontSize:".72rem",padding:".15rem .45rem"}}>{speaker}</span>
+                  <span style={{color:"var(--text)", fontStyle:"italic", opacity:.8}}>{text}</span>
+                </div>
+                <div style={{fontSize:".8rem", color: isGood ? "var(--green)" : isBad ? "var(--red)" : "var(--orange)"}}>
+                  {verdict}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Provided context */}
       <div className="mf-card full">
         <div className="mf-label">Provided Context</div>

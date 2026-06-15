@@ -39,6 +39,14 @@ load_dotenv()
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _write_manifest(manifest_path, manifest):
+    """Atomic manifest write so an interrupted run can't corrupt or lose it."""
+    tmp = manifest_path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    tmp.replace(manifest_path)
+
 COMPOSITE_HEIGHT = 768
 SEPARATOR_PX     = 4
 SEPARATOR_COLOR  = (220, 220, 220)
@@ -131,6 +139,33 @@ def _save(data: bytes, path: Path) -> None:
     logger.info(f"  Saved → {path}")
 
 
+
+# =============================================================================
+# REFERENCE RESOLUTION (single-ref / animal characters)
+# =============================================================================
+
+def _char_ref_path(char_data: dict, assets_dir: Path):
+    """Reference image for a character: single-ref image if set, else 3/4-left art."""
+    rel = None
+    if char_data.get("single_ref"):
+        rel = char_data.get("ref_image_file_path")
+    rel = rel or char_data.get("art_34left_file_path") or char_data.get("ref_image_file_path")
+    return (assets_dir / rel) if rel else None
+
+
+def _reading_cast_paths(img: dict, chars_data: dict, assets_dir: Path) -> list:
+    """Resolve reference images for the cast present in a reading scene."""
+    paths = []
+    for nm in (img.get("_cast") or []):
+        cd = chars_data.get(nm)
+        if not cd:
+            continue
+        p = _char_ref_path(cd, assets_dir)
+        if p and p.exists():
+            paths.append(p)
+    return paths
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -158,6 +193,7 @@ def create_images(
     images_dir.mkdir(parents=True, exist_ok=True)
 
     model      = cfg["fal_model"]
+    t2i_model  = cfg["fal_t2i_model"]
     image_size = cfg["fal_image_size"]
     assets_dir = cfg["assets_dir"]
 
@@ -167,19 +203,21 @@ def create_images(
         image_size = "landscape_16_9"
         logger.info("Horizontal format detected — using landscape_16_9 image size")
 
-    # Resolve character names and location from generation_config
-    gen      = manifest["generation_config"]
-    char_a   = gen["characters"][0]
-    char_b   = gen["characters"][1]
-    loc_key  = gen.get("location_key") or ""
-    loc_file = None
+    # Resolve character names and location from generation_config.
+    # reading_together projects may have no fixed characters -> guard against it.
+    gen        = manifest["generation_config"]
+    char_names = gen.get("characters") or []
+    char_a     = char_names[0] if len(char_names) > 0 else None
+    char_b     = char_names[1] if len(char_names) > 1 else None
+    loc_key    = gen.get("location_key") or ""
+    loc_file   = None
     if loc_key and loc_key in all_locs:
         loc_data = all_locs[loc_key]
         loc_file = assets_dir / loc_data["artwork_file_path"]
 
-    # Character art paths
-    art_a = assets_dir / chars_data[char_a]["art_34left_file_path"]
-    art_b = assets_dir / chars_data[char_b]["art_34left_file_path"]
+    # Character art paths (None when the project has no fixed cast)
+    art_a = _char_ref_path(chars_data[char_a], assets_dir) if char_a and char_a in chars_data else None
+    art_b = _char_ref_path(chars_data[char_b], assets_dir) if char_b and char_b in chars_data else None
 
     for scene in manifest["scenes"]:
         img = scene.get("image")
@@ -191,6 +229,7 @@ def create_images(
         if not overwrite and dest.exists():
             logger.info(f"  Exists: {dest.name} — skipping")
             img["file_path"] = f"images/{scene['id']}.png"
+            _write_manifest(manifest_path, manifest)
             continue
 
         prompt         = img.get("prompt_to_create", "")
@@ -201,34 +240,62 @@ def create_images(
         try:
             if reference_type == "none":
                 # Text-only generation — no reference composite
-                data = _call_fal_text_only(prompt, model, image_size)
-            elif reference_type == "single_speaker":
-                speaker = img.get("speaker") or scene.get("characters", [char_a])[0]
-                art_spk = assets_dir / chars_data[speaker]["art_34left_file_path"]
-                if use_location_ref and loc_file:
-                    comp = build_composite(art_spk, loc_file)
+                data = _call_fal_text_only(prompt, t2i_model, image_size)
+            elif reference_type == "reading_cast":
+                # reading_together: composite whatever cast members appear in the scene
+                ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
+                if ref_paths:
+                    url  = _upload(_to_bytes(build_composite(*ref_paths)))
+                    data = _call_fal(prompt, url, model, image_size)
                 else:
+                    data = _call_fal_text_only(prompt, t2i_model, image_size)
+            elif reference_type == "multi":
+                # multi-character dialog scene: composite every character present in
+                # this line (img["_cast"]) plus the optional location background.
+                ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
+                comp_inputs = list(ref_paths)
+                if use_location_ref and loc_file:
+                    comp_inputs.append(loc_file)
+                if comp_inputs:
+                    url  = _upload(_to_bytes(build_composite(*comp_inputs)))
+                    data = _call_fal(prompt, url, model, image_size)
+                else:
+                    data = _call_fal_text_only(prompt, t2i_model, image_size)
+            elif reference_type == "single_speaker":
+                speaker = img.get("speaker") or (scene.get("characters") or [char_a])[0]
+                art_spk = _char_ref_path(chars_data[speaker], assets_dir) if speaker in chars_data else None
+                if art_spk and use_location_ref and loc_file:
+                    comp = build_composite(art_spk, loc_file)
+                elif art_spk:
                     comp = build_composite(art_spk)
-                url  = _upload(_to_bytes(comp))
-                data = _call_fal(prompt, url, model, image_size)
-            else:
-                # "both" or any other value — use both characters + optional location
+                else:
+                    comp = None
+                if comp is not None:
+                    url  = _upload(_to_bytes(comp))
+                    data = _call_fal(prompt, url, model, image_size)
+                else:
+                    data = _call_fal_text_only(prompt, t2i_model, image_size)
+            elif art_a and art_b:
+                # "both" — use both characters + optional location
                 if use_location_ref and loc_file:
                     comp = build_composite(art_a, art_b, loc_file)
                 else:
                     comp = build_composite(art_a, art_b)
                 url  = _upload(_to_bytes(comp))
                 data = _call_fal(prompt, url, model, image_size)
+            else:
+                # no usable references — fall back to text-only
+                data = _call_fal_text_only(prompt, t2i_model, image_size)
 
             _save(data, dest)
             img["file_path"] = f"images/{scene['id']}.png"
+            _write_manifest(manifest_path, manifest)
 
         except Exception as e:
             logger.error(f"  Failed to generate image for {scene['id']}: {e}")
             continue
 
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    _write_manifest(manifest_path, manifest)
     logger.info("Image generation complete.")
 
 
@@ -238,6 +305,7 @@ def create_image_single(
     prompt_override: str | None = None,
     use_location_ref: bool = True,
     characters_override: str | None = None,
+    cast_override: list | None = None,
 ) -> None:
     """Regenerate the image for a single scene by ID.
 
@@ -267,6 +335,7 @@ def create_image_single(
     images_dir.mkdir(parents=True, exist_ok=True)
 
     model      = cfg["fal_model"]
+    t2i_model  = cfg["fal_t2i_model"]
     image_size = cfg["fal_image_size"]
     assets_dir = cfg["assets_dir"]
 
@@ -275,17 +344,18 @@ def create_image_single(
     if video_format == "horizontal":
         image_size = "landscape_16_9"
 
-    gen      = manifest["generation_config"]
-    char_a   = gen["characters"][0]
-    char_b   = gen["characters"][1]
-    loc_key  = gen.get("location_key") or ""
-    loc_file = None
+    gen        = manifest["generation_config"]
+    char_names = gen.get("characters") or []
+    char_a     = char_names[0] if len(char_names) > 0 else None
+    char_b     = char_names[1] if len(char_names) > 1 else None
+    loc_key    = gen.get("location_key") or ""
+    loc_file   = None
     if loc_key and loc_key in all_locs:
         loc_data = all_locs[loc_key]
         loc_file = assets_dir / loc_data["artwork_file_path"]
 
-    art_a = assets_dir / chars_data[char_a]["art_34left_file_path"]
-    art_b = assets_dir / chars_data[char_b]["art_34left_file_path"]
+    art_a = _char_ref_path(chars_data[char_a], assets_dir) if char_a and char_a in chars_data else None
+    art_b = _char_ref_path(chars_data[char_b], assets_dir) if char_b and char_b in chars_data else None
 
     img = target["image"]
 
@@ -293,25 +363,60 @@ def create_image_single(
         img["prompt_to_create"] = prompt_override
 
     prompt = img.get("prompt_to_create", "")
+    stored_ref = img.get("reference_type", "both")
     # Use characters_override if provided, otherwise fall back to stored reference_type
-    reference_type = characters_override if characters_override else img.get("reference_type", "both")
+    reference_type = characters_override if characters_override else stored_ref
+    # Reading_together scenes always composite their stored cast (the rt_* single-image
+    # characters from the cast step). Don't let a stale both/single override drop them;
+    # only an explicit "none" downgrades a reading scene to text-only. Multi-character
+    # dialog scenes (stored_ref == "multi") keep their own mode instead.
+    if (target.get("_reading") or stored_ref == "reading_cast") and reference_type != "none":
+        reference_type = "reading_cast"
+    # Explicit per-scene cast selection from the UI applies to both cast-based modes
+    # (reading_together and multi-character dialog).
+    if cast_override is not None and reference_type in ("reading_cast", "multi"):
+        img["_cast"] = list(cast_override)
+        target["_cast"] = list(cast_override)
     dest           = images_dir / f"{scene_id}.png"
 
     logger.info(f"Re-generating [{scene_id}] reference_type={reference_type}")
 
     if reference_type == "none":
         # Text-only generation — no reference composite
-        data = _call_fal_text_only(prompt, model, image_size)
-    elif reference_type == "single_speaker":
-        speaker = img.get("speaker") or target.get("characters", [char_a])[0]
-        art_spk = assets_dir / chars_data[speaker]["art_34left_file_path"]
-        if use_location_ref and loc_file:
-            comp = build_composite(art_spk, loc_file)
+        data = _call_fal_text_only(prompt, t2i_model, image_size)
+    elif reference_type == "reading_cast":
+        ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
+        if ref_paths:
+            url  = _upload(_to_bytes(build_composite(*ref_paths)))
+            data = _call_fal(prompt, url, model, image_size)
         else:
+            data = _call_fal_text_only(prompt, t2i_model, image_size)
+    elif reference_type == "multi":
+        # multi-character dialog scene: present cast (img["_cast"]) + optional location
+        ref_paths   = _reading_cast_paths(img, chars_data, assets_dir)
+        comp_inputs = list(ref_paths)
+        if use_location_ref and loc_file:
+            comp_inputs.append(loc_file)
+        if comp_inputs:
+            url  = _upload(_to_bytes(build_composite(*comp_inputs)))
+            data = _call_fal(prompt, url, model, image_size)
+        else:
+            data = _call_fal_text_only(prompt, t2i_model, image_size)
+    elif reference_type == "single_speaker":
+        speaker = img.get("speaker") or (target.get("characters") or [char_a])[0]
+        art_spk = _char_ref_path(chars_data[speaker], assets_dir) if speaker in chars_data else None
+        if art_spk and use_location_ref and loc_file:
+            comp = build_composite(art_spk, loc_file)
+        elif art_spk:
             comp = build_composite(art_spk)
-        url  = _upload(_to_bytes(comp))
-        data = _call_fal(prompt, url, model, image_size)
-    else:
+        else:
+            comp = None
+        if comp is not None:
+            url  = _upload(_to_bytes(comp))
+            data = _call_fal(prompt, url, model, image_size)
+        else:
+            data = _call_fal_text_only(prompt, t2i_model, image_size)
+    elif art_a and art_b:
         # "both" — use both characters + optional location
         if use_location_ref and loc_file:
             comp = build_composite(art_a, art_b, loc_file)
@@ -319,6 +424,8 @@ def create_image_single(
             comp = build_composite(art_a, art_b)
         url  = _upload(_to_bytes(comp))
         data = _call_fal(prompt, url, model, image_size)
+    else:
+        data = _call_fal_text_only(prompt, t2i_model, image_size)
 
     _save(data, dest)
 
@@ -330,8 +437,7 @@ def create_image_single(
         video_clip.unlink()
         logger.info(f"Deleted stale video clip: {video_clip.name}")
 
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    _write_manifest(manifest_path, manifest)
 
     logger.info(f"Single image regeneration complete for scene '{scene_id}'.")
 

@@ -1,0 +1,18 @@
+# Python dependencies for the German Learning Video tool (Windows).
+# moviepy is PINNED to 1.x — the code uses the moviepy.editor / .set_audio /
+# .subclip / volumex API, which moviepy 2.x removed. Do not bump to 2.x.
+moviepy==1.0.3
+numpy<2.0            # moviepy 1.0.3 is not compatible with numpy 2.x
+Pillow
+imageio-ffmpeg      # ffmpeg backend MoviePy uses internally
+playwright          # headless Chromium for HTML annotation rendering
+pydub               # audio handling (needs system ffmpeg)
+python-dotenv
+requests
+openai
+elevenlabs
+fal-client
+Flask
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2

@@ -9,6 +9,8 @@ Two output formats are supported:
 
 The output format is determined by the project type chosen at creation time. No per-project configuration is needed.
 
+A third, specialised project type — **Reading Together** (`reading_together`) — turns a pasted public-domain short story into a sentence-by-sentence "read along" video with **grammar-annotated** on-screen text (TEKAMOLO boxes, separable-verb colouring, Nebensatz + verb-position markers, case/gender). It outputs several vertical 6-sentence **parts** plus one **long horizontal** video, and can create reusable single-image characters such as talking animals. See [Reading Together](#reading-together-reading_together).
+
 A **web-based control panel** (`app.py`) lets you manage every project and asset and run every pipeline step from a browser with no command-line work required.
 
 ---
@@ -58,6 +60,13 @@ create_project → create_script → create_audio → create_images → create_v
 ```
 
 Each step reads from and writes back to a single `project_manifest.json` file, making the pipeline fully resumable at any stage.
+
+**Reading Together** projects use an alternate flow (same manifest, different builder + packaging):
+
+```
+create_project → reading_build → create_audio → reading_cast → create_images →
+create_video (vertical) → create_video (horizontal) → reading_assemble
+```
 
 ---
 
@@ -198,11 +207,24 @@ Italic and bold styling attributes are configurable in `config.ini` under `marku
 
 Subtitle style: narration/repetition scenes → centred; dialogue scenes → bottom-aligned.
 
+**Grammar-annotated subtitles:** when `annotated_subtitles` is enabled, dialogue and reading subtitles are rendered by `html_annotation_renderer.py` instead of the plain text renderer. Each sentence is first analysed by `generate_annotations.py` (GPT) into a token + span schema, then drawn as styled HTML/CSS and rasterised to a transparent PNG — with a rounded semi-transparent dark backing baked in — via headless Chromium (Playwright). It colours the two halves of a *trennbares Verb* the same, and for verbs shows the conjugation **tense** above and the **infinitive** below the word; it labels case/gender above the other words. Each word reserves equal space above and below so the main words stay on one centred line. The only clause box drawn is the **Nebensatz** (subordinate clause), and only when the clause actually moves the conjugated verb to the end (the verb-position contrast) — it carries a "↳ Verb" marker; the old TEKAMOLO fields are no longer boxed. A long Nebensatz wraps inside its box. All annotation PNGs for a video are pre-rendered in a single Chromium session for speed. Requires `pip install playwright` and `python -m playwright install chromium`. If Chromium is missing when annotated subtitles are requested, the render tries to install it automatically (one-time); if that fails it stops with a clear error telling you to run the install commands, rather than silently downgrading to plain subtitles. Schema details: [`ANNOTATION_SCHEMA.md`](ANNOTATION_SCHEMA.md).
+
+**Annotation caching (saves OpenAI calls):** every successful annotation is cached per scene at `videos/_annot/<scene_id>.json` (and `videos/h/_annot/...` for the horizontal pass), keyed by the exact sentence text plus a schema version (`generate_annotations.CACHE_VERSION`). On every later render the cached JSON is reused, so **re-rendering does not re-prompt OpenAI** — only sentences whose text changed, or whose cache was explicitly reset, hit the API. Fallback results (from an API failure) are never cached, so a transient error won't get stuck. The PNG itself is still redrawn each render, so it always reflects the current size/orientation settings.
+
+To force fresh annotations:
+
+- **Redo all** — tick **“Regenerate annotations (ignore cache)”** under *Grammar-annotated subtitles* in any render step (Render Scene Clips / Render Vertical Clips / Render Horizontal Clips). It re-prompts OpenAI for every sentence and re-renders the clips (it implies a clip overwrite, otherwise existing clips would be skipped and you'd see no change).
+- **Redo / edit one** — open a sentence's card in the **Generated Items** tab and expand **“Grammar annotation”**. You can see every token with its case/gender, role, tense, infinitive and separable-verb group, plus the Nebensatz clause boxes. Click the **×** on any chip to drop an attribute you don't want (or remove a clause box), then **Save** — the edit is written straight to the cache (no OpenAI call) and the scene's clip is cleared so the next render applies it. **↻ Regenerate (OpenAI)** discards the edits and re-prompts just that one sentence. Backed by `GET`/`POST /projects/<name>/annotations/<scene_id>`.
+
+**Annotation text size:** the **“Annotation text size”** field (× scale, 0.5–2.5) next to the grammar checkbox scales the whole annotation — word plus the tense/case/infinitive labels — together, while the wrap width stays fixed (`font_scale` on `render_annotation_html` / `render_annotation_png`).
+
 ---
 
 ### 6. Assembly (`assemble_video.py`)
 
 Concatenates all per-scene clips, adds a looping background audio track with fade-in/out, and writes the final `final_<project_name>.mp4`.
+
+**Gapless concatenation:** per-scene clips are joined with the FFmpeg concat *filter* (`ffmpeg_concat_scenes()`), not MoviePy's `concatenate_videoclips`. Each scene `.mp4` is AAC-encoded, which adds ~1024 priming samples and leaves the audio track slightly shorter than the video track; MoviePy would fill that gap at every boundary by repeating the last audio buffer, producing an audible fragment of the previous clip's sound bleeding into the following (often silent) pause. Decoding through the concat filter trims the priming and pads short audio tails with real silence, and normalises every input (canvas size, fps, 44.1 kHz stereo) so mixed-resolution inserts concatenate cleanly. The reading assembler (`assemble_reading.py`) uses the same helper.
 
 **Speed adjustment:** an optional FFmpeg pass changes playback speed without pitch shift. Set `speed_factor` in `config.ini` (e.g. `0.95` for 5% slower) or override per-project in the UI. The `atempo` filter is chained automatically when the factor falls outside the 0.5–2.0 range a single filter supports.
 
@@ -239,6 +261,121 @@ Uploads the final video to Instagram as a Reel via the Instagram Graph API v25.0
 The backend exchanges the short-lived token for a 60-day long-lived token automatically and stores credentials in `instagram_creds.json`. The token is refreshed automatically when fewer than 7 days remain.
 
 Upload pipeline: create Reel container → chunked resumable upload → poll until FINISHED → publish.
+
+---
+
+## Reading Together (`reading_together`)
+
+A specialised project type that turns a **public-domain short story** into a
+sentence-by-sentence "read along" video with grammar-annotated on-screen text,
+and packages it as both short vertical **parts** and one long horizontal video.
+It supports its own cast of **single-image characters** (e.g. talking animals AND
+humans) drawn in the project art style.
+
+### What it produces
+
+- `final_<project>_part1.mp4 … partN.mp4` — vertical 9:16 shorts, grouped into
+  parts of N sentences (default 6, set at assembly time). A short final remainder
+  is **fused into the previous part** rather than left as a tiny clip — e.g. with
+  7 per part and 10 sentences you get one part of 10; with 17 you get 7 + 10.
+- `final_<project>_long.mp4` — one horizontal 16:9 video containing **all** sentences.
+
+### How it works
+
+1. **Build Reading Source** (`create_reading_source.py` → `build_reading_project`)
+   GPT **modernizes** the pasted story (fixes archaic spelling/grammar, lightly
+   rephrases into contemporary German at the chosen level — which also keeps the
+   result clear of edition-specific copyright), then **splits** it into short,
+   slide-sized sentences (`max_words` soft cap). A second GPT pass (`analyze_story`)
+   **casts ALL characters — humans included, not only animals** (unnamed ones get a
+   stable German name like "Mann"/"Mueller"), and **plans one detailed illustration
+   per sentence**: each `scene_visual` must describe the action & character
+   interaction, the location/environment, and the composition. One narrator-voiced
+   scene is created per sentence, tagged `_sentence_index` / `_part_index`, and each
+   subtitle is grammar-annotated at render time.
+2. **Cast Characters** (`reading_cast` → `materialize_reading_cast`)
+   Each story character becomes a reusable **single-image** asset (`single_ref`)
+   under the namespaced key `rt_<slug>`, generated once via fal.ai (text-to-image,
+   in the project art style) and reused across every scene and part. Reading scenes
+   are switched to the `reading_cast` reference mode, which composites whichever cast
+   members appear in a scene. **Non-destructive & idempotent**: re-running merges
+   newly detected characters (default `reanalyze=true`) and keeps the assets/images
+   you already made unless you tick `regenerate`.
+3. **Audio / Images / Video** — the normal steps. Render the per-scene clips twice:
+   once vertical (default → `videos/`) and once horizontal (`format_override="horizontal"`,
+   `out_subdir="h"` → `videos/h/`) for the long video.
+4. **Assemble Parts + Long** (`assemble_reading.py`) — groups scenes into vertical
+   `partN` files (using `per_part`, with remainder-fusion) and concatenates all
+   scenes into the horizontal `long` file, each with background audio / optional branding.
+
+### Using it
+
+**Web UI:** pick **Reading Together** in the New Project modal, paste the story into
+the *Story text* box, choose a level, create. The Pipeline tab shows a reading-specific
+step list: Build Reading Source → Generate Audio → Cast Characters → Generate Images →
+Render Vertical Clips → Render Horizontal Clips → Assemble Parts + Long → Upload.
+("Sentences per vertical part" lives on the **Assemble** step, not Build.)
+
+In the **Generated Items** tab you also get: a **Story cast gallery** (reference
+image + name + kind + description per character) at the top, a per-scene **character
+picker** (checkboxes to choose exactly which cast members composite into a scene)
+on the image-regen panel, **#N scene numbering** matching the manifest/video order,
+and a **Check for updates** button (header) that re-imports any images/audio created
+on disk but missing from the manifest.
+
+**CLI:** see the Reading Together block under [CLI Usage](#cli-usage).
+
+### Notes
+
+- Narration uses a single **Narrator** voice (`characters.json` → `Narrator.voice_id`).
+  This entry must exist or narration audio will be empty.
+- `default_sentences_per_part` (6) and `default_max_words` (16) are on the
+  `reading_together` entry in `project_types.json`; both are overridable per run
+  (max_words on Build, sentences-per-part on Assemble).
+- The grammar overlay is the same renderer used by annotated subtitles — see the
+  Grammar-annotated subtitles note in [Video Rendering](#5-video-rendering-create_videopy)
+  and [`ANNOTATION_SCHEMA.md`](ANNOTATION_SCHEMA.md). It requires Chromium via Playwright.
+- Art style (incl. the brand eye rule: solid upright-oval eyes, no sclera/anime/
+  catchlights) is global in `config.ini [image_prompts]` — see Configuration.
+
+### Internals & status (catch-up for a fresh session)
+
+Phases 1–6 of the original plan ([`READING_TOGETHER_PLAN.md`](READING_TOGETHER_PLAN.md))
+are **complete**. The whole feature has been verified by `py_compile`, Babel JSX
+parsing and unit tests on pure logic, but a full live end-to-end render (fal +
+ElevenLabs + MoviePy + Chromium) is the user's responsibility to confirm.
+
+Key modules:
+
+| File | Role |
+|---|---|
+| `create_reading_source.py` | Pre-project: `modernize_and_split`, `analyze_story` (cast + per-sentence visuals), `build_reading_scenes`, `build_reading_project`, `materialize_reading_cast`, `chunk_into_parts`. CLI: `split` / `build` / `cast`. |
+| `generate_annotations.py` | GPT → grammar annotation schema (`tokens` + `spans`, see `ANNOTATION_SCHEMA.md`). Per-sentence cache (`cache_path`, keyed by text + `CACHE_VERSION`) so re-renders don't re-prompt; `force=True` redoes it. Safe fallback to plain tokens. |
+| `annotation_store.py` | Read / save (edit) / regenerate one scene's annotation against the per-scene cache. Powers the annotation viewer-editor in Generated Items; lightweight (no moviepy). |
+| `html_annotation_renderer.py` | Annotation → styled HTML → transparent PNG (with baked rounded dark backing) via Playwright/Chromium. `AnnotationBatchRenderer` keeps one browser per video. |
+| `create_images.py` | `reading_cast` reference mode + `single_ref` chars + `_char_ref_path`; text-only uses **`fal_t2i_model`**; per-scene `cast_override`; atomic + incremental manifest writes. |
+| `manage_characters.py` | `add_single_ref_character`, `generate_single_ref_art`. |
+| `assemble_reading.py` | `group_scenes_into_parts(scenes, per_part)` (remainder-fusion) + `assemble_reading` (parts + long). |
+| `reconcile.py` | `reconcile_media_paths` — back-fill missing file paths. |
+| `routes/pipeline.py` | `reading_build` / `reading_cast` / `reading_assemble`, `run/video` (`format_override`, `out_subdir`, `annot_font_scale`, `regen_annotations`), `image_scene` `cast`, `annotations/reset`. |
+| `routes/projects.py` | `/reconcile` + reconcile-on-read. |
+| Frontend | `Modals.js` (reading type + story box), `PipelineTab.js` (reading steps + fields), `ItemsTab.js` (cast gallery, per-scene picker, #N numbering), `ProjectView.js` (Check for updates). |
+
+Manifest fields used by this type (under `generation_config.reading`):
+`raw_text`, `modernized_text`, `sentences[]`, `level`, `max_words`,
+`sentences_per_part`, `characters[]` ({name, kind, description}),
+`cast_assets` ({name → `rt_<slug>` key}). Scenes carry `_reading`,
+`_sentence_index`, `_part_index`, `_cast` (asset keys), `scene_visual`, and an
+`image` with `reference_type:"reading_cast"` + `_cast`.
+
+Known gaps / next ideas:
+- Art style and casting hints are **global** (`config.ini`), not per-project — a
+  per-project "Art style" / "Casting guidance" field was discussed but not built.
+- `subtitle_renderer.py` (old PIL annotator) was **deleted**; the Ideogram renderer
+  (`ideogram_annotation_renderer.py`, `render_comparison.py`) exists but was judged
+  poor — HTML is the chosen renderer.
+- Re-analysis fills `scene_visual` only when empty; it won't overwrite visuals you've
+  already generated (regenerate those scenes to apply richer prompts).
 
 ---
 
@@ -300,7 +437,8 @@ Full CRUD for all asset types:
 | `GET` | `/projects` | List all projects with metadata |
 | `GET` | `/projects/<name>` | Return full manifest JSON |
 | `POST` | `/create_project` | Create a new project |
-| `PATCH` | `/projects/<name>/scenes/<scene_id>` | Update scene fields (`subtitle_text`, `tts_text`, `speaker`) |
+| `PATCH` | `/projects/<name>/scenes/<scene_id>` | Update scene fields (`subtitle_text`, `tts_text`, `speaker`, `duration_ms`) |
+| `POST` | `/projects/<name>/reconcile` | Back-fill image/audio `file_path`s for files that exist on disk but are missing from the manifest (self-heal after an interrupted run). Also runs automatically on every `GET /projects/<name>`. |
 
 ### Pipeline
 
@@ -309,11 +447,17 @@ Full CRUD for all asset types:
 | `GET` | `/projects/<name>/status/<step>` | Poll job status |
 | `POST` | `/projects/<name>/prompt/script` | Preview GPT prompt (no API call) |
 | `POST` | `/projects/<name>/run/script` | Run script generation (`char_a`, `char_b`, optional `location_key`, `project_type_key`, `dialog_count`, `prompt_override`, `words`) |
-| `POST` | `/projects/<name>/run/audio` | Run audio generation (all scenes) |
+| `POST` | `/projects/<name>/run/audio` | Run audio generation. Incremental by default (skips lines that already have audio); `overwrite=true` re-synthesizes everything |
 | `POST` | `/projects/<name>/run/audio_scene` | Re-generate audio for one scene (`scene_id`) |
 | `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) — params: `overwrite`, `ignore_cache`, `use_location_ref` |
-| `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image — params: `scene_id`, `prompt_override`, `use_location_ref`, `characters_override` (`"both"` / `"single_speaker"` / `"none"`) |
-| `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`) |
+| `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image — params: `scene_id`, `prompt_override`, `use_location_ref`, `characters_override` (`"both"` / `"single_speaker"` / `"none"`), `cast` (list of `rt_*` asset keys for reading scenes) |
+| `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`, `format_override`, `out_subdir`, `annot_font_scale` = annotation text size ×, `regen_annotations` = ignore the annotation cache and re-prompt OpenAI for every sentence — implies a clip overwrite) |
+| `GET` | `/projects/<name>/annotations/<scene_id>` | Read one scene's grammar annotation (`tokens` + `spans`) from cache. Returns `{exists, annotatable, text, tokens, spans}` |
+| `POST` | `/projects/<name>/annotations/<scene_id>` | Save an edited annotation (body `tokens`, `spans` — sanitised), or with `{"regenerate": true}` re-prompt OpenAI. Writes the cache and clears the scene's clip(s) so a re-render applies it |
+| `POST` | `/projects/<name>/annotations/reset` | Clear cached grammar annotation(s) so they re-prompt on the next render. Body `scene_id` resets one scene (and deletes its rendered clip so a normal re-render rebuilds it); omit `scene_id` to reset all |
+| `POST` | `/projects/<name>/run/reading_build` | Reading Together: modernize + split the story, cast characters, plan detailed illustrations (`max_words`) |
+| `POST` | `/projects/<name>/run/reading_cast` | Reading Together: create single-image character assets and wire them into the scenes. Params: `regenerate` (redo reference images), `reanalyze` (re-detect + merge missing characters; default true). Non-destructive. |
+| `POST` | `/projects/<name>/run/reading_assemble` | Reading Together: build vertical parts + long horizontal video (`bg_audio_name`, `make_parts`, `make_long`, `overwrite`, `per_part` = sentences per vertical part) |
 | `POST` | `/projects/<name>/run/assemble` | Assemble final video (`bg_audio_name`, `speed_factor`, `branding_file`, `branding_mode`, `overwrite`) |
 | `POST` | `/projects/<name>/run/upload` | Upload to YouTube (`privacy`, `title`, `description`) |
 | `POST` | `/projects/<name>/run/upload_instagram` | Upload to Instagram (`caption`, `share_to_feed`) |
@@ -452,13 +596,20 @@ projects/
 
 ## Requirements
 
+> **Windows-only tool.** Setup and the helper scripts below assume Windows.
+
 - Python 3.10+
+- FFmpeg **and FFprobe** on `PATH` (video/audio rendering and assembly)
+- ImageMagick on `PATH`, with the Pango delegate for annotated subtitles (subtitle/label rendering)
+- Playwright + Chromium (HTML annotation rendering)
+- Calibri / Arial fonts (default subtitle fonts; substitute in `config.ini` if absent)
 - OpenAI API key (script generation)
 - ElevenLabs API key (audio synthesis)
 - fal.ai API key (image generation)
-- FFmpeg (video rendering and assembly)
 - Google Cloud OAuth credentials (YouTube upload only)
 - Facebook App with Instagram Graph API product (Instagram upload only)
+
+Run `python check_dependencies.py` at any time to verify every item above is present and correctly configured.
 
 ---
 
@@ -466,11 +617,31 @@ projects/
 
 ### 1. Clone and install dependencies
 
-```bash
+```bat
 git clone <repo-url>
 cd germanLearningVidsAIPowered
-pip install -r requirements.txt
+
+REM One-shot setup: installs Python packages, Playwright Chromium,
+REM and (via winget) FFmpeg + ImageMagick, then verifies everything.
+install_dependencies.bat
 ```
+
+`install_dependencies.bat` runs `pip install -r requirements.txt`, `python -m playwright install chromium`, and installs FFmpeg (`Gyan.FFmpeg`) and ImageMagick through `winget` (with manual download links printed if `winget` is unavailable). It finishes by running the dependency checker.
+
+If you prefer to install packages only (assuming FFmpeg/ImageMagick are already present):
+
+```bat
+pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+After FFmpeg or ImageMagick is installed, open a **new** terminal (so `PATH` refreshes) and confirm the environment:
+
+```bat
+python check_dependencies.py
+```
+
+> **Note:** `moviepy` is pinned to `1.0.3` and `numpy` to `<2.0` in `requirements.txt`. The code uses the moviepy 1.x API; do not upgrade to moviepy 2.x.
 
 ---
 
@@ -600,6 +771,9 @@ python app.py
 projects_dir = projects
 assets_dir   = assets
 
+[tools]
+imagemagick = magick   ; path to magick.exe, or just `magick` if it is on PATH
+
 [script]
 openai_model = gpt-4.1-mini
 level        = B1          ; target language level (A1–C2)
@@ -620,12 +794,23 @@ fps                  = 30
 markup_italic_attrs  = style='italic'
 markup_bold_attrs    = weight='bold'
 
+[image_prompts]
+; Art style applied to ALL generated images. Edit these to change the look globally.
+style_tokens        = ...   ; prepended to every SCENE image prompt (watercolor look, "keep furniture in place", "no white bg behind characters", brand EYE rule)
+framing_tokens      = ...   ; composition rules appended after the style (9:16 centering, white-vignette margins)
+character_art_style = ...   ; appended when generating each single-image CHARACTER reference
+location_art_style  = ...   ; appended when generating LOCATION/background art
+; Brand rule baked into the style strings: eyes are solid upright ovals, no sclera/white,
+; no glossy "anime" eyes, no catchlights. Style is GLOBAL (shared by all projects).
+
 [assembly]
 bg_audio_volume    = 0.18
 bg_audio_fadein_s  = 1.0
 bg_audio_fadeout_s = 2.0
 speed_factor       = 1.0   ; playback speed multiplier (0.95 = 5% slower)
 ```
+
+> **ImageMagick path:** `[tools] imagemagick` must point at a real binary. Setting it to `magick` (resolved from `PATH`) survives version upgrades; an old hard-coded path like `C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe` breaks when ImageMagick updates. `check_dependencies.py` flags a stale path. Subtitle fonts default to Calibri/Arial under `[subtitles]` / `[narrator_subtitles]`; change them there if those fonts aren't installed.
 
 ---
 
@@ -654,6 +839,20 @@ python create_images.py my_project --overwrite
 python create_video.py my_project
 python create_video.py my_project --annotated-subtitles
 
+# ── Reading Together (story → annotated vertical parts + long horizontal video) ──
+python create_project.py grimm_fox --type reading_together \
+  --context "$(cat story.txt)"            # the raw (even archaic-spelled) story is the context
+python create_reading_source.py build grimm_fox --max-words 16   # modernize, split, cast, plan illustrations
+python create_reading_source.py cast  grimm_fox                  # create single-image refs (merge + non-destructive)
+#   cast flags: --regenerate (redo ref images)  --no-reanalyze (skip re-detecting characters)
+python create_audio.py  grimm_fox
+python create_images.py grimm_fox
+python create_video.py  grimm_fox --annotated-subtitles                       # vertical 9:16 clips
+python create_video.py  grimm_fox --annotated-subtitles \
+  --format-override horizontal --out-subdir h                                 # 16:9 clips for the long video
+python assemble_reading.py grimm_fox --bg-audio office --per-part 6           # final_*_part1..N.mp4 + final_*_long.mp4
+python reconcile.py grimm_fox                                                 # self-heal manifest from files on disk
+
 # Assemble final video
 python assemble_video.py my_project \
   --bg-audio office \
@@ -678,6 +877,8 @@ python upload_instagram.py --setup \
 ## Extending with New Video Types
 
 New project types are defined entirely in `assets/project_types/project_types.json` — no Python changes required.
+
+> **Exception:** `reading_together` is a built-in special type. It is registered in `project_types.json` (with `"reading": true` and a `scene_builder_rules.mode` of `"reading"`) but is driven by `create_reading_source.py` / `assemble_reading.py` rather than the standard dialog prompt + `build_scene_list()` flow, so it does not use `description_for_prompt` or `output_json_schema`.
 
 Each entry defines:
 

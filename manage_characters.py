@@ -263,6 +263,74 @@ def generate_character_art(assets_dir: Path, name: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Single-reference (animal / non-human) characters
+# ---------------------------------------------------------------------------
+
+def add_single_ref_character(assets_dir: Path, name: str, description: str,
+                             kind: str = "animal", voice_id: str = "") -> dict:
+    """
+    Create (or update) a character that is represented by ONE reusable reference
+    image instead of a turnaround sheet.  Used by reading_together for story
+    characters such as animals.  Idempotent: re-running updates the description.
+    """
+    chars = load_characters(assets_dir)
+    existing = chars.get(name, {})
+    entry = {
+        **existing,
+        "name": name,
+        "voice_id": voice_id or existing.get("voice_id", ""),
+        "fixed_description": description,
+        "variable_description": existing.get("variable_description", ""),
+        "single_ref": True,
+        "kind": kind,
+        "ref_image_file_path": existing.get("ref_image_file_path"),
+        "artwork_file_path": existing.get("artwork_file_path"),
+        "art_34left_file_path": existing.get("art_34left_file_path"),
+        "thumbnail_file_path": existing.get("thumbnail_file_path"),
+    }
+    chars[name] = entry
+    save_characters(assets_dir, chars)
+
+    registry = load_registry(assets_dir)
+    registry.setdefault("characters", {})[name] = {"config": f"characters/characters.json#{name}"}
+    save_registry(assets_dir, registry)
+
+    logger.info("Single-ref character '%s' added/updated.", name)
+    return entry
+
+
+def generate_single_ref_art(assets_dir: Path, name: str,
+                            image_size: str = "portrait_4_3") -> dict:
+    """Generate ONE reference image (text-to-image) for a single-ref character via fal.ai."""
+    chars = load_characters(assets_dir)
+    if name not in chars:
+        raise ValueError(f"Character '{name}' not found.")
+    char = chars[name]
+    desc = char.get("fixed_description", "")
+
+    cfg = load_config()
+    t2i_model = cfg.get("t2i_model") or cfg.get("fal_t2i_model") or "fal-ai/flux/dev"
+    style_suffix = cfg.get("image_character_art_style", "")
+
+    prompt = (f"Full-body character reference of: {desc}. "
+              f"Single character, neutral plain background, clear lighting, "
+              f"consistent design for reuse across scenes. {style_suffix}")
+    logger.info("Generating single-ref art for '%s' ...", name)
+    result = fal_client.subscribe(t2i_model, arguments={"prompt": prompt, "image_size": image_size})
+    url = result["images"][0]["url"]
+
+    char_dir = assets_dir / "characters" / name
+    char_dir.mkdir(parents=True, exist_ok=True)
+    ref_path = char_dir / "ref.png"
+    _download(url, ref_path)
+
+    chars[name]["ref_image_file_path"] = f"characters/{name}/ref.png"
+    save_characters(assets_dir, chars)
+    logger.info("Single-ref art saved: %s", ref_path)
+    return chars[name]
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

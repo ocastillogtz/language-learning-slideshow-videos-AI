@@ -116,6 +116,32 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "bg_audio_fadeout_s": _f("assembly", "bg_audio_fadeout_s", 2.0),
         "speed_factor":       _f("assembly", "speed_factor",       1.0),
 
+        # Reading_together part overlays (vertical part shorts)
+        "part_label_word":         _p("reading", "part_label_word",         "Teil"),
+        "part_label_fontsize":     _i("reading", "part_label_fontsize",     64),
+        "part_label_color":        _p("reading", "part_label_color",        "BlanchedAlmond"),
+        "part_label_stroke_color": _p("reading", "part_label_stroke_color", "tan4"),
+        "part_label_stroke_width": _i("reading", "part_label_stroke_width", 4),
+        "part_label_margin_x":     _i("reading", "part_label_margin_x",     50),
+        "part_label_margin_y":     _i("reading", "part_label_margin_y",     50),
+        "part_label_bg_opacity":   _f("reading", "part_label_bg_opacity",   0.45),
+        "part_label_bg_padding_x": _i("reading", "part_label_bg_padding_x", 22),
+        "part_label_bg_padding_y": _i("reading", "part_label_bg_padding_y", 12),
+        "continuation_text":         _p("reading", "continuation_text",         "Fortsetzung folgt..."),
+        "continuation_seconds":      _f("reading", "continuation_seconds",      2.0),
+        "continuation_fontsize":     _i("reading", "continuation_fontsize",     96),
+        "continuation_color":        _p("reading", "continuation_color",        "PeachPuff"),
+        "continuation_stroke_color": _p("reading", "continuation_stroke_color", "sienna4"),
+        "continuation_stroke_width": _i("reading", "continuation_stroke_width", 4),
+        # Reading "pre-pause": hold the silent frame (image + sentence) before the
+        # narration of each reading scene (except the first), so the learner can read
+        # first. The book icon (relative to assets_dir) is shown top-left meanwhile.
+        "read_pre_pause_ms":         _i("reading", "pre_pause_ms",             2000),
+        "pre_pause_icon":            _p("reading", "pre_pause_icon",           "icons/book.png"),
+        "pre_pause_icon_size":       _i("reading", "pre_pause_icon_size",      150),
+        "pre_pause_icon_margin_x":   _i("reading", "pre_pause_icon_margin_x",  50),
+        "pre_pause_icon_margin_y":   _i("reading", "pre_pause_icon_margin_y",  50),
+
         # Audio / ElevenLabs
         "elevenlabs_model":        _p("audio", "elevenlabs_model", "eleven_multilingual_v2"),
         "audio_format":            _p("audio", "output_format",    "mp3_44100_128"),
@@ -124,6 +150,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         # Script / GPT
         "script_model": _p("script", "openai_model", "gpt-4.1-mini"),
         "level":        _p("script", "level",         "B1"),
+        # Max distinct characters composited into one scene image (multi-character types).
+        "max_scene_characters": _i("script", "max_scene_characters", 2),
 
         # fal.ai images
         "fal_model":      _p("fal", "model",      "fal-ai/bytedance/seedream/v4.5/edit"),

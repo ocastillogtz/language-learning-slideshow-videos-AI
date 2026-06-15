@@ -64,8 +64,12 @@ def assemble_video(
         raise RuntimeError("No clips found -- run create_video first")
 
     logger.info("Assembling %d clips ...", len(clip_paths))
-    scene_clips = [VideoFileClip(str(p)) for p in clip_paths]
-    content     = concatenate_videoclips(scene_clips, method="compose")
+    # Concatenate per-scene clips with FFmpeg (gapless; trims AAC priming and pads
+    # short audio tails with real silence) instead of MoviePy, which otherwise
+    # repeats the last audio buffer at each clip boundary -> audible glitch.
+    concat_tmp = project_path / ("_concat_" + project_name + ".mp4")
+    ffmpeg_concat_scenes(clip_paths, concat_tmp, fps=cfg["fps"])
+    content = VideoFileClip(str(concat_tmp))
 
     # Background audio
     bg_audio_path = _resolve_bg_audio(bg_audio_name, assets_dir)
@@ -101,9 +105,8 @@ def assemble_video(
         remove_temp=True, logger=None,
     )
 
-    for c in scene_clips:
-        c.close()
     content.close()
+    concat_tmp.unlink(missing_ok=True)
 
     # Optional speed pass
     if apply_speed:
@@ -134,6 +137,99 @@ def assemble_video(
         moviepy_target.rename(out_path)
 
     logger.info("Done: %s", out_path)
+
+
+def _probe_video_dims(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(path)],
+        capture_output=True, text=True).stdout.strip()
+    w, h = out.split("x")[:2]
+    return int(w), int(h)
+
+
+def _probe_duration(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True).stdout.strip()
+    try:
+        return float(out)
+    except ValueError:
+        return 0.0
+
+
+def _has_audio_stream(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True).stdout.strip()
+    return bool(out)
+
+
+def ffmpeg_concat_scenes(clip_paths, out_path, fps, target_w=None, target_h=None, sr=44100):
+    """
+    Gapless concatenation of per-scene clips via the FFmpeg concat *filter*.
+
+    Why this exists: each per-scene .mp4 is AAC-encoded, which adds ~1024 priming
+    samples and leaves the audio track slightly SHORTER than the video track. When
+    MoviePy's concatenate_videoclips re-reads those files, it trusts the (longer)
+    container duration and, at every clip boundary, fills the missing audio tail by
+    REPEATING the last decoded buffer -- an audible fragment of the previous clip's
+    sound bleeding into the following (often silent) pause clip.
+
+    Decoding each input through the concat filter trims the priming and pads short
+    audio segments with real silence, so the join is gapless and glitch-free. Every
+    input is normalised (scaled+padded to a common canvas, fps, 44.1 kHz stereo) so
+    mixed resolutions / framerates (e.g. raw inserted video clips) concat cleanly.
+    """
+    clip_paths = [Path(p) for p in clip_paths]
+    dims = [_probe_video_dims(p) for p in clip_paths]
+    W = target_w or max(d[0] for d in dims)
+    H = target_h or max(d[1] for d in dims)
+    W -= W % 2
+    H -= H % 2
+    has_aud = [_has_audio_stream(p) for p in clip_paths]
+
+    inputs, extra = [], []
+    for p in clip_paths:
+        inputs += ["-i", str(p)]
+    # A clip with no audio track gets its own bounded silent source so the concat
+    # filter has an [a] input for every segment.
+    null_for = {}
+    for i, p in enumerate(clip_paths):
+        if not has_aud[i]:
+            null_for[i] = len(clip_paths) + len(null_for)
+            dur = max(_probe_duration(p), 0.05)
+            extra += ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", f"anullsrc=r={sr}:cl=stereo"]
+
+    parts, labels = [], ""
+    for i in range(len(clip_paths)):
+        parts.append(
+            f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
+            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p[v{i}]"
+        )
+        a_src = i if has_aud[i] else null_for[i]
+        parts.append(
+            f"[{a_src}:a]aresample={sr}:async=1:first_pts=0,"
+            f"aformat=sample_rates={sr}:channel_layouts=stereo[a{i}]"
+        )
+        labels += f"[v{i}][a{i}]"
+    filt = ";".join(parts) + ";" + labels + f"concat=n={len(clip_paths)}:v=1:a=1[v][a]"
+
+    cmd = (
+        ["ffmpeg", "-y"] + inputs + extra
+        + ["-filter_complex", filt, "-map", "[v]", "-map", "[a]",
+           "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-r", str(fps),
+           "-c:a", "aac", "-b:a", "192k", str(out_path)]
+    )
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "FFmpeg scene concat failed (exit " + str(result.returncode) + "):\n"
+            + result.stderr[-1500:]
+        )
+    return out_path
 
 
 def _ffmpeg_branding_concat(branding_path, content_path, out_path, mode):
