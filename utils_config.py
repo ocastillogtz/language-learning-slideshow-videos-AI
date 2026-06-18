@@ -152,6 +152,9 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "level":        _p("script", "level",         "B1"),
         # Max distinct characters composited into one scene image (multi-character types).
         "max_scene_characters": _i("script", "max_scene_characters", 2),
+        # Long dialogs are generated/evaluated in chunks of this many lines so a single
+        # request never hits the model's output-token ceiling (see create_script.py).
+        "dialog_batch_size": _i("script", "dialog_batch_size", 40),
 
         # fal.ai images
         "fal_model":      _p("fal", "model",      "fal-ai/bytedance/seedream/v4.5/edit"),

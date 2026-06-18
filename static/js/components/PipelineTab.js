@@ -347,13 +347,18 @@ function AudioFields() {
 }
 
 function ImagesFields() {
+  const { manifest } = useApp();
+  const isHorizontal = (manifest?.video_info?.video_format) === "horizontal";
   const [overwrite,       setOverwrite]       = useState(false);
   const [ignoreCache,     setIgnoreCache]     = useState(false);
   const [useLocationRef,  setUseLocationRef]  = useState(true);
+  const [mosaicMode,      setMosaicMode]      = useState(false);
+  // Mosaic mode is horizontal-only; never send it for vertical projects.
   ImagesFields._getPayload = () => ({
     overwrite,
     ignore_cache:      ignoreCache,
     use_location_ref:  useLocationRef,
+    mosaic_mode:       isHorizontal && mosaicMode,
   });
   return (
     <div className="fields">
@@ -377,6 +382,22 @@ function ImagesFields() {
           paddingLeft:"1.6rem", fontStyle:"italic"}}>
           Only character art will be used as reference — the model will invent the background.
         </div>
+      )}
+      {isHorizontal && (
+        <>
+          <div className="toggle-row">
+            <input type="checkbox" id="f_mosaic" checked={mosaicMode}
+              onChange={e=>setMosaicMode(e.target.checked)}/>
+            <label htmlFor="f_mosaic">Image-saving mode (2×2 mosaic — 1 image per 4 scenes)</label>
+          </div>
+          {mosaicMode && (
+            <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:"-.3rem",
+              paddingLeft:"1.6rem", fontStyle:"italic"}}>
+              Generates one 2×2 mosaic image for every 4 scenes (the intro narration keeps
+              its own image) and reuses it across all four — one fal.ai call instead of four.
+            </div>
+          )}
+        </>
       )}
     </div>
   );

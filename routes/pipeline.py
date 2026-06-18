@@ -58,9 +58,10 @@ def run_images(name):
         overwrite         = bool(data.get("overwrite", False))
         ignore_cache      = bool(data.get("ignore_cache", False))
         use_location_ref  = bool(data.get("use_location_ref", True))
+        mosaic_mode       = bool(data.get("mosaic_mode", False))
         from create_images import create_images
         run_job(name, "images", create_images, name, overwrite, ignore_cache,
-                use_location_ref=use_location_ref)
+                use_location_ref=use_location_ref, mosaic_mode=mosaic_mode)
         return jsonify({"message": "Image generation started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

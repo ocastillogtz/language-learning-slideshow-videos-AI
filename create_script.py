@@ -73,6 +73,28 @@ _FRAMING_TOKENS: str = ""
 MAX_SCENE_CHARACTERS = 2
 
 
+class ScriptTruncatedError(RuntimeError):
+    """Raised when the model stopped because it hit the output-token ceiling
+    (finish_reason == 'length'), so the returned JSON is incomplete."""
+
+
+def _check_not_truncated(resp, what: str) -> None:
+    """Detect a length-truncated completion. In JSON mode the model closes the
+    JSON gracefully when it runs out of output budget, so json.loads() still
+    succeeds and the short result looks valid — this is the only signal that a
+    long request (e.g. a 200-line dialog) was silently cut off."""
+    finish = resp.choices[0].finish_reason
+    if finish == "length":
+        raise ScriptTruncatedError(
+            f"{what}: the model hit its output-token limit (finish_reason='length') "
+            f"and the result is incomplete. Reduce the dialogue count, switch "
+            f"[script] openai_model to a model with a larger output window, or "
+            f"generate the dialog in smaller batches."
+        )
+    if finish not in (None, "stop"):
+        logger.warning(f"{what}: unexpected finish_reason={finish!r}")
+
+
 def _load_style_tokens() -> None:
     """Populate module-level style/framing vars from config (called once)."""
     global _STYLE_TOKENS, _FRAMING_TOKENS
@@ -93,17 +115,21 @@ def _build_prompt(
     chars_data: dict,
     all_locs: dict,
     max_scene_chars: int = MAX_SCENE_CHARACTERS,
+    dialog_count_override=None,
 ) -> str:
     """
     Inject runtime values into the project_type's description_for_prompt template.
     Returns the complete prompt string ready for GPT.
+
+    dialog_count_override lets the batched generator ask for just one chunk's worth
+    of lines instead of the manifest's full requested count.
     """
     gen        = manifest["generation_config"]
     char_names = gen["characters"]
     char_a, char_b = char_names[0], char_names[1]
     location_key   = gen.get("location_key") or ""
     level          = gen["level"]
-    dialog_count   = gen.get("dialog_count") or None
+    dialog_count   = dialog_count_override if dialog_count_override is not None else (gen.get("dialog_count") or None)
 
     if location_key and location_key in all_locs:
         loc_data      = all_locs[location_key]
@@ -179,6 +205,120 @@ def _build_prompt(
 
 
 # =============================================================================
+# BATCHED DIALOG GENERATION (long videos — avoids the output-token ceiling)
+# =============================================================================
+
+def _parse_int_count(dialog_count) -> int | None:
+    """Return dialog_count as an int if it's an explicit number, else None
+    (ranges like "10-14" or None mean 'use the type default' — those are short
+    enough that batching isn't needed)."""
+    try:
+        return int(str(dialog_count).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _continuation_block(prior_dialog: list, this_batch: int, remaining: int, target: int) -> str:
+    """Appended to the per-type template for every batch after the first. Recaps
+    the recent lines (for continuity) and asks ONLY for the next chunk of dialog."""
+    recap_all = []
+    for i, item in enumerate(prior_dialog):
+        sp = item.get("speaker") or item.get("character") or "?"
+        recap_all.append(f"{i + 1}. {sp}: {item.get('text', '')}")
+    # Only the tail is needed for continuity; keeps input tokens bounded on long runs.
+    recap = "\n".join(recap_all[-12:])
+    done  = len(prior_dialog)
+    final = remaining <= this_batch
+    close = ("This is the FINAL batch — bring the conversation to a natural close."
+             if final else "Do NOT conclude the conversation yet; more lines will follow.")
+    return f"""
+
+=== CONTINUATION MODE ===
+This dialog is being written in batches. {done} of {target} lines already exist.
+Most recent lines so far (for continuity — do NOT repeat or re-number them):
+{recap}
+
+Now write the NEXT {this_batch} dialog lines ONLY, continuing the SAME conversation
+naturally from where it left off. Do not restart, recap, or repeat earlier lines.
+Keep the same characters, setting, register and style, and follow every dialog and
+scene_visual rule given above. {close}
+
+Return ONLY a JSON object of the form {{"dialog": [ ... ]}} holding exactly the
+{this_batch} new line objects (same fields as specified above). The title, tags,
+insights, narration and other top-level fields already exist — omit them entirely.
+""".strip("\n")
+
+
+def _generate_script_batched(
+    project_type: dict,
+    manifest: dict,
+    chars_data: dict,
+    all_locs: dict,
+    *,
+    max_scene_chars: int,
+    model: str,
+    target: int,
+    batch_size: int,
+) -> tuple[dict, str]:
+    """Generate a long dialog in chunks of `batch_size` lines, merging the result
+    into a single gpt_output. The first call also yields title/tags/insights/
+    narration; later calls only add dialog lines. Returns (gpt_output, raw_text)."""
+    logger.info(f"Batched script generation: {target} lines in chunks of {batch_size}")
+    gpt_output: dict | None = None
+    dialog: list = []
+    raws: list[str] = []
+    batch_no = 0
+
+    while len(dialog) < target:
+        batch_no += 1
+        remaining  = target - len(dialog)
+        this_batch = min(batch_size, remaining)
+        first      = gpt_output is None
+
+        prompt = _build_prompt(project_type, manifest, chars_data, all_locs,
+                               max_scene_chars=max_scene_chars,
+                               dialog_count_override=this_batch)
+        if not first:
+            prompt += "\n\n" + _continuation_block(dialog, this_batch, remaining, target)
+
+        logger.info(f"  batch {batch_no}: requesting {this_batch} lines "
+                    f"({len(dialog)}/{target} done)")
+        resp = client.chat.completions.create(
+            model           = model,
+            messages        = [{"role": "user", "content": prompt}],
+            response_format = {"type": "json_object"},
+        )
+        _check_not_truncated(resp, f"script batch {batch_no}")
+        raws.append(resp.choices[0].message.content)
+        out = json.loads(resp.choices[0].message.content)
+        new_lines = out.get("dialog", []) or []
+
+        if first:
+            gpt_output = out
+            dialog = list(new_lines)
+        else:
+            if not new_lines:
+                logger.warning("Continuation batch returned no new dialog lines — "
+                               "stopping early.")
+                break
+            dialog.extend(new_lines)
+
+        # Safety valve: if a batch yields fewer than asked and we've matched/exceeded
+        # the request, the loop's while-condition ends it; this guards a stuck model
+        # that keeps returning nothing despite remaining > 0.
+        if batch_no > 0 and len(dialog) == 0:
+            break
+
+    if gpt_output is None:  # pragma: no cover — target>0 guarantees one pass
+        gpt_output = {"dialog": []}
+    # The model may overshoot on the final batch; trim to exactly what was requested.
+    gpt_output["dialog"] = dialog[:target]
+    logger.info(f"Batched generation produced {len(gpt_output['dialog'])} dialog lines")
+    raw_content = "\n\n/* ---- batch boundary ---- */\n\n".join(raws)
+    return gpt_output, raw_content
+
+
+# =============================================================================
 # REPETITION SELECTION (shadowing only — second GPT pass)
 # =============================================================================
 
@@ -229,6 +369,7 @@ def _select_repetitions(
         response_format = {"type": "json_object"},
         temperature     = 0.2,
     )
+    _check_not_truncated(resp, "repetition selection")
     data  = json.loads(resp.choices[0].message.content)
     texts = [r["text"] for r in data.get("repetitions", []) if r.get("text")]
     if len(texts) != 3:
@@ -560,18 +701,34 @@ def create_script(
                                               max_scene_chars=max_scene_chars)
     manifest["generation_config"]["prompt_script"] = prompt
 
-    logger.info(f"Calling GPT ({cfg['script_model']}) for {project_name} …")
-    resp = client.chat.completions.create(
-        model           = cfg["script_model"],
-        messages        = [{"role": "user", "content": prompt}],
-        response_format = {"type": "json_object"},
-    )
-    raw_content = resp.choices[0].message.content
+    # Long dialogs are split into chunks so no single request hits the model's
+    # output-token ceiling (which silently truncates the result). Only kicks in for
+    # an explicit numeric dialog_count above the batch size; a custom prompt_override
+    # is sent as-is in one call.
+    batch_size   = int(cfg.get("dialog_batch_size") or 40)
+    target_count = _parse_int_count(manifest["generation_config"].get("dialog_count"))
 
-    # Save raw GPT response before parsing — useful for debugging parse failures
-    manifest["generation_config"]["raw_gpt_script"] = raw_content
-
-    gpt_output: dict = json.loads(raw_content)
+    if not prompt_override and target_count and target_count > batch_size:
+        logger.info(f"Calling GPT ({cfg['script_model']}) for {project_name} — "
+                    f"batched ({target_count} lines) …")
+        gpt_output, raw_content = _generate_script_batched(
+            project_type, manifest, chars_data, all_locs,
+            max_scene_chars=max_scene_chars, model=cfg["script_model"],
+            target=target_count, batch_size=batch_size,
+        )
+        manifest["generation_config"]["raw_gpt_script"] = raw_content
+    else:
+        logger.info(f"Calling GPT ({cfg['script_model']}) for {project_name} …")
+        resp = client.chat.completions.create(
+            model           = cfg["script_model"],
+            messages        = [{"role": "user", "content": prompt}],
+            response_format = {"type": "json_object"},
+        )
+        _check_not_truncated(resp, "script generation")
+        raw_content = resp.choices[0].message.content
+        # Save raw GPT response before parsing — useful for debugging parse failures
+        manifest["generation_config"]["raw_gpt_script"] = raw_content
+        gpt_output = json.loads(raw_content)
 
     manifest["video_info"]["title"]    = gpt_output.get("title")
     manifest["video_info"]["tags"]     = gpt_output.get("tags")
@@ -580,12 +737,17 @@ def create_script(
     # Compact plain-text dialog for grammar review — no markup, easy to copy-paste
     manifest["generation_config"]["compact_dialog"] = _build_compact_dialog(gpt_output)
 
-    # Auto-evaluate grammar and naturality of each dialog line
+    # Auto-evaluate grammar and naturality of each dialog line. Operates on the
+    # dialog list directly (keyed dialog_0..N-1, matching the dialog scenes) and is
+    # batched so long dialogs don't truncate the evaluation.
     logger.info("Evaluating dialog grammar/naturality …")
+    eval_texts = [_strip_fancy_notation(item.get("text", ""))
+                  for item in gpt_output.get("dialog", []) if item.get("text")]
     manifest["generation_config"]["dialog_auto_evaluation"] = _evaluate_dialog(
-        compact_dialog = manifest["generation_config"]["compact_dialog"],
-        level          = manifest["generation_config"]["level"],
-        model          = cfg["script_model"],
+        dialog_texts = eval_texts,
+        level        = manifest["generation_config"]["level"],
+        model        = cfg["script_model"],
+        batch_size   = batch_size,
     )
 
     repetition_texts = None
@@ -647,44 +809,64 @@ def _strip_fancy_notation(text: str) -> str:
 # DIALOG AUTO-EVALUATION (third GPT pass)
 # =============================================================================
 
-def _build_evaluation_prompt(compact_dialog: str, level: str) -> str:
+def _build_evaluation_prompt(dialog_texts: list[str], level: str, offset: int) -> str:
+    """Evaluation prompt for one chunk of dialog. Lines are numbered with their
+    GLOBAL index (offset + position) so the returned dialog_N keys line up with the
+    full dialog regardless of which batch they came from."""
+    numbered = "\n".join(f"dialog_{offset + i}: {t}" for i, t in enumerate(dialog_texts))
     return f"""You are a German language expert evaluating dialog written for a {level} learner.
 
-Evaluate EACH line of the dialog below for grammar correctness and natural spoken German.
-For each line use the key format "dialog_N" (0-indexed, matching line order, skip the narrator line).
+Evaluate EACH line below for grammar correctness and natural spoken German.
+Each line is already tagged with its key ("dialog_N"). Use that EXACT key in your answer.
 
 Return ONLY valid JSON (no markdown, no backticks):
 {{
-  "dialog_0": "excellent — natural phrasing, grammar is correct",
-  "dialog_1": "bad — 'ich bin gegangen nach Hause' is wrong; correct form is 'ich bin nach Hause gegangen' (verb-final in subordinate position)",
-  ...
+  "dialog_{offset}": "excellent — natural phrasing, grammar is correct",
+  "dialog_{offset + 1}": "bad — 'ich bin gegangen nach Hause' is wrong; correct form is 'ich bin nach Hause gegangen' (verb-final in subordinate position)"
 }}
 
 Rules:
 - Be concise: one sentence per line max
 - If a line is correct and natural, say "excellent" or "good" and briefly say why
 - If a line has an issue, describe the problem and give the corrected version
-- Do NOT include the narrator / Erzähler line in your evaluation
+- Return one entry for EVERY key shown below, and do not invent extra keys
 - Output ONLY the JSON object
 
 Dialog:
-{compact_dialog}
+{numbered}
 """.strip()
 
 
-def _evaluate_dialog(compact_dialog: str, level: str, model: str) -> dict:
-    prompt = _build_evaluation_prompt(compact_dialog, level)
-    resp = client.chat.completions.create(
-        model           = model,
-        messages        = [{"role": "user", "content": prompt}],
-        response_format = {"type": "json_object"},
-        temperature     = 0.2,
-    )
-    try:
-        return json.loads(resp.choices[0].message.content)
-    except json.JSONDecodeError as e:
-        logger.warning(f"dialog_auto_evaluation parse failed: {e}")
-        return {}
+def _evaluate_dialog(dialog_texts: list[str], level: str, model: str,
+                     batch_size: int = 40) -> dict:
+    """Evaluate every dialog line for grammar/naturality, in chunks so a long
+    dialog never hits the output-token ceiling. Keyed dialog_0..dialog_{N-1}."""
+    result: dict = {}
+    truncated = False
+    for start in range(0, len(dialog_texts), batch_size):
+        chunk  = dialog_texts[start:start + batch_size]
+        prompt = _build_evaluation_prompt(chunk, level, start)
+        resp = client.chat.completions.create(
+            model           = model,
+            messages        = [{"role": "user", "content": prompt}],
+            response_format = {"type": "json_object"},
+            temperature     = 0.2,
+        )
+        if resp.choices[0].finish_reason == "length":
+            # A single chunk shouldn't truncate; if it does, flag it but keep going.
+            truncated = True
+            logger.warning("dialog_auto_evaluation chunk hit the output-token limit "
+                           f"(lines {start}+). Lower [script] dialog_batch_size.")
+        try:
+            result.update(json.loads(resp.choices[0].message.content))
+        except json.JSONDecodeError as e:
+            logger.warning(f"dialog_auto_evaluation parse failed for chunk {start}: {e}")
+    if truncated:
+        result["_truncated"] = (
+            "⚠ Evaluation was cut off at the model's output-token limit — some "
+            "lines were not evaluated."
+        )
+    return result
 
 
 def _build_compact_dialog(gpt_output: dict) -> str:

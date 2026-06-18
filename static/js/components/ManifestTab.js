@@ -154,7 +154,17 @@ function ManifestTab() {
       {gen.dialog_auto_evaluation && Object.keys(gen.dialog_auto_evaluation).length > 0 && (
         <div className="mf-card full">
           <div className="mf-label">Dialog Auto-Evaluation</div>
-          {Object.entries(gen.dialog_auto_evaluation).map(([key, verdict]) => {
+          {gen.dialog_auto_evaluation._truncated && (
+            <div style={{
+              padding:".6rem .75rem", marginBottom:".55rem",
+              background:"var(--s2)", borderRadius:"8px",
+              borderLeft:"3px solid var(--orange)",
+              fontSize:".8rem", color:"var(--orange)",
+            }}>
+              {gen.dialog_auto_evaluation._truncated}
+            </div>
+          )}
+          {Object.entries(gen.dialog_auto_evaluation).filter(([key]) => key !== "_truncated").map(([key, verdict]) => {
             const idx     = parseInt(key.replace("dialog_", ""), 10);
             const scene   = dialogScenes[idx];
             const speaker = scene?.characters?.[0] || "—";

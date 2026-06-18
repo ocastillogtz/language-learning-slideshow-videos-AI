@@ -96,25 +96,27 @@ Calls GPT to generate structured dialogue, narration, and (for `shadowing` proje
 
 #### Vertical types (1080×1920, 9:16 — Shorts / Reels)
 
-| Project Type | Description | Default dialogue count |
-|---|---|---|
-| `shadowing` | Dialogue + 3-sentence repetition/shadowing section. Good for pronunciation practice. | 4–6 lines |
-| `story` | Pure narrative dialogue, no repetitions. Good for comprehension. | 4–6 lines |
-| `word_learning` | One scene per vocabulary word; speaker says the word then uses it in a sentence. | driven by word list |
-| `register_phrases` | Paired sentences showing the same idea in two registers (e.g. formal vs. colloquial). Visual clothing change reinforces the register shift. | 3 pairs |
-| `grammar_pairs` | Paired sentences showing a grammatical construction (e.g. present → Präteritum). Visual cues (sepia memory-bubble for past tenses, dreamy glow for Konjunktiv II) reinforce the transformation. | 5 pairs |
+| Project Type | Description | Characters | Default dialogue count |
+|---|---|---|---|
+| `shadowing` | Dialogue + 3-sentence repetition/shadowing section. Good for pronunciation practice. | 2 | 4–6 lines |
+| `story` | Pure narrative dialogue, no repetitions. Good for comprehension. | 2 + optional extras | 4–6 lines |
+| `word_learning` | One scene per vocabulary word; speaker says the word then uses it in a sentence. | 2 + optional extras | driven by word list |
+| `register_phrases` | Paired sentences showing the same idea in two registers (e.g. formal vs. colloquial). Visual clothing change reinforces the register shift. | 2 + optional extras | 3 pairs |
+| `grammar_pairs` | Paired sentences showing a grammatical construction (e.g. present → Präteritum). Visual cues (sepia memory-bubble for past tenses, dreamy glow for Konjunktiv II) reinforce the transformation. | 2 | 5 pairs |
+
+`story`, `word_learning`, and `register_phrases` support **more than two characters**: Character A and Character B are required, and additional cast members can be added in the Script step UI. The extra characters appear in the GPT prompt and can show up in scene illustrations (up to `max_scene_characters` per illustration, configurable in `create_script.py`).
 
 #### Horizontal types (1920×1080 Full HD, 16:9 — YouTube long-form)
 
 Each `_long` type mirrors its vertical counterpart in content and structure, but generates wider scenes with a cinematic 16:9 framing and a higher default dialogue count for longer video runtime.
 
-| Project Type | Based on | Default dialogue count |
-|---|---|---|
-| `shadowing_long` | `shadowing` | 10–14 lines + repetition section |
-| `story_long` | `story` | 10–14 lines |
-| `word_learning_long` | `word_learning` | driven by word list |
-| `register_phrases_long` | `register_phrases` | 6 pairs |
-| `grammar_pairs_long` | `grammar_pairs` | 8 pairs |
+| Project Type | Based on | Characters | Default dialogue count |
+|---|---|---|---|
+| `shadowing_long` | `shadowing` | 2 | 10–14 lines + repetition section |
+| `story_long` | `story` | 2 + optional extras | 10–14 lines |
+| `word_learning_long` | `word_learning` | 2 + optional extras | driven by word list |
+| `register_phrases_long` | `register_phrases` | 2 + optional extras | 6 pairs |
+| `grammar_pairs_long` | `grammar_pairs` | 2 | 8 pairs |
 
 When a horizontal type is selected, the pipeline automatically applies Full HD settings at every stage: fal.ai generates `landscape_16_9` images, the video canvas is set to 1920×1080, and subtitle/icon positions are adjusted for the wider frame. The `video_format` field in the manifest is set to `"horizontal"` at project creation and propagates through all downstream steps.
 
@@ -138,9 +140,11 @@ Each scene object in `scenes[]` carries:
 
 The raw GPT JSON response is saved to `generation_config.raw_gpt_script` before parsing, so any parse failures can be diagnosed without re-running the API call.
 
+**Batched generation for long dialogs:** a single GPT call has a finite output-token budget, so very long dialogs (e.g. 200 lines) would otherwise be silently truncated — the model closes the JSON early, producing fewer lines than requested. When an explicit `dialog_count` exceeds `[script] dialog_batch_size` (default 40), the script step automatically generates the dialogue in chunks: the first call returns the metadata + narration + first chunk, and continuation calls each add the next chunk (given a recap of recent lines for continuity) until the requested count is reached. The chunks are merged into one script. The grammar auto-evaluation pass is batched the same way. Because output tokens dominate cost and are billed at the configured model's rate either way, batching on a cheap model is significantly cheaper than switching to a larger-output model — and it scales to any length. If a single chunk ever still truncates (`finish_reason == "length"`), the run fails loudly with an actionable message rather than returning a partial script; lower `dialog_batch_size` in that case.
+
 **Prompt preview:** before running the script step, you can load the exact GPT prompt in the UI (fully editable) and submit a custom override — without making an API call.
 
-**Character auto-detection:** when opening the Script step, the UI scans `provided_context` (your scene description) for known character names and pre-fills the Character A / Character B dropdowns automatically.
+**Character auto-detection:** when opening the Script step, the UI scans `provided_context` (your scene description) for known character names and pre-fills the Character A / Character B dropdowns automatically. For multi-character types (`story`, `word_learning`, `register_phrases` and their `_long` variants), additional cast members beyond the first two can be added via checkboxes that appear below the main dropdowns.
 
 **Optional location:** the location field is optional. When the "Use specific location" checkbox is unchecked, no location key is sent and GPT chooses an appropriate setting based on the scene content and learning objectives. The model's chosen setting is then reflected in the generated image prompts.
 
@@ -175,6 +179,8 @@ Image prompts are pre-built by `create_script.py` and stored in `scene.image.pro
 **Format-aware image size:** the `image_size` passed to fal.ai is selected automatically based on the manifest's `video_format` field — `portrait_16_9` for vertical projects and `landscape_16_9` for horizontal Full HD projects. The default from `config.ini` is used as a fallback.
 
 Flag: `--overwrite` — regenerate images even when the file already exists in `project/images/`.
+
+**Image-saving mode (2×2 mosaic — horizontal only):** when the **"Image-saving mode"** checkbox is ticked (shown only for horizontal projects), the dialogue scenes are batched into groups of four and rendered as a **single 2×2 mosaic image** that is then reused for all four scenes. Each batch makes **one** fal.ai call instead of four: the four scenes' panel descriptions are combined into one prompt with the global style tokens included only once, a 2×2 grid layout instruction is appended, and the reference composite carries the union of every character reference across the four panels (plus the location). The opening narration scene always keeps its own full-frame image and is never mosaiced. The shared image is saved under the first scene's id and every scene in the batch points its `image.file_path` at it. CLI flag: `--mosaic` (ignored for vertical projects).
 
 Individual scenes can be regenerated via the web UI (Generated Items tab → Re-generate Image) or via the `/run/image_scene` API endpoint.
 
@@ -394,9 +400,9 @@ Seven collapsible step cards covering the full pipeline:
 
 | Step | Controls |
 |---|---|
-| 1 · Script | Character A/B (auto-detected from scene description), **"Use specific location" checkbox + dropdown** (optional), project type, **dialogue count** (optional number, uses type default if blank), prompt preview/override |
+| 1 · Script | Character A/B (auto-detected from scene description); **Additional characters** (for `story`, `word_learning`, `register_phrases` and their `_long` variants); **"Use specific location" checkbox + dropdown** (optional), project type, **dialogue count** (optional number, uses type default if blank), prompt preview/override |
 | 2 · Audio | Run all scenes |
-| 3 · Images | Overwrite flag, ignore-cache flag |
+| 3 · Images | Overwrite flag, ignore-cache flag, location-reference flag, **Image-saving mode** (2×2 mosaic, horizontal projects only) |
 | 4 · Video | Annotated subtitles flag, footnote/disclaimer text (optional) |
 | 5 · Assemble | Background audio, speed factor, branding file, branding position (none/intro/outro/both), overwrite flag |
 | 6 · YouTube Upload | Privacy, title override, description override |
@@ -446,10 +452,10 @@ Full CRUD for all asset types:
 |---|---|---|
 | `GET` | `/projects/<name>/status/<step>` | Poll job status |
 | `POST` | `/projects/<name>/prompt/script` | Preview GPT prompt (no API call) |
-| `POST` | `/projects/<name>/run/script` | Run script generation (`char_a`, `char_b`, optional `location_key`, `project_type_key`, `dialog_count`, `prompt_override`, `words`) |
+| `POST` | `/projects/<name>/run/script` | Run script generation (`char_a`, `char_b`, optional `characters` list (for multi-character types), optional `location_key`, `project_type_key`, `dialog_count`, `prompt_override`, `words`) |
 | `POST` | `/projects/<name>/run/audio` | Run audio generation. Incremental by default (skips lines that already have audio); `overwrite=true` re-synthesizes everything |
 | `POST` | `/projects/<name>/run/audio_scene` | Re-generate audio for one scene (`scene_id`) |
-| `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) — params: `overwrite`, `ignore_cache`, `use_location_ref` |
+| `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) — params: `overwrite`, `ignore_cache`, `use_location_ref`, `mosaic_mode` (horizontal only — one 2×2 mosaic image shared by every 4 scenes) |
 | `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image — params: `scene_id`, `prompt_override`, `use_location_ref`, `characters_override` (`"both"` / `"single_speaker"` / `"none"`), `cast` (list of `rt_*` asset keys for reading scenes) |
 | `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`, `format_override`, `out_subdir`, `annot_font_scale` = annotation text size ×, `regen_annotations` = ignore the annotation cache and re-prompt OpenAI for every sentence — implies a clip overwrite) |
 | `GET` | `/projects/<name>/annotations/<scene_id>` | Read one scene's grammar annotation (`tokens` + `spans`) from cache. Returns `{exists, annotatable, text, tokens, spans}` |
@@ -775,8 +781,10 @@ assets_dir   = assets
 imagemagick = magick   ; path to magick.exe, or just `magick` if it is on PATH
 
 [script]
-openai_model = gpt-4.1-mini
-level        = B1          ; target language level (A1–C2)
+openai_model      = gpt-4.1-mini
+level             = B1     ; target language level (A1–C2)
+dialog_batch_size = 40     ; long dialogs are generated/evaluated in chunks of this many
+                           ; lines so one request never hits the model's output-token cap
 
 [audio]
 elevenlabs_model = eleven_multilingual_v2
@@ -828,12 +836,19 @@ python create_script.py my_project \
   --char-a Wiebke --char-b Sani \
   --location cafe            # omit this flag to let the model choose the setting
 
+# Multi-character script (story / word_learning / register_phrases types)
+python create_script.py my_project \
+  --char-a Wiebke --char-b Sani \
+  --character Klaus --character Marta \   # add as many --character flags as needed
+  --type story
+
 # Generate audio
 python create_audio.py my_project
 
 # Generate images
 python create_images.py my_project
 python create_images.py my_project --overwrite
+python create_images.py my_project --mosaic     # horizontal only: one 2x2 image per 4 scenes
 
 # Render scene clips
 python create_video.py my_project
