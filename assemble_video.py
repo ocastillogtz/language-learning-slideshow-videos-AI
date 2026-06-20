@@ -9,6 +9,8 @@ import json
 import logging
 import argparse
 import subprocess
+import tempfile
+import os
 from pathlib import Path
 from moviepy.editor import (
     VideoFileClip, AudioFileClip, CompositeAudioClip,
@@ -182,6 +184,27 @@ def ffmpeg_concat_scenes(clip_paths, out_path, fps, target_w=None, target_h=None
     audio segments with real silence, so the join is gapless and glitch-free. Every
     input is normalised (scaled+padded to a common canvas, fps, 44.1 kHz stereo) so
     mixed resolutions / framerates (e.g. raw inserted video clips) concat cleanly.
+
+    ---------------------------------------------------------------------------
+    COMMAND-LINE LENGTH WARNING (the cause of the [WinError 206] crash)
+    ---------------------------------------------------------------------------
+    This function builds ONE giant FFmpeg filtergraph -- roughly ~250 characters
+    of text PER scene (see the `filt` string built below). A long dialog can
+    produce 100-300+ scenes, so that single string can balloon to tens of
+    thousands of characters.
+
+    Windows caps a process's ENTIRE command line at 32,767 characters. When the
+    filtergraph is passed inline (e.g. `-filter_complex "<huge string>"`), the
+    command line blows past that cap and Python's subprocess call fails *before
+    FFmpeg even starts* with:  OSError [WinError 206] "The filename or extension
+    is too long". (Despite the wording, nothing is wrong with any filename -- it
+    is the command line as a whole that is too long.)
+
+    THE FIX, applied below: never put the filtergraph on the command line. Write
+    it to a temporary text file and hand FFmpeg the file path via
+    `-filter_complex_script`. The command line then only carries short tokens
+    (the `-i <path>` inputs and a handful of flags), which stays comfortably
+    under the limit even for hundreds of scenes.
     """
     clip_paths = [Path(p) for p in clip_paths]
     dims = [_probe_video_dims(p) for p in clip_paths]
@@ -215,15 +238,41 @@ def ffmpeg_concat_scenes(clip_paths, out_path, fps, target_w=None, target_h=None
             f"aformat=sample_rates={sr}:channel_layouts=stereo[a{i}]"
         )
         labels += f"[v{i}][a{i}]"
+    # ⚠️ THIS is the string that grows without bound. Each scene above appended
+    # ~250 chars (two `parts` entries + a `labels` entry); `filt` is their join.
+    # For a 150-scene dialog this is ~35,000 chars -- already over the Windows
+    # command-line cap on its own. So it must NOT be passed inline as an argv
+    # token; we route it through a file instead (see below).
     filt = ";".join(parts) + ";" + labels + f"concat=n={len(clip_paths)}:v=1:a=1[v][a]"
 
-    cmd = (
-        ["ffmpeg", "-y"] + inputs + extra
-        + ["-filter_complex", filt, "-map", "[v]", "-map", "[a]",
-           "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-r", str(fps),
-           "-c:a", "aac", "-b:a", "192k", str(out_path)]
+    # ---- Keep the huge filtergraph OFF the command line --------------------
+    # Write `filt` to a temp .txt file and pass only its (short) PATH to FFmpeg
+    # via `-filter_complex_script`. This is THE line that prevents the
+    # [WinError 206] "command line too long" failure: argv now holds just the
+    # `-i <path>` inputs plus a few flags, never the multi-KB graph itself.
+    #
+    # If you ever add another FFmpeg call whose arguments scale with the number
+    # of scenes (filters, a long list of `-map`s, etc.), apply the same pattern:
+    # move the big argument into a file rather than passing it inline.
+    #
+    # delete=False is required on Windows: a NamedTemporaryFile stays open and
+    # cannot be opened a second time (by FFmpeg) while open, so we close it
+    # ourselves, let FFmpeg read it, then remove it manually in `finally`.
+    script = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
     )
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        script.write(filt)
+        script.close()  # flush + release the handle so FFmpeg can open the file
+        cmd = (
+            ["ffmpeg", "-y"] + inputs + extra
+            + ["-filter_complex_script", script.name, "-map", "[v]", "-map", "[a]",
+               "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-r", str(fps),
+               "-c:a", "aac", "-b:a", "192k", str(out_path)]
+        )
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        os.unlink(script.name)  # always clean up the temp filtergraph file
     if result.returncode != 0:
         raise RuntimeError(
             "FFmpeg scene concat failed (exit " + str(result.returncode) + "):\n"

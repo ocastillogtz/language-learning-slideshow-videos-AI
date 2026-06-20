@@ -167,6 +167,154 @@ def _reading_cast_paths(img: dict, chars_data: dict, assets_dir: Path) -> list:
 
 
 # =============================================================================
+# SHARED PER-SCENE GENERATION
+# =============================================================================
+
+def _generate_scene_bytes(
+    img: dict,
+    scene: dict,
+    *,
+    chars_data: dict,
+    assets_dir: Path,
+    loc_file,
+    char_a,
+    char_b,
+    art_a,
+    art_b,
+    model: str,
+    t2i_model: str,
+    image_size: str,
+    use_location_ref: bool,
+) -> bytes:
+    """Generate the image bytes for a single scene, dispatching on its
+    reference_type. Shared by the normal per-scene loop and the mosaic path's
+    narration scene so the reference logic lives in exactly one place."""
+    prompt         = img.get("prompt_to_create", "")
+    reference_type = img.get("reference_type", "both")
+
+    if reference_type == "none":
+        return _call_fal_text_only(prompt, t2i_model, image_size)
+    elif reference_type == "reading_cast":
+        ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
+        if ref_paths:
+            url = _upload(_to_bytes(build_composite(*ref_paths)))
+            return _call_fal(prompt, url, model, image_size)
+        return _call_fal_text_only(prompt, t2i_model, image_size)
+    elif reference_type == "multi":
+        ref_paths   = _reading_cast_paths(img, chars_data, assets_dir)
+        comp_inputs = list(ref_paths)
+        if use_location_ref and loc_file:
+            comp_inputs.append(loc_file)
+        if comp_inputs:
+            url = _upload(_to_bytes(build_composite(*comp_inputs)))
+            return _call_fal(prompt, url, model, image_size)
+        return _call_fal_text_only(prompt, t2i_model, image_size)
+    elif reference_type == "single_speaker":
+        speaker = img.get("speaker") or (scene.get("characters") or [char_a])[0]
+        art_spk = _char_ref_path(chars_data[speaker], assets_dir) if speaker in chars_data else None
+        if art_spk and use_location_ref and loc_file:
+            comp = build_composite(art_spk, loc_file)
+        elif art_spk:
+            comp = build_composite(art_spk)
+        else:
+            comp = None
+        if comp is not None:
+            url = _upload(_to_bytes(comp))
+            return _call_fal(prompt, url, model, image_size)
+        return _call_fal_text_only(prompt, t2i_model, image_size)
+    elif art_a and art_b:
+        # "both" — use both characters + optional location
+        if use_location_ref and loc_file:
+            comp = build_composite(art_a, art_b, loc_file)
+        else:
+            comp = build_composite(art_a, art_b)
+        url = _upload(_to_bytes(comp))
+        return _call_fal(prompt, url, model, image_size)
+    else:
+        # no usable references — fall back to text-only
+        return _call_fal_text_only(prompt, t2i_model, image_size)
+
+
+# =============================================================================
+# MOSAIC (image-saving) MODE — horizontal only
+# =============================================================================
+
+# How many scenes share one generated mosaic image (2x2 grid).
+MOSAIC_GROUP_SIZE = 4
+_MOSAIC_POSITIONS = ["top-left", "top-right", "bottom-left", "bottom-right"]
+
+
+def _scene_present_chars(scene: dict, img: dict, char_a, char_b) -> list:
+    """Best-effort list of character names visible in this scene's illustration."""
+    if img.get("_cast"):
+        return list(img["_cast"])
+    rt = img.get("reference_type", "both")
+    if rt == "single_speaker":
+        spk = img.get("speaker") or (scene.get("characters") or [char_a])[0]
+        return [spk] if spk else []
+    if rt == "both":
+        return [c for c in (char_a, char_b) if c]
+    return list(scene.get("characters") or [])
+
+
+def _panel_body(scene: dict, img: dict, present: list, chars_data: dict, loc_desc: str) -> str:
+    """One scene's contribution to the mosaic prompt (no style/framing tokens)."""
+    visual = (scene.get("scene_visual") or "").strip()
+    if not visual:
+        # Fall back to the action portion of the stored prompt if scene_visual is absent.
+        full = img.get("prompt_to_create", "")
+        visual = full.split("Action:", 1)[-1].strip() if "Action:" in full else full.strip()
+    roster_parts = []
+    for nm in present:
+        fixed = (chars_data.get(nm, {}) or {}).get("fixed_description", "").strip()
+        roster_parts.append(f"{nm} ({fixed})" if fixed else nm)
+    roster = ", ".join(roster_parts) or "the scene's characters"
+    return f"{roster}. Setting: {loc_desc}. Action: {visual}".strip()
+
+
+def _mosaic_prompt(style_tokens: str, bodies: list) -> str:
+    """Combine N panel descriptions into one 2x2-grid mosaic prompt. The style
+    tokens are included exactly once (the whole point of saving mode)."""
+    n = len(bodies)
+    lines = []
+    for i, body in enumerate(bodies):
+        pos = _MOSAIC_POSITIONS[i] if i < len(_MOSAIC_POSITIONS) else f"panel {i + 1}"
+        lines.append(f"Panel {i + 1} ({pos}): {body}")
+    panels = "\n".join(lines)
+    return (
+        f"{style_tokens}\n"
+        f"FRAMING: one landscape 16:9 image divided into a 2x2 grid of {n} equal panels "
+        f"with thin clean gutters between them.\n\n"
+        f"Create ONE image made of {n} distinct scenes arranged in a 2x2 grid. Keep a single "
+        f"consistent art style across every panel. Match each character's exact clothing, hair "
+        f"and facial features from the reference image, and keep every character looking "
+        f"identical in each panel they appear in.\n\n"
+        f"{panels}\n\n"
+        "No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
+    )
+
+
+def _chunk_ref_paths(chunk: list, presents: list, chars_data: dict, assets_dir: Path, loc_file) -> list:
+    """Union of every character reference image across the chunk (de-duplicated,
+    first-seen order) plus the optional location — the 'maximum character
+    samples' composite for the mosaic call."""
+    paths: list = []
+    seen: set = set()
+    for present in presents:
+        for nm in present:
+            cd = chars_data.get(nm)
+            if not cd:
+                continue
+            p = _char_ref_path(cd, assets_dir)
+            if p and p.exists() and str(p) not in seen:
+                seen.add(str(p))
+                paths.append(p)
+    if loc_file:
+        paths.append(loc_file)
+    return paths
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -175,6 +323,7 @@ def create_images(
     overwrite: bool = False,
     ignore_cache: bool = False,   # kept for API compat; has no effect (caching removed)
     use_location_ref: bool = True,
+    mosaic_mode: bool = False,
 ) -> None:
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
@@ -219,6 +368,33 @@ def create_images(
     art_a = _char_ref_path(chars_data[char_a], assets_dir) if char_a and char_a in chars_data else None
     art_b = _char_ref_path(chars_data[char_b], assets_dir) if char_b and char_b in chars_data else None
 
+    gen_kwargs = dict(
+        chars_data=chars_data, assets_dir=assets_dir, loc_file=loc_file,
+        char_a=char_a, char_b=char_b, art_a=art_a, art_b=art_b,
+        model=model, t2i_model=t2i_model, image_size=image_size,
+        use_location_ref=use_location_ref,
+    )
+
+    # Image-saving (mosaic) mode: one 2x2 image shared by 4 scenes. Horizontal only.
+    if mosaic_mode and video_format == "horizontal":
+        loc_desc = (loc_data["description"] if loc_key and loc_key in all_locs else
+                    "a setting that fits the action")
+        style_tokens = cfg.get("image_style_tokens", "")
+        _generate_mosaics(
+            manifest, manifest_path, images_dir, overwrite,
+            chars_data=chars_data, assets_dir=assets_dir, loc_file=loc_file,
+            loc_desc=loc_desc, style_tokens=style_tokens,
+            char_a=char_a, char_b=char_b, model=model, t2i_model=t2i_model,
+            image_size=image_size, use_location_ref=use_location_ref,
+            gen_kwargs=gen_kwargs,
+        )
+        _write_manifest(manifest_path, manifest)
+        logger.info("Image generation complete (mosaic mode).")
+        return
+    if mosaic_mode:
+        logger.warning("Image-saving (mosaic) mode is only supported for horizontal "
+                       "projects — generating images normally.")
+
     for scene in manifest["scenes"]:
         img = scene.get("image")
         if not img:
@@ -232,61 +408,11 @@ def create_images(
             _write_manifest(manifest_path, manifest)
             continue
 
-        prompt         = img.get("prompt_to_create", "")
         reference_type = img.get("reference_type", "both")
-
         logger.info(f"Generating [{scene['id']}] reference_type={reference_type}")
 
         try:
-            if reference_type == "none":
-                # Text-only generation — no reference composite
-                data = _call_fal_text_only(prompt, t2i_model, image_size)
-            elif reference_type == "reading_cast":
-                # reading_together: composite whatever cast members appear in the scene
-                ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
-                if ref_paths:
-                    url  = _upload(_to_bytes(build_composite(*ref_paths)))
-                    data = _call_fal(prompt, url, model, image_size)
-                else:
-                    data = _call_fal_text_only(prompt, t2i_model, image_size)
-            elif reference_type == "multi":
-                # multi-character dialog scene: composite every character present in
-                # this line (img["_cast"]) plus the optional location background.
-                ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
-                comp_inputs = list(ref_paths)
-                if use_location_ref and loc_file:
-                    comp_inputs.append(loc_file)
-                if comp_inputs:
-                    url  = _upload(_to_bytes(build_composite(*comp_inputs)))
-                    data = _call_fal(prompt, url, model, image_size)
-                else:
-                    data = _call_fal_text_only(prompt, t2i_model, image_size)
-            elif reference_type == "single_speaker":
-                speaker = img.get("speaker") or (scene.get("characters") or [char_a])[0]
-                art_spk = _char_ref_path(chars_data[speaker], assets_dir) if speaker in chars_data else None
-                if art_spk and use_location_ref and loc_file:
-                    comp = build_composite(art_spk, loc_file)
-                elif art_spk:
-                    comp = build_composite(art_spk)
-                else:
-                    comp = None
-                if comp is not None:
-                    url  = _upload(_to_bytes(comp))
-                    data = _call_fal(prompt, url, model, image_size)
-                else:
-                    data = _call_fal_text_only(prompt, t2i_model, image_size)
-            elif art_a and art_b:
-                # "both" — use both characters + optional location
-                if use_location_ref and loc_file:
-                    comp = build_composite(art_a, art_b, loc_file)
-                else:
-                    comp = build_composite(art_a, art_b)
-                url  = _upload(_to_bytes(comp))
-                data = _call_fal(prompt, url, model, image_size)
-            else:
-                # no usable references — fall back to text-only
-                data = _call_fal_text_only(prompt, t2i_model, image_size)
-
+            data = _generate_scene_bytes(img, scene, **gen_kwargs)
             _save(data, dest)
             img["file_path"] = f"images/{scene['id']}.png"
             _write_manifest(manifest_path, manifest)
@@ -297,6 +423,74 @@ def create_images(
 
     _write_manifest(manifest_path, manifest)
     logger.info("Image generation complete.")
+
+
+def _generate_mosaics(
+    manifest, manifest_path, images_dir, overwrite, *,
+    chars_data, assets_dir, loc_file, loc_desc, style_tokens,
+    char_a, char_b, model, t2i_model, image_size, use_location_ref, gen_kwargs,
+) -> None:
+    """Group dialog scenes into batches of MOSAIC_GROUP_SIZE and render one shared
+    2x2 mosaic image per batch. The intro narration scene is generated on its own."""
+    scenes   = manifest["scenes"]
+    # Scenes that carry an image, split into the standalone narration intro and the
+    # rest (which get batched into mosaics).
+    narration = [s for s in scenes if s.get("image") and s.get("_is_narration")]
+    batchable = [s for s in scenes if s.get("image") and not s.get("_is_narration")]
+
+    # 1. Narration intro — its own full image (never mosaiced).
+    for scene in narration:
+        img  = scene["image"]
+        dest = images_dir / f"{scene['id']}.png"
+        if not overwrite and dest.exists():
+            img["file_path"] = f"images/{scene['id']}.png"
+            continue
+        logger.info(f"Generating narration [{scene['id']}]")
+        try:
+            data = _generate_scene_bytes(img, scene, **gen_kwargs)
+            _save(data, dest)
+            img["file_path"] = f"images/{scene['id']}.png"
+            _write_manifest(manifest_path, manifest)
+        except Exception as e:
+            logger.error(f"  Failed to generate narration image for {scene['id']}: {e}")
+
+    # 2. Batch the rest into groups of MOSAIC_GROUP_SIZE.
+    for start in range(0, len(batchable), MOSAIC_GROUP_SIZE):
+        chunk    = batchable[start:start + MOSAIC_GROUP_SIZE]
+        share_id = chunk[0]["id"]
+        dest     = images_dir / f"{share_id}.png"
+        rel      = f"images/{share_id}.png"
+
+        if not overwrite and dest.exists():
+            logger.info(f"  Exists: {dest.name} — reusing for {len(chunk)} scenes")
+            for s in chunk:
+                s["image"]["file_path"] = rel
+            _write_manifest(manifest_path, manifest)
+            continue
+
+        presents = [_scene_present_chars(s, s["image"], char_a, char_b) for s in chunk]
+        bodies   = [_panel_body(s, s["image"], pr, chars_data, loc_desc)
+                    for s, pr in zip(chunk, presents)]
+        prompt   = _mosaic_prompt(style_tokens, bodies)
+        ref_paths = _chunk_ref_paths(chunk, presents, chars_data, assets_dir,
+                                     loc_file if use_location_ref else None)
+
+        ids = ", ".join(s["id"] for s in chunk)
+        logger.info(f"Generating mosaic [{share_id}] for {len(chunk)} scenes ({ids})")
+
+        try:
+            if ref_paths:
+                url  = _upload(_to_bytes(build_composite(*ref_paths)))
+                data = _call_fal(prompt, url, model, image_size)
+            else:
+                data = _call_fal_text_only(prompt, t2i_model, image_size)
+            _save(data, dest)
+            for s in chunk:
+                s["image"]["file_path"] = rel
+            _write_manifest(manifest_path, manifest)
+        except Exception as e:
+            logger.error(f"  Failed to generate mosaic for {ids}: {e}")
+            continue
 
 
 def create_image_single(
@@ -449,13 +643,16 @@ def main() -> None:
     p.add_argument("--scene-id",     dest="scene_id",
                    help="Regenerate a single scene by ID")
     p.add_argument("--prompt-override", dest="prompt_override")
+    p.add_argument("--mosaic", action="store_true", dest="mosaic_mode",
+                   help="Image-saving mode (horizontal only): one 2x2 mosaic image "
+                        "shared by every 4 scenes")
     a = p.parse_args()
 
     if a.scene_id:
         create_image_single(a.project_name, a.scene_id,
                             prompt_override=a.prompt_override)
     else:
-        create_images(a.project_name, overwrite=a.overwrite)
+        create_images(a.project_name, overwrite=a.overwrite, mosaic_mode=a.mosaic_mode)
 
 
 if __name__ == "__main__":
