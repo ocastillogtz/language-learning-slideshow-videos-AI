@@ -205,3 +205,19 @@ body {
   .field-row { grid-template-columns:1fr; }
   .edit-row2 { grid-template-columns:1fr; }
 }
+
+/* ── Progress bar (job loading bars) ─────────────────────────────────────── */
+.progress { margin-top:.7rem; }
+.progress-track {
+  width:100%; height:8px; border-radius:5px; overflow:hidden;
+  background:var(--s3); border:1px solid var(--border);
+}
+.progress-fill {
+  height:100%; border-radius:5px 0 0 5px;
+  background:linear-gradient(90deg, var(--accent), var(--orange));
+  transition:width .35s ease;
+}
+.progress-label {
+  margin-top:.32rem; font-size:.74rem; color:var(--muted);
+  font-variant-numeric:tabular-nums; letter-spacing:.02em;
+}

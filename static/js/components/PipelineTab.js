@@ -27,12 +27,32 @@ const isPairsType = t => ["register_phrases","grammar_pairs","register_phrases_l
 const isMultiCharType = t => ["story","story_long","register_phrases","register_phrases_long",
                               "word_learning","word_learning_long"].includes(t);
 
+// Shared progress bar — fed by the {current,total,label} progress object that
+// jobs report while running. Defined here (loaded before ItemsTab) so it is a
+// global usable from every component file.
+function ProgressBar({ progress }) {
+  if (!progress || !progress.total) return null;
+  const pct = Math.max(0, Math.min(100,
+    Math.round((progress.current / progress.total) * 100)));
+  return (
+    <div className="progress">
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: pct + "%" }}/>
+      </div>
+      <div className="progress-label">
+        {progress.label || `${progress.current}/${progress.total}`} · {pct}%
+      </div>
+    </div>
+  );
+}
+
 function StepCard({ step, projectName }) {
   const { toast, startPoll, reloadManifest, refreshSidebar } = useApp();
-  const [open,    setOpen]    = useState(false);
-  const [status,  setStatus]  = useState("idle");
-  const [log,     setLog]     = useState("");
-  const [running, setRunning] = useState(false);
+  const [open,     setOpen]     = useState(false);
+  const [status,   setStatus]   = useState("idle");
+  const [log,      setLog]      = useState("");
+  const [running,  setRunning]  = useState(false);
+  const [progress, setProgress] = useState(null);
 
   const disabledReason = step.disabledReason || null;
 
@@ -49,6 +69,7 @@ function StepCard({ step, projectName }) {
     setRunning(true);
     setStatus("running");
     setLog("");
+    setProgress(null);
     try {
       const payload = step.payload();
       const d = await apiPost(step.endpoint(projectName), payload);
@@ -57,6 +78,7 @@ function StepCard({ step, projectName }) {
         setStatus(s.status);
         setLog(s.log || "");
         setRunning(false);
+        setProgress(null);
         if (s.status === "done") {
           toast("Done", `${step.title} completed.`, "ok");
           await reloadManifest(projectName);
@@ -64,9 +86,9 @@ function StepCard({ step, projectName }) {
         } else if (s.status === "error") {
           toast("Error", s.log, "err");
         }
-      });
+      }, (s) => setProgress(s.progress || null));
     } catch(e) {
-      setStatus("error"); setLog(e.message); setRunning(false);
+      setStatus("error"); setLog(e.message); setRunning(false); setProgress(null);
       toast("Error", e.message, "err");
     }
   }
@@ -102,6 +124,7 @@ function StepCard({ step, projectName }) {
               {running && <div className="spin" style={{display:"block"}}/>}
             </button>
           </div>
+          {running && <ProgressBar progress={progress}/>}
           {log && (
             <div className={`step-log vis${status==="error"?" err":""}`}>{log}</div>
           )}

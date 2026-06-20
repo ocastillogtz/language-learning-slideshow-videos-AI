@@ -268,6 +268,64 @@ function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charact
   );
 }
 
+// ── Per-scene video clip re-render button ──────────────────────────────────────
+
+function VideoRegenBtn({ projectName, sceneId, onDone }) {
+  const { toast, startPoll, reloadManifest } = useApp();
+  const [running,   setRunning]   = useState(false);
+  const [annotated, setAnnotated] = useState(false);
+  const [progress,  setProgress]  = useState(null);
+  const [log,       setLog]       = useState("");
+
+  async function regen() {
+    setRunning(true); setLog(""); setProgress(null);
+    try {
+      const d = await apiPost(`/projects/${projectName}/run/video_scene`, {
+        scene_id:            sceneId,
+        annotated_subtitles: annotated,
+      });
+      const stepKey = d.step_key || `video_${sceneId}`;
+      startPoll(projectName, stepKey, async (s) => {
+        setRunning(false); setProgress(null); setLog(s.log || "");
+        if (s.status === "done") {
+          toast("Done", "Clip re-rendered.", "ok");
+          const m = await reloadManifest(projectName);
+          onDone && onDone(m);
+        } else if (s.status === "error") {
+          toast("Error", s.log, "err");
+        }
+      }, (s) => setProgress(s.progress || null));
+    } catch(e) {
+      setRunning(false); setLog(e.message);
+      toast("Error", e.message, "err");
+    }
+  }
+
+  return (
+    <div style={{display:"flex", flexDirection:"column", gap:".4rem"}}>
+      <div style={{display:"flex", alignItems:"center", gap:".7rem", flexWrap:"wrap"}}>
+        <button className="btn-ghost" onClick={regen} disabled={running}
+          title="Re-render this scene's clip and the silent pause right after it"
+          style={{fontSize:".8rem", padding:".4rem .9rem"}}>
+          ⟳ Re-render Clip (+ pause)
+          {running && <div className="spin" style={{display:"block", borderTopColor:"var(--muted)"}}/>}
+        </button>
+        <label style={{display:"flex", alignItems:"center", gap:".3rem",
+          fontSize:".76rem", color:"var(--muted)", cursor:"pointer"}}>
+          <input type="checkbox" checked={annotated} disabled={running}
+            onChange={e=>setAnnotated(e.target.checked)}/>
+          annotated subtitles
+        </label>
+      </div>
+      {running && <ProgressBar progress={progress}/>}
+      {log && (
+        <div className={`step-log vis${log.toLowerCase().includes("error") ? " err" : ""}`}
+          style={{marginTop:".2rem", fontSize:".74rem"}}>{log}</div>
+      )}
+    </div>
+  );
+}
+
 // ── Scene edit zone (text + prompt) ───────────────────────────────────────────
 
 function SceneEditZone({ scene, projectName, onSaved }) {
@@ -544,7 +602,7 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
 
           {/* Action buttons row */}
           {(scene.image || scene.audio?.type === "tts") && (
-            <div className="run-row" style={{flexWrap:"wrap", gap:".5rem"}}>
+            <div className="run-row" style={{flexWrap:"wrap", gap:".5rem", alignItems:"flex-start"}}>
               {scene.image && (
                 <ImageRegenBtn projectName={projectName} sceneId={scene.id}
                   promptId={promptId} useLocationRef={useLocationRef}
@@ -556,6 +614,8 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
                 <AudioRegenBtn projectName={projectName} sceneId={scene.id}
                   onDone={m => { onChanged && onChanged(m); }}/>
               )}
+              <VideoRegenBtn projectName={projectName} sceneId={scene.id}
+                onDone={m => { onChanged && onChanged(m); }}/>
             </div>
           )}
 
@@ -694,6 +754,67 @@ function ReadingCastGallery({ castChars, castAssets, allChars }) {
   );
 }
 
+// ── Bulk after-pause control ────────────────────────────────────────────────────
+
+function BulkPauseControl({ projectName, onChanged }) {
+  const { toast } = useApp();
+  const [ms,     setMs]     = useState("350");
+  const [scope,  setScope]  = useState("all");
+  const [saving, setSaving] = useState(false);
+
+  const num     = parseInt(ms, 10);
+  const isValid = !isNaN(num) && num >= 0 && num <= 10000;
+
+  async function apply() {
+    if (!isValid) return;
+    setSaving(true);
+    try {
+      const d = await apiPatch(`/projects/${projectName}/pauses`, {
+        duration_ms: num, scope,
+      });
+      toast("Saved",
+        `Updated ${d.updated} pause${d.updated !== 1 ? "s" : ""} to ${num} ms — re-render clips to apply.`,
+        "ok");
+      onChanged && onChanged();
+    } catch(e) { toast("Error", e.message, "err"); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="item-card" style={{padding:".9rem 1rem", marginBottom:".7rem"}}>
+      <div style={{fontWeight:600, marginBottom:".55rem"}}>
+        After-pause (bulk)
+        <span style={{color:"var(--muted)", fontWeight:400, fontSize:".78rem", marginLeft:".4rem"}}>
+          set the silent gap after scenes in one shot
+        </span>
+      </div>
+      <div style={{display:"flex", alignItems:"flex-end", gap:".7rem", flexWrap:"wrap"}}>
+        <div className="field" style={{maxWidth:"8rem"}}>
+          <label>Duration (ms)</label>
+          <input type="number" min="0" max="10000" step="50"
+            value={ms} onChange={e=>setMs(e.target.value)}
+            style={{borderColor: isValid ? "" : "var(--red, #f87171)"}}/>
+        </div>
+        <div className="field" style={{maxWidth:"15rem"}}>
+          <label>Apply to</label>
+          <select value={scope} onChange={e=>setScope(e.target.value)}>
+            <option value="all">All pauses</option>
+            <option value="dialog">Pauses after dialog lines only</option>
+          </select>
+        </div>
+        <button className="btn-primary" onClick={apply} disabled={saving || !isValid}
+          style={{fontSize:".82rem"}}>
+          {saving ? "Applying…" : "Apply"}
+        </button>
+      </div>
+      <div style={{fontSize:".74rem", color:"var(--muted)", marginTop:".5rem", fontStyle:"italic"}}>
+        Updates the silent pause scenes in the manifest. Re-render the affected clips
+        (or the whole Video step) to bake the new gap into the video.
+      </div>
+    </div>
+  );
+}
+
 // ── Main tab ───────────────────────────────────────────────────────────────────
 
 function ItemsTab({ projectName }) {
@@ -737,9 +858,15 @@ function ItemsTab({ projectName }) {
     );
   }
 
+  const hasPauses = (manifest?.scenes || []).some(s => s.description === "pause");
+
   return (
     <div className="items-grid">
       <ReadingCastGallery castChars={castChars} castAssets={castAssets} allChars={allChars}/>
+      {hasPauses && (
+        <BulkPauseControl projectName={projectName}
+          onChanged={() => reloadManifest(projectName)}/>
+      )}
       {scenes.map(scene =>
         scene.description === "pause" ? (
           <PauseCard

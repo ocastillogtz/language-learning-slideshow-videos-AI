@@ -34,6 +34,7 @@ from PIL import Image
 from dotenv import load_dotenv
 
 from utils_config import load_config, load_new_characters, get_new_locations_flat
+from core import report_progress
 
 load_dotenv()
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -395,10 +396,12 @@ def create_images(
         logger.warning("Image-saving (mosaic) mode is only supported for horizontal "
                        "projects — generating images normally.")
 
-    for scene in manifest["scenes"]:
+    # Progress is measured over the scenes that carry an image (the work).
+    img_scenes = [s for s in manifest["scenes"] if s.get("image")]
+    img_total  = len(img_scenes)
+    for img_done, scene in enumerate(img_scenes, start=1):
         img = scene.get("image")
-        if not img:
-            continue  # pause, sfx, video_clip scenes have no image
+        report_progress(img_done, img_total, f"Image {img_done}/{img_total}")
 
         dest = images_dir / f"{scene['id']}.png"
 
@@ -438,10 +441,18 @@ def _generate_mosaics(
     narration = [s for s in scenes if s.get("image") and s.get("_is_narration")]
     batchable = [s for s in scenes if s.get("image") and not s.get("_is_narration")]
 
+    # One fal.ai call per narration intro + one per mosaic batch — that's the unit
+    # of work the progress bar tracks.
+    n_batches    = (len(batchable) + MOSAIC_GROUP_SIZE - 1) // MOSAIC_GROUP_SIZE
+    mosaic_total = len(narration) + n_batches
+    mosaic_done  = 0
+
     # 1. Narration intro — its own full image (never mosaiced).
     for scene in narration:
         img  = scene["image"]
         dest = images_dir / f"{scene['id']}.png"
+        mosaic_done += 1
+        report_progress(mosaic_done, mosaic_total, f"Image {mosaic_done}/{mosaic_total}")
         if not overwrite and dest.exists():
             img["file_path"] = f"images/{scene['id']}.png"
             continue
@@ -460,6 +471,8 @@ def _generate_mosaics(
         share_id = chunk[0]["id"]
         dest     = images_dir / f"{share_id}.png"
         rel      = f"images/{share_id}.png"
+        mosaic_done += 1
+        report_progress(mosaic_done, mosaic_total, f"Image {mosaic_done}/{mosaic_total}")
 
         if not overwrite and dest.exists():
             logger.info(f"  Exists: {dest.name} — reusing for {len(chunk)} scenes")

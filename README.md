@@ -27,7 +27,7 @@ The sidebar lists all your projects with status indicators. Hit **+ New Project*
 </p>
 
 ### Pipeline tab
-Every pipeline step is a collapsible card showing its status (`idle` / `running` / `done` / `error`). Steps run in background threads — the UI stays responsive and polls for updates automatically.
+Every pipeline step is a collapsible card showing its status (`idle` / `running` / `done` / `error`). Steps run in background threads — the UI stays responsive and polls for updates automatically. While a step runs, a **live progress bar** shows how many elements have been processed (e.g. `Audio 7/24`, `Image 3/40`, `Clip 12/120`), proportional to the work done in that step's main loop.
 
 <p align="center">
   <img src="readme_resources/all_pipeline_steps.png" width="600" alt="All pipeline steps">
@@ -224,6 +224,8 @@ To force fresh annotations:
 
 **Annotation text size:** the **“Annotation text size”** field (× scale, 0.5–2.5) next to the grammar checkbox scales the whole annotation — word plus the tense/case/infinitive labels — together, while the wrap width stays fixed (`font_scale` on `render_annotation_html` / `render_annotation_png`).
 
+**Re-rendering a single clip (`create_video_single`):** instead of re-rendering the whole project you can rebuild **one scene's clip plus the silent pause that immediately follows it** — "everything related to that dialog line". The freeze-frame background of the rebuilt clip(s) is taken from the previous scene's already-rendered clip, so the result stays consistent with the surrounding video. Driven from the **Generated Items** tab (the **⟳ Re-render Clip (+ pause)** button on each scene card, with an optional *annotated subtitles* checkbox that reuses the annotation cache) or via `POST /projects/<name>/run/video_scene`. CLI: `python create_video.py <project> --scene-id scene_007`.
+
 ---
 
 ### 6. Assembly (`assemble_video.py`)
@@ -417,8 +419,9 @@ Steps run in background threads — the UI stays responsive during long operatio
 - Expands to show the generated image, audio player, and the editable image prompt
 - **Characters in image selector** — choose per scene how many character references to use: "Both characters", "Speaker only", or "None (text only)". "None" bypasses the reference composite entirely and generates from text prompt alone.
 - Location reference toggle — when using character references, optionally exclude the location artwork to let the model freely invent the background
-- Re-generate Image and Re-generate Audio buttons trigger single-scene re-runs with live polling per card
+- Re-generate Image, Re-generate Audio, and **Re-render Clip (+ pause)** buttons trigger single-scene re-runs with live polling (and a progress bar) per card. The clip re-render rebuilds the scene's `.mp4` and the silent pause right after it; an *annotated subtitles* checkbox controls whether the grammar overlay is applied (cache is reused)
 - Text can be edited inline (clears the audio file path so audio is re-generated on the next audio step run)
+- **After-pause (bulk)** control at the top of the list (shown when the project has pauses) sets the duration of every silent pause in one shot — scope `All pauses` or `Pauses after dialog lines only`. It updates the manifest; re-render the affected clips (per-scene re-render, or the whole Video step) to bake the new gap into the video. Individual pause scenes can still be tuned one at a time on their own `PSE` cards
 
 ### Assets tab
 
@@ -444,6 +447,7 @@ Full CRUD for all asset types:
 | `GET` | `/projects/<name>` | Return full manifest JSON |
 | `POST` | `/create_project` | Create a new project |
 | `PATCH` | `/projects/<name>/scenes/<scene_id>` | Update scene fields (`subtitle_text`, `tts_text`, `speaker`, `duration_ms`) |
+| `PATCH` | `/projects/<name>/pauses` | Bulk-set silent pause durations (`duration_ms`, `scope` = `"all"` or `"dialog"`). `dialog` only touches pauses immediately after a spoken dialog line. Returns the count updated |
 | `POST` | `/projects/<name>/reconcile` | Back-fill image/audio `file_path`s for files that exist on disk but are missing from the manifest (self-heal after an interrupted run). Also runs automatically on every `GET /projects/<name>`. |
 
 ### Pipeline
@@ -458,6 +462,7 @@ Full CRUD for all asset types:
 | `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) — params: `overwrite`, `ignore_cache`, `use_location_ref`, `mosaic_mode` (horizontal only — one 2×2 mosaic image shared by every 4 scenes) |
 | `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image — params: `scene_id`, `prompt_override`, `use_location_ref`, `characters_override` (`"both"` / `"single_speaker"` / `"none"`), `cast` (list of `rt_*` asset keys for reading scenes) |
 | `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`, `format_override`, `out_subdir`, `annot_font_scale` = annotation text size ×, `regen_annotations` = ignore the annotation cache and re-prompt OpenAI for every sentence — implies a clip overwrite) |
+| `POST` | `/projects/<name>/run/video_scene` | Re-render one scene's clip and the silent pause after it (`scene_id`, `annotated_subtitles`, `footnote`, `inter_pause_ms`, `annot_font_scale`, `regen_annotations`) |
 | `GET` | `/projects/<name>/annotations/<scene_id>` | Read one scene's grammar annotation (`tokens` + `spans`) from cache. Returns `{exists, annotatable, text, tokens, spans}` |
 | `POST` | `/projects/<name>/annotations/<scene_id>` | Save an edited annotation (body `tokens`, `spans` — sanitised), or with `{"regenerate": true}` re-prompt OpenAI. Writes the cache and clears the scene's clip(s) so a re-render applies it |
 | `POST` | `/projects/<name>/annotations/reset` | Clear cached grammar annotation(s) so they re-prompt on the next render. Body `scene_id` resets one scene (and deletes its rendered clip so a normal re-render rebuilds it); omit `scene_id` to reset all |
@@ -853,6 +858,7 @@ python create_images.py my_project --mosaic     # horizontal only: one 2x2 image
 # Render scene clips
 python create_video.py my_project
 python create_video.py my_project --annotated-subtitles
+python create_video.py my_project --scene-id scene_007   # re-render one clip + the pause after it
 
 # ── Reading Together (story → annotated vertical parts + long horizontal video) ──
 python create_project.py grimm_fox --type reading_together \
@@ -940,4 +946,5 @@ Because all results are tracked in `project_manifest.json`, any step can be safe
 - **Script** — replaces `scenes[]` entirely; downstream `file_path` fields become stale until Audio/Images/Video are re-run
 - **Audio** — skips scenes whose `audio.file_path` is already set; editing scene text via the UI clears the path automatically
 - **Images** — skips scenes whose `image.file_path` is already set; use `--overwrite` or the Re-generate button per scene in the UI
-- **Video / Assemble** — use `--overwrite` to replace existing clips or the final video
+- **Video / Assemble** — use `--overwrite` to replace existing clips or the final video; to rebuild a single dialog line use `--scene-id <id>` (or the **Re-render Clip (+ pause)** button in the UI), which also rebuilds the pause after it
+- **Pauses** — adjust one pause on its `PSE` card, or set them all at once with the **After-pause (bulk)** control / `PATCH /projects/<name>/pauses`; then re-render the affected clips to apply

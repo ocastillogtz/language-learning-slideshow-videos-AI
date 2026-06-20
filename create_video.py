@@ -36,6 +36,7 @@ from utils_markup import has_markup, to_pango, strip_markup
 from generate_annotations import generate_annotations
 from html_annotation_renderer import AnnotationBatchRenderer
 from utils_markup import strip_markup as _strip_markup_for_annot
+from core import report_progress
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -106,7 +107,9 @@ def create_videos(
                                              font_scale=annot_font_scale,
                                              force=regen_annotations)
 
-    for scene in manifest["scenes"]:
+    scenes_total = len(manifest["scenes"])
+    for scene_idx, scene in enumerate(manifest["scenes"], start=1):
+        report_progress(scene_idx, scenes_total, f"Clip {scene_idx}/{scenes_total}")
         sid   = scene["id"]
         out   = videos_dir / f"{sid}.mp4"
         audio = scene.get("audio")
@@ -159,6 +162,118 @@ def create_videos(
             clip.close()
 
     logger.info("create_video complete.")
+
+
+def create_video_single(
+    project_name: str,
+    scene_id: str,
+    annotated_subtitles: bool = False,
+    footnote: str = "",
+    inter_pause_ms: int = None,
+    annot_font_scale: float = 1.0,
+    regen_annotations: bool = False,
+) -> None:
+    """Re-render a single scene's clip and the silent pause that follows it.
+
+    "Everything related to the dialog": the dialog/TTS scene's own .mp4 plus the
+    immediately-following pause scene (audio == null), so the freeze-frame of the
+    pause matches the freshly rebuilt clip. The freeze-frame background of the
+    rebuilt clip(s) is taken from the previous scene's existing rendered clip, so
+    the result is consistent with the surrounding video.
+    """
+    cfg           = load_config()
+    chars_data    = load_new_characters(cfg["assets_dir"])
+    assets_dir    = cfg["assets_dir"]
+    project_path  = cfg["projects_dir"] / project_name
+    manifest_path = project_path / "project_manifest.json"
+
+    if cfg.get("imagemagick"):
+        change_settings({"IMAGEMAGICK_BINARY": cfg["imagemagick"]})
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    # Match create_videos' horizontal canvas/subtitle overrides so a single
+    # re-render looks identical to a full render of the same project.
+    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
+    if video_format == "horizontal":
+        cfg.update({
+            "target_w":          1920,
+            "target_h":          1080,
+            "sub_fontsize":      54,
+            "nar_fontsize":      54,
+            "sub_margin_bottom": 70,
+            "icon_x":            1650,
+            "icon_y":            50,
+        })
+
+    videos_dir = project_path / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    fps = cfg["fps"]
+
+    scenes = manifest["scenes"]
+    idx    = next((i for i, s in enumerate(scenes) if s["id"] == scene_id), None)
+    if idx is None:
+        raise ValueError(f"Scene '{scene_id}' not found in manifest")
+    target = scenes[idx]
+
+    # Rebuild the target scene plus the silent pause right after it (if any).
+    rebuild = [target]
+    if idx + 1 < len(scenes):
+        nxt = scenes[idx + 1]
+        if nxt.get("audio") is None and nxt.get("image") is None:
+            rebuild.append(nxt)
+
+    # Freeze-frame background = last frame of the previous scene's existing clip.
+    last_frame_np = None
+    if idx > 0:
+        prev_clip = videos_dir / f"{scenes[idx - 1]['id']}.mp4"
+        if prev_clip.exists():
+            last_frame_np = _peek_last_frame(prev_clip, None)
+
+    # Annotate only the target scene (cache is reused unless regen is requested).
+    annot_paths: dict[str, str] = {}
+    if annotated_subtitles:
+        mini = {"video_info": manifest.get("video_info", {}), "scenes": [target]}
+        annot_paths = _prerender_annotations(mini, videos_dir, cfg,
+                                             font_scale=annot_font_scale,
+                                             force=regen_annotations)
+
+    total = len(rebuild)
+    for i, scene in enumerate(rebuild, start=1):
+        sid = scene["id"]
+        out = videos_dir / f"{sid}.mp4"
+        report_progress(i, total, f"Clip {i}/{total} ({sid})")
+        logger.info(f"Re-rendering {sid}")
+        try:
+            clip, last_frame_np = _build_clip(
+                scene, project_path, assets_dir,
+                cfg, chars_data, last_frame_np,
+                annotated_subtitles=annotated_subtitles,
+                global_footnote=footnote,
+                pause_override_ms=inter_pause_ms,
+                annot_paths=annot_paths,
+                pre_pause_ms=0,
+            )
+        except Exception as e:
+            logger.error(f"Failed to build {sid}: {e}")
+            continue
+        if clip is None:
+            logger.warning(f"No clip built for {sid}")
+            continue
+        try:
+            clip.write_videofile(
+                str(out), fps=fps, codec="libx264", audio_codec="aac",
+                temp_audiofile=str(videos_dir / f"{sid}_tmp.m4a"),
+                remove_temp=True, logger=None,
+            )
+            logger.info(f"  Saved: {out.name}")
+        except Exception as e:
+            logger.error(f"Failed to write {sid}: {e}")
+        finally:
+            clip.close()
+
+    logger.info(f"Single clip re-render complete for '{scene_id}'.")
 
 
 # =============================================================================
@@ -673,6 +788,8 @@ def _peek_last_frame(video_path: Path, fallback):
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("project_name")
+    p.add_argument("--scene-id", dest="scene_id", default=None,
+                   help="Re-render only this scene's clip (and the pause after it).")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument(
         "--annotated-subtitles",
@@ -714,13 +831,19 @@ def main() -> None:
              "(except the first). Overrides config; 0 disables.",
     )
     a = p.parse_args()
-    create_videos(a.project_name, a.overwrite,
-                  annotated_subtitles=a.annotated_subtitles,
-                  footnote=a.footnote,
-                  inter_pause_ms=a.inter_pause_ms,
-                  format_override=a.format_override,
-                  out_subdir=a.out_subdir,
-                  read_pre_pause_ms=a.read_pre_pause_ms)
+    if a.scene_id:
+        create_video_single(a.project_name, a.scene_id,
+                            annotated_subtitles=a.annotated_subtitles,
+                            footnote=a.footnote,
+                            inter_pause_ms=a.inter_pause_ms)
+    else:
+        create_videos(a.project_name, a.overwrite,
+                      annotated_subtitles=a.annotated_subtitles,
+                      footnote=a.footnote,
+                      inter_pause_ms=a.inter_pause_ms,
+                      format_override=a.format_override,
+                      out_subdir=a.out_subdir,
+                      read_pre_pause_ms=a.read_pre_pause_ms)
 
 
 if __name__ == "__main__":

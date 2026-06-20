@@ -56,20 +56,23 @@ function AppProvider({ children }) {
     } catch {}
   }, []);
 
-  // Poll a step until it leaves "running" state
-  const startPoll = useCallback((projectName, stepKey, onDone) => {
+  // Poll a step until it leaves "running" state.
+  // onTick (optional) fires on every poll with the raw status (incl. progress),
+  // so callers can drive a live progress bar; onDone fires once when finished.
+  const startPoll = useCallback((projectName, stepKey, onDone, onTick) => {
     if (pollsRef.current[stepKey]) clearInterval(pollsRef.current[stepKey]);
     pollsRef.current[stepKey] = setInterval(async () => {
       try {
         const r = await fetch(`/projects/${projectName}/status/${stepKey}`);
         const s = await r.json();
+        if (onTick) onTick(s);
         if (s.status !== "running") {
           clearInterval(pollsRef.current[stepKey]);
           delete pollsRef.current[stepKey];
           onDone(s);
         }
       } catch {}
-    }, 2200);
+    }, 1200);
   }, []);
 
   const stopAllPolls = useCallback(() => {

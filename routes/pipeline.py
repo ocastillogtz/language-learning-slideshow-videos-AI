@@ -141,6 +141,95 @@ def run_video(name):
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/projects/<name>/run/video_scene", methods=["POST"])
+def run_video_scene(name):
+    """Re-render a single scene's clip (and the silent pause right after it)."""
+    try:
+        data                = request.get_json() or {}
+        scene_id            = (data.get("scene_id") or "").strip()
+        if not scene_id:
+            return jsonify({"error": "scene_id required"}), 400
+        annotated_subtitles = bool(data.get("annotated_subtitles", False))
+        footnote            = str(data.get("footnote", "")).strip()
+        raw_pause           = data.get("inter_pause_ms")
+        inter_pause_ms      = int(raw_pause) if raw_pause not in (None, "") else None
+        raw_fs              = data.get("annot_font_scale")
+        try:
+            annot_font_scale = float(raw_fs) if raw_fs not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            annot_font_scale = 1.0
+        annot_font_scale  = max(0.5, min(2.5, annot_font_scale))
+        regen_annotations = bool(data.get("regen_annotations", False))
+        from create_video import create_video_single
+        step_key = "video_" + scene_id
+        run_job(name, step_key, create_video_single, name, scene_id,
+                annotated_subtitles=annotated_subtitles, footnote=footnote,
+                inter_pause_ms=inter_pause_ms, annot_font_scale=annot_font_scale,
+                regen_annotations=regen_annotations)
+        return jsonify({"message": "Clip re-render started", "step_key": step_key})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/pauses", methods=["PATCH"])
+def update_pauses(name):
+    """Bulk-set the duration of silent pause scenes.
+
+    Body: {"duration_ms": int, "scope": "all" | "dialog"}
+      all    — every silent pause scene (audio == null, description == "pause")
+      dialog — only pauses immediately following a spoken dialog line (a TTS scene
+               that is not narration / repetition)
+    """
+    import json
+    try:
+        data  = request.get_json() or {}
+        scope = (data.get("scope") or "all").strip()
+        if scope not in ("all", "dialog"):
+            return jsonify({"error": "scope must be 'all' or 'dialog'"}), 400
+        try:
+            ms = int(data.get("duration_ms"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "duration_ms must be an integer"}), 400
+        if ms < 0 or ms > 10000:
+            return jsonify({"error": "duration_ms must be between 0 and 10000"}), 400
+
+        mp = PROJECTS_DIR / name / "project_manifest.json"
+        if not mp.exists():
+            return jsonify({"error": "Project not found"}), 404
+        with open(mp, encoding="utf-8") as f:
+            m = json.load(f)
+
+        scenes = m.get("scenes", [])
+
+        def _is_pause(s):
+            return s.get("audio") is None and s.get("image") is None \
+                   and s.get("description") == "pause"
+
+        def _is_dialog(s):
+            a = s.get("audio") or {}
+            return a.get("type") == "tts" \
+                   and not s.get("_is_narration") and not s.get("_is_repetition")
+
+        updated = 0
+        for i, s in enumerate(scenes):
+            if not _is_pause(s):
+                continue
+            if scope == "dialog":
+                prev = scenes[i - 1] if i > 0 else None
+                if not (prev and _is_dialog(prev)):
+                    continue
+            s["duration_ms"] = ms
+            updated += 1
+
+        with open(mp, "w", encoding="utf-8") as f:
+            json.dump(m, f, indent=2, ensure_ascii=False)
+
+        return jsonify({"message": "Pauses updated", "scope": scope,
+                        "duration_ms": ms, "updated": updated})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/projects/<name>/annotations/reset", methods=["POST"])
 def reset_annotations(name):
     """Clear cached grammar annotation(s) so they re-prompt OpenAI on the next render.

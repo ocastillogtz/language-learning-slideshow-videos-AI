@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
 from utils_config import load_config
 from utils_markup import strip_for_tts
+from core import report_progress
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -104,6 +105,9 @@ def create_audio(project_name: str, overwrite: bool = False) -> None:
             return None
 
     # ── Process all scenes ────────────────────────────────────────────────────
+    # Progress is measured over the TTS lines (the actual work); SFX/video/pause
+    # scenes are skipped near-instantly and don't move the bar.
+    tts_total = len(tts_scene_order)
     tts_pos = 0
     for scene in scenes:
         audio = scene.get("audio")
@@ -116,6 +120,7 @@ def create_audio(project_name: str, overwrite: bool = False) -> None:
         if atype == "tts":
             prev_t, next_t = _prosody(tts_pos)
             tts_pos += 1
+            report_progress(tts_pos, tts_total, f"Audio {tts_pos}/{tts_total}")
 
             if not overwrite and audio.get("file_path") and (project_path / audio["file_path"]).exists():
                 logger.info(f"  [{scene['id']}] TTS exists, skipping.")
