@@ -128,6 +128,11 @@ function ScriptFields({ projectName }) {
   const [loc,          setLoc]          = useState(gen.location_key || "");
   const [dialogCount,  setDialogCount]  = useState(String(gen.dialog_count || ""));
   const [prompt,       setPrompt]       = useState(gen.prompt_script || "");
+  // Baseline = the last auto-generated prompt we put in the box (initial manifest
+  // value or a Preview load). We only send prompt_override when the user has actually
+  // EDITED the prompt away from this baseline — otherwise echoing the auto-prompt back
+  // would be treated as a custom override and silently disable batched generation.
+  const [promptBaseline, setPromptBaseline] = useState(gen.prompt_script || "");
   const [words,        setWords]        = useState((gen.words || []).join(", "));
   const [loading,      setLoading]      = useState(false);
 
@@ -154,7 +159,10 @@ function ScriptFields({ projectName }) {
     characters:       isMultiCharType(projType) ? fullCast() : undefined,
     location_key:     useLocation ? loc : null,
     project_type_key: projType,
-    prompt_override:  prompt.trim() || null,
+    // Only a genuinely edited prompt counts as an override; an untouched auto-prompt
+    // is sent as null so the backend can auto-build it and batch long dialogs.
+    prompt_override:  (prompt.trim() && prompt.trim() !== (promptBaseline || "").trim())
+                        ? prompt.trim() : null,
     dialog_count:     dialogCount !== "" ? parseInt(dialogCount, 10) : null,
     words:            isWordLearningType(projType)
                         ? words.split(",").map(w => w.trim()).filter(Boolean)
@@ -178,6 +186,7 @@ function ScriptFields({ projectName }) {
           : undefined,
       });
       setPrompt(d.prompt);
+      setPromptBaseline(d.prompt);   // a previewed prompt is still "auto", not a user edit
     } catch(e) { toast("Error", e.message, "err"); }
     finally { setLoading(false); }
   }
