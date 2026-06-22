@@ -197,7 +197,9 @@ Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`.
 | `"tts"` | Freeze scene image for audio duration + subtitle overlay |
 | `"sfx"` | Freeze previous frame for SFX audio duration |
 | `"video_clip"` | Insert a raw `.mp4` file (e.g. intro/outro) |
-| `null` | Render a silent black pause of `scene.duration_ms` |
+| `null` | Render a silent black pause of `scene.duration_ms` — unless it's a shadowing **repeat scene** (see below) |
+
+**Shadowing repeat scenes:** an optional intermediate scene placed after each dialog line (before its pause) that holds the dialog's image with the subtitle **still readable** plus a centered message (the "now repeat" cue, e.g. *Jetzt wiederholen*) — so a learner can shadow/repeat the line while reading it. Add or remove them from the **Generated Items** tab (or `POST /projects/<name>/repeat_scenes`, or `python repeat_scenes.py <project> add|remove`). The message text and font live in `config.ini → [repeat_prompt]`; the message and font size can also be overridden per render from the Video step. The held duration defaults to the dialog line's own length (`duration_ms = 0` in config) times a **time factor** (`duration_factor`, or the "Time factor ×" field on the Add/Re-sync control) so you can give more reading/repeating time than the line took to speak (e.g. `1.5` = 50% longer); a fixed `duration_ms > 0` overrides the mirror+factor. Every hold is also editable per scene. The centered message is drawn like the on-screen warning label, over a semi-transparent box in the middle of the frame. When grammar-annotated subtitles are on, the repeat scene reuses the dialog's annotation so the two match.
 
 **Subtitle markup:** subtitles support three inline markers written directly into GPT-generated text:
 
@@ -422,6 +424,7 @@ Steps run in background threads — the UI stays responsive during long operatio
 - Re-generate Image, Re-generate Audio, and **Re-render Clip (+ pause)** buttons trigger single-scene re-runs with live polling (and a progress bar) per card. The clip re-render rebuilds the scene's `.mp4` and the silent pause right after it; an *annotated subtitles* checkbox controls whether the grammar overlay is applied (cache is reused)
 - Text can be edited inline (clears the audio file path so audio is re-generated on the next audio step run)
 - **After-pause (bulk)** control at the top of the list (shown when the project has pauses) sets the duration of every silent pause in one shot — scope `All pauses` or `Pauses after dialog lines only`. It updates the manifest; re-render the affected clips (per-scene re-render, or the whole Video step) to bake the new gap into the video. Individual pause scenes can still be tuned one at a time on their own `PSE` cards
+- **Shadowing "repeat" scenes** control (shown when the project has dialog) adds/removes an intermediate scene after each dialog line — image + readable subtitle + a centered "now repeat" message — for shadowing practice. It's idempotent (re-running re-syncs durations). Each repeat scene shows as an `RPT` card with an editable hold duration. Customize the message and font size in the **Video** step (defaults in `config.ini`), then render the Video step to bake them in
 
 ### Assets tab
 
@@ -461,8 +464,9 @@ Full CRUD for all asset types:
 | `POST` | `/projects/<name>/run/audio_scene` | Re-generate audio for one scene (`scene_id`) |
 | `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) — params: `overwrite`, `ignore_cache`, `use_location_ref`, `mosaic_mode` (horizontal only — one 2×2 mosaic image shared by every 4 scenes) |
 | `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image — params: `scene_id`, `prompt_override`, `use_location_ref`, `characters_override` (`"both"` / `"single_speaker"` / `"none"`), `cast` (list of `rt_*` asset keys for reading scenes) |
-| `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`, `format_override`, `out_subdir`, `annot_font_scale` = annotation text size ×, `regen_annotations` = ignore the annotation cache and re-prompt OpenAI for every sentence — implies a clip overwrite) |
-| `POST` | `/projects/<name>/run/video_scene` | Re-render one scene's clip and the silent pause after it (`scene_id`, `annotated_subtitles`, `footnote`, `inter_pause_ms`, `annot_font_scale`, `regen_annotations`) |
+| `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`, `format_override`, `out_subdir`, `annot_font_scale` = annotation text size ×, `regen_annotations` = ignore the annotation cache and re-prompt OpenAI for every sentence — implies a clip overwrite; `repeat_message` + `repeat_fontsize` = shadowing repeat overlay overrides, blank = config default) |
+| `POST` | `/projects/<name>/run/video_scene` | Re-render one scene's clip and the silent display scenes after it — shadowing repeat + pause (`scene_id`, `annotated_subtitles`, `footnote`, `inter_pause_ms`, `annot_font_scale`, `regen_annotations`, `repeat_message`, `repeat_fontsize`) |
+| `POST` | `/projects/<name>/repeat_scenes` | Add or remove shadowing repeat scenes after every dialog line (`action` = `"add"` / `"remove"`; `factor` = time multiplier for the held duration on add/re-sync). Synchronous; render the Video step afterwards to apply |
 | `GET` | `/projects/<name>/annotations/<scene_id>` | Read one scene's grammar annotation (`tokens` + `spans`) from cache. Returns `{exists, annotatable, text, tokens, spans}` |
 | `POST` | `/projects/<name>/annotations/<scene_id>` | Save an edited annotation (body `tokens`, `spans` — sanitised), or with `{"regenerate": true}` re-prompt OpenAI. Writes the cache and clears the scene's clip(s) so a re-render applies it |
 | `POST` | `/projects/<name>/annotations/reset` | Clear cached grammar annotation(s) so they re-prompt on the next render. Body `scene_id` resets one scene (and deletes its rendered clip so a normal re-render rebuilds it); omit `scene_id` to reset all |
@@ -807,6 +811,18 @@ fps                  = 30
 markup_italic_attrs  = style='italic'
 markup_bold_attrs    = weight='bold'
 
+[repeat_prompt]
+; Shadowing "repeat" scene overlay (image + readable subtitle + centered message).
+text         = Jetzt wiederholen   ; global message; overridable per render in the Video step
+font         =                     ; empty → falls back to the narrator font
+fontsize     = 90                  ; default; overridable per render
+color        = PeachPuff
+stroke_color = sienna4
+stroke_width = 3
+bg_opacity   = 0.45
+duration_ms  = 0                   ; 0 = hold for the dialog line's own length; >0 = fixed hold
+duration_factor = 1.0              ; when mirroring, multiply the line length (1.5 = 50% more time)
+
 [image_prompts]
 ; Art style applied to ALL generated images. Edit these to change the look globally.
 style_tokens        = ...   ; prepended to every SCENE image prompt (watercolor look, "keep furniture in place", "no white bg behind characters", brand EYE rule)
@@ -859,6 +875,12 @@ python create_images.py my_project --mosaic     # horizontal only: one 2x2 image
 python create_video.py my_project
 python create_video.py my_project --annotated-subtitles
 python create_video.py my_project --scene-id scene_007   # re-render one clip + the pause after it
+
+# Shadowing repeat scenes (image + readable subtitle + centered "now repeat" message)
+python repeat_scenes.py my_project add               # insert a repeat scene after each dialog line
+python repeat_scenes.py my_project add --factor 1.5  # hold each for 1.5× the line's spoken length
+python repeat_scenes.py my_project remove            # remove them all
+python create_video.py my_project --repeat-message "Jetzt wiederholen" --repeat-fontsize 90
 
 # ── Reading Together (story → annotated vertical parts + long horizontal video) ──
 python create_project.py grimm_fox --type reading_together \
@@ -948,3 +970,4 @@ Because all results are tracked in `project_manifest.json`, any step can be safe
 - **Images** — skips scenes whose `image.file_path` is already set; use `--overwrite` or the Re-generate button per scene in the UI
 - **Video / Assemble** — use `--overwrite` to replace existing clips or the final video; to rebuild a single dialog line use `--scene-id <id>` (or the **Re-render Clip (+ pause)** button in the UI), which also rebuilds the pause after it
 - **Pauses** — adjust one pause on its `PSE` card, or set them all at once with the **After-pause (bulk)** control / `PATCH /projects/<name>/pauses`; then re-render the affected clips to apply
+- **Shadowing repeat scenes** — add/remove them from the Generated Items tab (or `repeat_scenes.py` / `POST /repeat_scenes`); they're inserted after each dialog line and rendered as image + readable subtitle + centered message. Re-render the Video step (or the per-dialog **Re-render Clip** button, which rebuilds the dialog + its repeat + pause together) to apply

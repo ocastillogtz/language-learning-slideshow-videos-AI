@@ -815,6 +815,140 @@ function BulkPauseControl({ projectName, onChanged }) {
   );
 }
 
+// ── Shadowing repeat-scenes control ──────────────────────────────────────────────
+
+function RepeatScenesControl({ projectName, count, onChanged }) {
+  const { toast } = useApp();
+  const [busy,   setBusy]   = useState(false);
+  const [factor, setFactor] = useState("1.0");
+
+  async function run(action) {
+    setBusy(true);
+    try {
+      const body = { action };
+      if (action === "add" && factor.trim()) body.factor = parseFloat(factor);
+      const d = await apiPost(`/projects/${projectName}/repeat_scenes`, body);
+      if (action === "add") {
+        toast("Done", `Added ${d.added} repeat scene${d.added !== 1 ? "s" : ""} (${d.total_repeat} total). Render the Video step to apply.`, "ok");
+      } else {
+        toast("Done", `Removed ${d.removed} repeat scene${d.removed !== 1 ? "s" : ""}.`, "ok");
+      }
+      onChanged && onChanged();
+    } catch(e) { toast("Error", e.message, "err"); }
+    finally { setBusy(false); }
+  }
+
+  const fNum   = parseFloat(factor);
+  const fValid = factor.trim() === "" || (!isNaN(fNum) && fNum >= 0.1 && fNum <= 10);
+
+  return (
+    <div className="item-card" style={{padding:".9rem 1rem", marginBottom:".7rem"}}>
+      <div style={{fontWeight:600, marginBottom:".15rem"}}>
+        Shadowing “repeat” scenes
+        {count > 0 && (
+          <span style={{color:"var(--accent)", fontWeight:600, fontSize:".78rem", marginLeft:".5rem"}}>
+            {count} active
+          </span>
+        )}
+      </div>
+      <div style={{fontSize:".76rem", color:"var(--muted)", marginBottom:".55rem"}}>
+        Inserts an intermediate scene after each dialog line — the same image with the subtitle still
+        readable, plus a centered “now repeat” message — so learners can shadow the line. Customize the
+        message &amp; font size in the <strong>Video</strong> step (defaults in <code>config.ini</code>).
+      </div>
+      <div style={{display:"flex", gap:".7rem", alignItems:"flex-end", flexWrap:"wrap"}}>
+        <div className="field" style={{maxWidth:"9rem"}}>
+          <label>Time factor ×</label>
+          <input type="number" min="0.1" max="10" step="0.1" value={factor}
+            onChange={e=>setFactor(e.target.value)}
+            style={{borderColor: fValid ? "" : "var(--red, #f87171)"}}/>
+        </div>
+        <button className="btn-primary" onClick={() => run("add")} disabled={busy || !fValid}
+          style={{fontSize:".82rem"}}>
+          {busy ? "Working…" : (count > 0 ? "Re-sync repeat scenes" : "Add repeat scenes")}
+        </button>
+        {count > 0 && (
+          <button className="btn-cancel" onClick={() => run("remove")} disabled={busy}
+            style={{fontSize:".82rem"}}>
+            Remove all
+          </button>
+        )}
+      </div>
+      <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".4rem", fontStyle:"italic"}}>
+        Each repeat scene is held for the dialog line's spoken length × this factor (e.g. 1.5 = 50% more
+        time to read/repeat). Re-syncing recomputes every hold; individual holds stay editable per card.
+      </div>
+    </div>
+  );
+}
+
+// ── Repeat scene card ────────────────────────────────────────────────────────────
+
+function RepeatCard({ scene, projectName, onChanged, num }) {
+  const { toast } = useApp();
+  const [durMs,  setDurMs]  = useState(String(scene.duration_ms ?? 2500));
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+
+  const durNum  = parseInt(durMs, 10);
+  const isValid = !isNaN(durNum) && durNum >= 0 && durNum <= 10000;
+  const dirty   = durNum !== (scene.duration_ms ?? 2500);
+
+  async function save() {
+    if (!isValid) return;
+    setSaving(true); setSaved(false);
+    try {
+      await apiPatch(`/projects/${projectName}/scenes/${scene.id}`, { duration_ms: durNum });
+      toast("Saved", `Repeat hold set to ${durNum} ms.`, "ok");
+      setSaved(true);
+      onChanged && onChanged();
+    } catch(e) { toast("Error", e.message, "err"); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="item-card">
+      <div className="item-head" style={{cursor:"default"}}>
+        {num != null && (
+          <div className="item-seq" style={{color:"var(--muted)", fontSize:".72rem",
+            fontWeight:600, minWidth:"2rem", textAlign:"right",
+            fontVariantNumeric:"tabular-nums"}}>#{num}</div>
+        )}
+        <div className="item-index"
+          style={{background:"var(--purple)", color:"#0d0d10", fontSize:".62rem",
+                  letterSpacing:".04em"}}>
+          RPT
+        </div>
+        <div style={{flex:1, display:"flex", alignItems:"center", gap:".75rem", flexWrap:"wrap"}}>
+          <span style={{color:"var(--muted)", fontSize:".82rem"}}>
+            Repeat prompt
+            {scene.subtitle_text && (
+              <span style={{color:"var(--fg)", fontStyle:"italic", marginLeft:".4rem"}}>
+                “{scene.subtitle_text}”
+              </span>
+            )}
+          </span>
+          <div style={{display:"flex", alignItems:"center", gap:".4rem"}}>
+            <input type="number" min="0" max="10000" step="50" value={durMs}
+              onChange={e => { setDurMs(e.target.value); setSaved(false); }}
+              style={{width:"90px", padding:".25rem .5rem", fontSize:".84rem",
+                borderRadius:"5px", border:"1px solid var(--border)",
+                background:"var(--surface-2)", color:"var(--fg)",
+                borderColor: isValid ? "var(--border)" : "var(--red, #f87171)"}}/>
+            <span style={{color:"var(--muted)", fontSize:".78rem"}}>ms hold</span>
+          </div>
+          {saved && <span style={{fontSize:".74rem", color:"var(--green, #4ade80)"}}>✓ saved</span>}
+        </div>
+        {dirty && isValid && (
+          <button className="btn-edit" onClick={save} disabled={saving} style={{marginLeft:".5rem"}}>
+            {saving ? "…" : "Save"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main tab ───────────────────────────────────────────────────────────────────
 
 function ItemsTab({ projectName }) {
@@ -841,8 +975,8 @@ function ItemsTab({ projectName }) {
     : projectCast.map(c => ({ key: c, label: c }));
 
   const scenes = (manifest?.scenes || []).filter(s =>
-    // Show TTS, SFX, narration scenes AND pure pause scenes
-    s.audio !== null || s.image !== null || s.description === "pause"
+    // Show TTS, SFX, narration scenes, pure pause scenes AND shadowing repeat scenes
+    s.audio !== null || s.image !== null || s.description === "pause" || s._is_repeat_prompt
   );
 
   async function handleChanged(newManifest) {
@@ -858,17 +992,34 @@ function ItemsTab({ projectName }) {
     );
   }
 
-  const hasPauses = (manifest?.scenes || []).some(s => s.description === "pause");
+  const allScenes   = manifest?.scenes || [];
+  const hasPauses   = allScenes.some(s => s.description === "pause");
+  const repeatCount = allScenes.filter(s => s._is_repeat_prompt).length;
+  // The repeat-scenes control is only meaningful for projects with spoken dialog.
+  const hasDialog   = allScenes.some(s =>
+    (s.audio && s.audio.type === "tts") && !s._is_narration && !s._is_repetition && !s._reading);
 
   return (
     <div className="items-grid">
       <ReadingCastGallery castChars={castChars} castAssets={castAssets} allChars={allChars}/>
+      {hasDialog && (
+        <RepeatScenesControl projectName={projectName} count={repeatCount}
+          onChanged={() => reloadManifest(projectName)}/>
+      )}
       {hasPauses && (
         <BulkPauseControl projectName={projectName}
           onChanged={() => reloadManifest(projectName)}/>
       )}
       {scenes.map(scene =>
-        scene.description === "pause" ? (
+        scene._is_repeat_prompt ? (
+          <RepeatCard
+            key={scene.id}
+            scene={scene}
+            num={numById[scene.id]}
+            projectName={projectName}
+            onChanged={handleChanged}
+          />
+        ) : scene.description === "pause" ? (
           <PauseCard
             key={scene.id}
             scene={scene}

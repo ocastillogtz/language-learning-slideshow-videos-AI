@@ -477,9 +477,14 @@ function VideoFields() {
   const [regen,     setRegen]     = useState(false);
   const [footnote,  setFootnote]  = useState("");
   const [fontScale, setFontScale] = useState("1.0");
+  const [repeatMsg, setRepeatMsg] = useState("");
+  const [repeatFs,  setRepeatFs]  = useState("");
   VideoFields._getPayload = () => ({
     overwrite, annotated_subtitles: annotated, footnote,
     annot_font_scale: parseFloat(fontScale) || 1.0, regen_annotations: regen,
+    // Blank = use the config default; only send when the user typed something.
+    repeat_message:  repeatMsg.trim() ? repeatMsg : undefined,
+    repeat_fontsize: repeatFs.trim()  ? parseInt(repeatFs, 10) : undefined,
   });
   return (
     <div className="fields">
@@ -507,6 +512,29 @@ function VideoFields() {
           placeholder="e.g. * AI-generated content. Not a substitute for professional instruction."
           style={{resize:"vertical"}}
         />
+      </div>
+
+      {/* Shadowing repeat overlay — applies to the repeat scenes added in the Items tab */}
+      <div style={{borderTop:"1px solid var(--border)", paddingTop:".75rem", marginTop:".25rem"}}>
+        <div style={{fontSize:".82rem", fontWeight:600, marginBottom:".15rem"}}>
+          Shadowing “repeat” overlay
+        </div>
+        <div style={{fontSize:".74rem", color:"var(--muted)", marginBottom:".5rem"}}>
+          Centered message shown on the repeat scenes (add them in the <strong>Generated Items</strong> tab).
+          Leave blank to use the config default. Font type lives in <code>config.ini → [repeat_prompt]</code>.
+        </div>
+        <div className="field-row">
+          <div className="field" style={{flex:2}}>
+            <label>Message <span style={{color:"var(--muted)",fontWeight:300}}>(optional)</span></label>
+            <input value={repeatMsg} onChange={e=>setRepeatMsg(e.target.value)}
+              placeholder="e.g. Jetzt wiederholen"/>
+          </div>
+          <div className="field" style={{flex:1}}>
+            <label>Font size <span style={{color:"var(--muted)",fontWeight:300}}>(optional)</span></label>
+            <input type="number" min="20" max="200" step="2"
+              value={repeatFs} onChange={e=>setRepeatFs(e.target.value)} placeholder="e.g. 90"/>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -132,10 +132,19 @@ def run_video(name):
         # the first. None → use the config default; explicit value (incl. 0) wins.
         raw_pre_pause     = data.get("read_pre_pause_ms")
         read_pre_pause_ms = int(raw_pre_pause) if raw_pre_pause not in (None, "") else None
+        # Shadowing repeat overlay: None message → config default; "" hides it.
+        repeat_message    = data.get("repeat_message")
+        if repeat_message is not None:
+            repeat_message = str(repeat_message)
+        raw_rfs           = data.get("repeat_fontsize")
+        repeat_fontsize   = int(raw_rfs) if raw_rfs not in (None, "") else None
+        repeat_font       = (data.get("repeat_font") or "").strip() or None
         from create_video import create_videos
         run_job(name, step, create_videos, name, overwrite, annotated_subtitles, footnote,
                 inter_pause_ms, fmt, subdir, annot_font_scale, regen_annotations,
-                read_pre_pause_ms)
+                read_pre_pause_ms,
+                repeat_message=repeat_message, repeat_fontsize=repeat_fontsize,
+                repeat_font=repeat_font)
         return jsonify({"message": "Video rendering started", "step_key": step})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -160,13 +169,52 @@ def run_video_scene(name):
             annot_font_scale = 1.0
         annot_font_scale  = max(0.5, min(2.5, annot_font_scale))
         regen_annotations = bool(data.get("regen_annotations", False))
+        repeat_message    = data.get("repeat_message")
+        if repeat_message is not None:
+            repeat_message = str(repeat_message)
+        raw_rfs           = data.get("repeat_fontsize")
+        repeat_fontsize   = int(raw_rfs) if raw_rfs not in (None, "") else None
+        repeat_font       = (data.get("repeat_font") or "").strip() or None
         from create_video import create_video_single
         step_key = "video_" + scene_id
         run_job(name, step_key, create_video_single, name, scene_id,
                 annotated_subtitles=annotated_subtitles, footnote=footnote,
                 inter_pause_ms=inter_pause_ms, annot_font_scale=annot_font_scale,
-                regen_annotations=regen_annotations)
+                regen_annotations=regen_annotations,
+                repeat_message=repeat_message, repeat_fontsize=repeat_fontsize,
+                repeat_font=repeat_font)
         return jsonify({"message": "Clip re-render started", "step_key": step_key})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/repeat_scenes", methods=["POST"])
+def manage_repeat_scenes(name):
+    """Add or remove shadowing "repeat" scenes (image + readable subtitle + centered
+    message) after every dialog line. Body: {"action": "add" | "remove"}.
+
+    Synchronous manifest mutation (fast). Render the Video step afterwards to bake the
+    new scenes (or re-render the affected dialog clips, which rebuild the repeat too).
+    """
+    try:
+        data   = request.get_json() or {}
+        action = (data.get("action") or "add").strip()
+        if action not in ("add", "remove"):
+            return jsonify({"error": "action must be 'add' or 'remove'"}), 400
+        if action == "add":
+            raw_factor = data.get("factor")
+            try:
+                factor = float(raw_factor) if raw_factor not in (None, "") else None
+            except (TypeError, ValueError):
+                factor = None
+            if factor is not None:
+                factor = max(0.1, min(10.0, factor))
+            from repeat_scenes import add_repeat_scenes
+            return jsonify(add_repeat_scenes(name, factor=factor))
+        from repeat_scenes import remove_repeat_scenes
+        return jsonify(remove_repeat_scenes(name))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -216,6 +264,10 @@ def update_pauses(name):
                 continue
             if scope == "dialog":
                 prev = scenes[i - 1] if i > 0 else None
+                # A shadowing repeat scene sits between the dialog line and its pause,
+                # so a pause after a repeat scene still belongs to that dialog.
+                if prev and prev.get("_is_repeat_prompt"):
+                    prev = scenes[i - 2] if i > 1 else None
                 if not (prev and _is_dialog(prev)):
                     continue
             s["duration_ms"] = ms

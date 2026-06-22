@@ -53,12 +53,25 @@ def create_videos(
     annot_font_scale: float = 1.0,
     regen_annotations: bool = False,
     read_pre_pause_ms: int = None,
+    repeat_message: str = None,
+    repeat_fontsize: int = None,
+    repeat_font: str = None,
 ) -> None:
     cfg           = load_config()
     chars_data    = load_new_characters(cfg["assets_dir"])
     assets_dir    = cfg["assets_dir"]
     project_path  = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
+
+    # Shadowing "repeat" overlay: the centered message + font are global (config),
+    # but the message and font size may be overridden per render. None message ->
+    # use the config default; an explicit "" disables the centered message.
+    if repeat_message is None:
+        repeat_message = cfg.get("repeat_text", "")
+    if repeat_fontsize is not None:
+        cfg["repeat_fontsize"] = repeat_fontsize
+    if repeat_font:
+        cfg["repeat_font"] = repeat_font
 
     # Regenerating annotations only matters if the clips are also rebuilt, so force
     # an overwrite — otherwise existing clips would be skipped and you'd see no change.
@@ -140,6 +153,7 @@ def create_videos(
                 pause_override_ms=inter_pause_ms,
                 annot_paths=annot_paths,
                 pre_pause_ms=scene_pre_pause,
+                repeat_message=repeat_message,
             )
         except Exception as e:
             logger.error(f"Failed to build {sid}: {e}")
@@ -172,14 +186,17 @@ def create_video_single(
     inter_pause_ms: int = None,
     annot_font_scale: float = 1.0,
     regen_annotations: bool = False,
+    repeat_message: str = None,
+    repeat_fontsize: int = None,
+    repeat_font: str = None,
 ) -> None:
-    """Re-render a single scene's clip and the silent pause that follows it.
+    """Re-render a single scene's clip and the silent display scenes that follow it.
 
     "Everything related to the dialog": the dialog/TTS scene's own .mp4 plus the
-    immediately-following pause scene (audio == null), so the freeze-frame of the
-    pause matches the freshly rebuilt clip. The freeze-frame background of the
-    rebuilt clip(s) is taken from the previous scene's existing rendered clip, so
-    the result is consistent with the surrounding video.
+    silent display scenes chained after it — the shadowing repeat scene (if present)
+    and the silent pause — so their freeze-frames match the freshly rebuilt clip. The
+    freeze-frame background of the rebuilt clips is taken from the previous scene's
+    existing rendered clip, so the result is consistent with the surrounding video.
     """
     cfg           = load_config()
     chars_data    = load_new_characters(cfg["assets_dir"])
@@ -189,6 +206,14 @@ def create_video_single(
 
     if cfg.get("imagemagick"):
         change_settings({"IMAGEMAGICK_BINARY": cfg["imagemagick"]})
+
+    # Resolve the shadowing repeat overlay the same way create_videos does.
+    if repeat_message is None:
+        repeat_message = cfg.get("repeat_text", "")
+    if repeat_fontsize is not None:
+        cfg["repeat_fontsize"] = repeat_fontsize
+    if repeat_font:
+        cfg["repeat_font"] = repeat_font
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
@@ -217,12 +242,18 @@ def create_video_single(
         raise ValueError(f"Scene '{scene_id}' not found in manifest")
     target = scenes[idx]
 
-    # Rebuild the target scene plus the silent pause right after it (if any).
+    # Rebuild the target scene plus the silent display scenes chained after it: the
+    # shadowing repeat scene and/or the silent pause (both have audio == null and
+    # image == null), stopping at the next scene that has its own audio or image.
     rebuild = [target]
-    if idx + 1 < len(scenes):
-        nxt = scenes[idx + 1]
+    j = idx + 1
+    while j < len(scenes):
+        nxt = scenes[j]
         if nxt.get("audio") is None and nxt.get("image") is None:
             rebuild.append(nxt)
+            j += 1
+        else:
+            break
 
     # Freeze-frame background = last frame of the previous scene's existing clip.
     last_frame_np = None
@@ -254,6 +285,7 @@ def create_video_single(
                 pause_override_ms=inter_pause_ms,
                 annot_paths=annot_paths,
                 pre_pause_ms=0,
+                repeat_message=repeat_message,
             )
         except Exception as e:
             logger.error(f"Failed to build {sid}: {e}")
@@ -292,6 +324,7 @@ def _build_clip(
     pause_override_ms: int = None,
     annot_paths: dict | None = None,
     pre_pause_ms: int = 0,
+    repeat_message: str = "",
 ):
     """
     Returns (clip, new_last_frame_np).
@@ -326,6 +359,47 @@ def _build_clip(
             sub_y = H - cfg["sub_margin_bottom"] - sub.h
             layers += _sub_layers(sub, cfg["sub_margin_left"], sub_y, duration_s, cfg)
         return CompositeVideoClip(layers, size=(W, H)).set_duration(duration_s)
+
+    # ------------------------------------------------------------------
+    # repeat prompt (shadowing) → image + readable subtitle + centered message
+    # ------------------------------------------------------------------
+    # A silent "intermediate" scene held between a dialog line and its pause: the
+    # same image with the subtitle STILL readable plus a centered "now repeat" cue,
+    # so the learner can repeat the line aloud while reading it.
+    if scene.get("_is_repeat_prompt"):
+        dur_ms = scene.get("duration_ms") or cfg.get("repeat_duration_ms") or 2500
+        dur_s  = dur_ms / 1000.0
+
+        if last_frame_np is not None:
+            bg = ImageClip(last_frame_np).set_duration(dur_s)
+        else:
+            bg = ColorClip((W, H), (0, 0, 0)).set_duration(dur_s)
+        layers = [bg]
+
+        # Subtitle — keep it readable; reuse the source dialog's annotated PNG when
+        # annotations are on so it matches the dialog clip, else a plain subtitle.
+        text   = (scene.get("subtitle_text") or "").strip()
+        src_id = scene.get("_source_scene_id")
+        if text:
+            ann_png = annot_paths.get(src_id) if (annotated_subtitles and src_id) else None
+            if ann_png:
+                ann_layers, _ = _annotated_sub_layers(ann_png, dur_s, cfg, W, H)
+                layers += ann_layers
+            else:
+                sub   = _subtitle(text, dur_s, False, cfg)
+                sub_y = H - cfg["sub_margin_bottom"] - sub.h
+                layers += _sub_layers(sub, cfg["sub_margin_left"], sub_y, dur_s, cfg)
+
+        # Centered "now repeat" message (global text/font, optional per-render override).
+        if repeat_message:
+            layers += _repeat_message_layers(repeat_message, dur_s, cfg, W, H)
+
+        clip = (CompositeVideoClip(layers, size=(W, H))
+                .set_duration(dur_s)
+                .set_audio(_silent(dur_s)))
+        # Keep showing this frame (subtitle + message) through the following pause.
+        new_last = clip.get_frame(max(0.0, dur_s - 1.0 / fps))
+        return clip, new_last
 
     # ------------------------------------------------------------------
     # null → silent pause
@@ -549,6 +623,36 @@ def _footnote_layers(text: str, sub_bg_bottom: int, duration: float, cfg: dict, 
         fn_bg.set_position((x - px, fn_y - py)),
         fn_clip.set_position((x, fn_y)),
     ]
+
+
+def _repeat_message_layers(text: str, duration: float, cfg: dict, W: int, H: int) -> list:
+    """
+    Centered "now repeat" message for shadowing repeat scenes — drawn in the middle
+    of the frame over a semi-transparent dark box, like the on-screen warning label.
+
+    Font and colour come from config ([repeat_prompt]); the font size may be
+    overridden per render (cfg["repeat_fontsize"]). The empty-font fallback uses the
+    narrator font.
+    """
+    font = cfg.get("repeat_font") or cfg["nar_font"]
+    sz   = cfg.get("repeat_fontsize", 90)
+    col  = cfg.get("repeat_color", "white")
+    scol = cfg.get("repeat_stroke_color", "black")
+    sw   = cfg.get("repeat_stroke_width", 3)
+
+    msg = TextClip(
+        text, font=font, fontsize=sz, color=col,
+        stroke_color=scol, stroke_width=sw, method="label",
+    ).set_duration(duration)
+
+    px, py  = cfg["sub_bg_padding_x"], cfg["sub_bg_padding_y"]
+    opacity = cfg.get("repeat_bg_opacity", cfg["sub_bg_opacity"])
+    bg = (
+        ColorClip(size=(msg.w + px * 2, msg.h + py * 2), color=(0, 0, 0))
+        .set_duration(duration)
+        .set_opacity(opacity)
+    )
+    return [bg.set_position(("center", "center")), msg.set_position(("center", "center"))]
 
 
 def _annotated_sub_layers(png_path: str, duration: float, cfg: dict, W: int, H: int):
@@ -830,12 +934,28 @@ def main() -> None:
         help="reading_together: silent pre-pause (ms) before each sentence's narration "
              "(except the first). Overrides config; 0 disables.",
     )
+    p.add_argument(
+        "--repeat-message",
+        default=None,
+        dest="repeat_message",
+        help="Shadowing repeat scenes: centered message (e.g. 'Jetzt wiederholen'). "
+             "Omit to use the config default; pass '' to hide the message.",
+    )
+    p.add_argument(
+        "--repeat-fontsize",
+        type=int,
+        default=None,
+        dest="repeat_fontsize",
+        help="Shadowing repeat scenes: override the centered message font size.",
+    )
     a = p.parse_args()
     if a.scene_id:
         create_video_single(a.project_name, a.scene_id,
                             annotated_subtitles=a.annotated_subtitles,
                             footnote=a.footnote,
-                            inter_pause_ms=a.inter_pause_ms)
+                            inter_pause_ms=a.inter_pause_ms,
+                            repeat_message=a.repeat_message,
+                            repeat_fontsize=a.repeat_fontsize)
     else:
         create_videos(a.project_name, a.overwrite,
                       annotated_subtitles=a.annotated_subtitles,
@@ -843,7 +963,9 @@ def main() -> None:
                       inter_pause_ms=a.inter_pause_ms,
                       format_override=a.format_override,
                       out_subdir=a.out_subdir,
-                      read_pre_pause_ms=a.read_pre_pause_ms)
+                      read_pre_pause_ms=a.read_pre_pause_ms,
+                      repeat_message=a.repeat_message,
+                      repeat_fontsize=a.repeat_fontsize)
 
 
 if __name__ == "__main__":

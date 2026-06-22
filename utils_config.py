@@ -109,6 +109,19 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "fn_gap":          _i("footnote", "gap",          50),   # px between sub bg-bottom and footnote
         "fn_bg_opacity":   _f("footnote", "bg_opacity",   0.45),
 
+        # Repeat-prompt overlay (shadowing "intermediate" scene: image + readable
+        # subtitle + a centered message such as "Jetzt wiederholen"). Text and font
+        # are global; message + font size are also overridable per render.
+        "repeat_text":         _p("repeat_prompt", "text",         "Jetzt wiederholen"),
+        "repeat_font":         _p("repeat_prompt", "font",         ""),   # empty → nar_font
+        "repeat_fontsize":     _i("repeat_prompt", "fontsize",     90),
+        "repeat_color":        _p("repeat_prompt", "color",        "PeachPuff"),
+        "repeat_stroke_color": _p("repeat_prompt", "stroke_color", "sienna4"),
+        "repeat_stroke_width": _i("repeat_prompt", "stroke_width", 3),
+        "repeat_bg_opacity":   _f("repeat_prompt", "bg_opacity",   0.45),
+        "repeat_duration_ms":  _i("repeat_prompt", "duration_ms",  0),    # 0 = mirror dialog
+        "repeat_duration_factor": _f("repeat_prompt", "duration_factor", 1.0),  # × mirrored length
+
         # Assembly
         "bg_audio_volume":    _f("assembly", "bg_audio_volume",    0.18),
         "crossfade_s":        _f("assembly", "crossfade_s",        0.35),
