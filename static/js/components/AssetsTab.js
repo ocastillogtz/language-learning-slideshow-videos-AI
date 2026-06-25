@@ -609,6 +609,94 @@ async function apiPut(path, body) {
   return d;
 }
 
+// ── Subtitle / narration preview ──────────────────────────────────────────────
+
+function SubtitlePreviewPane() {
+  const [format,   setFormat]   = useState("vertical");
+  const [style,    setStyle]    = useState("dialog");
+  const [text,     setText]     = useState("Guten Morgen! Wie geht es dir heute?");
+  const [footnote, setFootnote] = useState("");
+  const [repeat,   setRepeat]   = useState("");
+  const [src,      setSrc]      = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [err,      setErr]      = useState("");
+
+  async function generate() {
+    setErr(""); setLoading(true);
+    try {
+      const p = new URLSearchParams({ text, format, style, footnote, repeat_message: repeat });
+      const r = await fetch(`/preview/text?${p.toString()}`);
+      if (!r.ok) {
+        let msg = r.statusText;
+        try { msg = (await r.json()).error || msg; } catch {}
+        throw new Error(msg);
+      }
+      const blob = await r.blob();
+      setSrc(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:".83rem", color:"var(--muted)", marginBottom:"1rem"}}>
+        Preview how narration / subtitle text looks over a sample background
+        (<code>assets/samples/{format}.png</code>), using the live config styling for
+        that orientation. Matches the real render.
+      </div>
+
+      <div className="field-row">
+        <div className="field">
+          <label>Orientation</label>
+          <select value={format} onChange={e=>setFormat(e.target.value)}>
+            <option value="vertical">Vertical (1080×1920)</option>
+            <option value="horizontal">Horizontal (1920×1080)</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Text style</label>
+          <select value={style} onChange={e=>setStyle(e.target.value)}>
+            <option value="dialog">Dialogue subtitle (bottom)</option>
+            <option value="narration">Narration / title (centered)</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Text</label>
+        <textarea rows={2} value={text} onChange={e=>setText(e.target.value)}
+          placeholder="Type the line to preview…"/>
+      </div>
+      <div className="field">
+        <label>Footnote / disclaimer <span style={{color:"var(--muted)",fontWeight:300}}>(optional)</span></label>
+        <textarea rows={2} value={footnote} onChange={e=>setFootnote(e.target.value)}
+          placeholder="e.g. * AI-generated content."/>
+      </div>
+      <div className="field">
+        <label>Centered “repeat” message <span style={{color:"var(--muted)",fontWeight:300}}>(optional — shadowing overlay)</span></label>
+        <input value={repeat} onChange={e=>setRepeat(e.target.value)} placeholder="e.g. Jetzt wiederholen"/>
+      </div>
+
+      <button className="btn-primary" onClick={generate} disabled={loading}
+        style={{marginTop:".25rem"}}>
+        {loading ? "Rendering…" : "Generate preview"}
+      </button>
+
+      {err && (
+        <div className="step-log vis err" style={{marginTop:".75rem"}}>{err}</div>
+      )}
+
+      {src && !err && (
+        <div style={{marginTop:"1rem", textAlign:"center"}}>
+          <img src={src} alt="preview"
+            style={{maxWidth:"100%", maxHeight:"560px", borderRadius:"8px",
+              border:"1px solid var(--border)", background:"#000"}}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Top-level tab panel ───────────────────────────────────────────────────────
 
 const ASSET_TABS = [
@@ -617,6 +705,7 @@ const ASSET_TABS = [
   { id:"proj_types",  label:"Project Types"   },
   { id:"bg_audio",    label:"Background Audio"},
   { id:"sfx",         label:"SFX"             },
+  { id:"preview",     label:"Subtitle Preview"},
 ];
 
 function AssetsTab() {
@@ -646,6 +735,7 @@ function AssetsTab() {
       {tab==="proj_types"  && <ProjectTypesPane/>}
       {tab==="bg_audio"    && <BackgroundAudioPane/>}
       {tab==="sfx"         && <SfxPane/>}
+      {tab==="preview"     && <SubtitlePreviewPane/>}
     </div>
   );
 }

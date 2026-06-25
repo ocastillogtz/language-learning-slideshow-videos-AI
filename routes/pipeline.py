@@ -139,12 +139,15 @@ def run_video(name):
         raw_rfs           = data.get("repeat_fontsize")
         repeat_fontsize   = int(raw_rfs) if raw_rfs not in (None, "") else None
         repeat_font       = (data.get("repeat_font") or "").strip() or None
+        # Extra hold (ms) after a footnote scene so it can be read. None → config default.
+        raw_fh            = data.get("footnote_hold_ms")
+        footnote_hold_ms  = int(raw_fh) if raw_fh not in (None, "") else None
         from create_video import create_videos
         run_job(name, step, create_videos, name, overwrite, annotated_subtitles, footnote,
                 inter_pause_ms, fmt, subdir, annot_font_scale, regen_annotations,
                 read_pre_pause_ms,
                 repeat_message=repeat_message, repeat_fontsize=repeat_fontsize,
-                repeat_font=repeat_font)
+                repeat_font=repeat_font, footnote_hold_ms=footnote_hold_ms)
         return jsonify({"message": "Video rendering started", "step_key": step})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -175,6 +178,8 @@ def run_video_scene(name):
         raw_rfs           = data.get("repeat_fontsize")
         repeat_fontsize   = int(raw_rfs) if raw_rfs not in (None, "") else None
         repeat_font       = (data.get("repeat_font") or "").strip() or None
+        raw_fh            = data.get("footnote_hold_ms")
+        footnote_hold_ms  = int(raw_fh) if raw_fh not in (None, "") else None
         from create_video import create_video_single
         step_key = "video_" + scene_id
         run_job(name, step_key, create_video_single, name, scene_id,
@@ -182,7 +187,7 @@ def run_video_scene(name):
                 inter_pause_ms=inter_pause_ms, annot_font_scale=annot_font_scale,
                 regen_annotations=regen_annotations,
                 repeat_message=repeat_message, repeat_fontsize=repeat_fontsize,
-                repeat_font=repeat_font)
+                repeat_font=repeat_font, footnote_hold_ms=footnote_hold_ms)
         return jsonify({"message": "Clip re-render started", "step_key": step_key})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -424,9 +429,12 @@ def run_reading_assemble(name):
         make_long     = bool(data.get("make_long", True))
         raw_pp        = data.get("per_part")
         per_part      = int(raw_pp) if raw_pp not in (None, "") else None
+        raw_gain      = data.get("bg_audio_gain_db")
+        bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else 0.0
         from assemble_reading import assemble_reading
         run_job(name, "reading_assemble", assemble_reading, name, bg_audio_name, overwrite,
-                speed_factor, branding_file, branding_mode, make_parts, make_long, per_part)
+                speed_factor, branding_file, branding_mode, make_parts, make_long, per_part,
+                bg_gain_db)
         return jsonify({"message": "Reading assembly started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -446,9 +454,11 @@ def run_assemble(name):
         branding_mode = (data.get("branding_mode") or "none").strip() or "none"
         if branding_mode not in ("none", "intro", "outro", "both"):
             branding_mode = "none"
+        raw_gain      = data.get("bg_audio_gain_db")
+        bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else 0.0
         from assemble_video import assemble_video
         run_job(name, "assemble", assemble_video, name, bg_audio_name, overwrite,
-                speed_factor, branding_file, branding_mode)
+                speed_factor, branding_file, branding_mode, bg_gain_db)
         return jsonify({"message": "Assembly started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

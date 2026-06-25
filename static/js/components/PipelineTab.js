@@ -476,6 +476,7 @@ function VideoFields() {
   const [annotated, setAnnotated] = useState(false);
   const [regen,     setRegen]     = useState(false);
   const [footnote,  setFootnote]  = useState("");
+  const [footHold,  setFootHold]  = useState("");
   const [fontScale, setFontScale] = useState("1.0");
   const [repeatMsg, setRepeatMsg] = useState("");
   const [repeatFs,  setRepeatFs]  = useState("");
@@ -483,8 +484,10 @@ function VideoFields() {
     overwrite, annotated_subtitles: annotated, footnote,
     annot_font_scale: parseFloat(fontScale) || 1.0, regen_annotations: regen,
     // Blank = use the config default; only send when the user typed something.
-    repeat_message:  repeatMsg.trim() ? repeatMsg : undefined,
-    repeat_fontsize: repeatFs.trim()  ? parseInt(repeatFs, 10) : undefined,
+    repeat_message:   repeatMsg.trim() ? repeatMsg : undefined,
+    repeat_fontsize:  repeatFs.trim()  ? parseInt(repeatFs, 10) : undefined,
+    // Footnote read-time entered in seconds → sent as ms. Blank = config default.
+    footnote_hold_ms: footHold.trim()  ? Math.round(parseFloat(footHold) * 1000) : undefined,
   });
   return (
     <div className="fields">
@@ -512,6 +515,18 @@ function VideoFields() {
           placeholder="e.g. * AI-generated content. Not a substitute for professional instruction."
           style={{resize:"vertical"}}
         />
+      </div>
+      <div className="field" style={{maxWidth:"19rem"}}>
+        <label>Footnote read time
+          <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(seconds, optional)</span>
+        </label>
+        <input type="number" min="0" max="20" step="0.5"
+          value={footHold} onChange={e=>setFootHold(e.target.value)}
+          placeholder="blank = config default"/>
+        <div style={{fontSize:".74rem",color:"var(--muted)",marginTop:".25rem"}}>
+          Extra time the scene is held after the narration so viewers can read the footnote.
+          Only applies to scenes that show a footnote. 0 = no extra hold.
+        </div>
       </div>
 
       {/* Shadowing repeat overlay — applies to the repeat scenes added in the Items tab */}
@@ -543,6 +558,7 @@ function VideoFields() {
 function AssembleFields() {
   const [bgAudio,       setBgAudio]       = useState("office");
   const [bgAudioTracks, setBgAudioTracks] = useState([]);
+  const [bgGainDb,      setBgGainDb]      = useState("0");
   const [speedFactor,   setSpeedFactor]   = useState("1.0");
   const [overwrite,     setOverwrite]     = useState(false);
   const [brandingFile,  setBrandingFile]  = useState("");
@@ -551,6 +567,7 @@ function AssembleFields() {
 
   AssembleFields._getPayload = () => ({
     bg_audio_name: bgAudio,
+    bg_audio_gain_db: bgGainDb !== "" ? parseFloat(bgGainDb) : 0,
     overwrite,
     speed_factor:  speedFactor !== "" ? parseFloat(speedFactor) : null,
     branding_file: brandingMode !== "none" ? brandingFile : null,
@@ -586,6 +603,11 @@ function AssembleFields() {
       : `${((speedNum - 1) * 100).toFixed(1)} % faster`
     : "normal speed";
 
+  const gainNum  = parseFloat(bgGainDb);
+  const gainHint = isNaN(gainNum) || Math.abs(gainNum) < 0.05
+    ? "config default"
+    : gainNum > 0 ? `+${gainNum.toFixed(1)} dB louder` : `${gainNum.toFixed(1)} dB quieter`;
+
   return (
     <div className="fields">
       <div className="field-row">
@@ -601,6 +623,19 @@ function AssembleFields() {
             <input value={bgAudio} onChange={e=>setBgAudio(e.target.value)}
               placeholder="e.g. office, elevator"/>
           )}
+        </div>
+        <div className="field" style={{flex:1}}>
+          <label>Bg Volume
+            <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
+              ({gainHint})
+            </span>
+          </label>
+          <input
+            type="number" min="-30" max="12" step="0.5"
+            value={bgGainDb}
+            onChange={e => setBgGainDb(e.target.value)}
+            placeholder="0"
+          />
         </div>
         <div className="field" style={{flex:1}}>
           <label>Speed Factor
@@ -872,6 +907,7 @@ function ReadingHorizFields() {
 
 function ReadingAssembleFields() {
   const [bg, setBg]             = React.useState("office");
+  const [bgGainDb, setBgGainDb] = React.useState("0");
   const [overwrite, setOverwrite] = React.useState(false);
   const [parts, setParts]       = React.useState(true);
   const [long, setLong]         = React.useState(true);
@@ -882,6 +918,7 @@ function ReadingAssembleFields() {
   const [brandingFiles, setBrandingFiles] = React.useState([]);
   ReadingAssembleFields._getPayload = () => ({
     bg_audio_name: bg, overwrite, make_parts: parts, make_long: long,
+    bg_audio_gain_db: bgGainDb !== "" ? parseFloat(bgGainDb) : 0,
     branding_mode: brandingOn && brandingFile ? "intro" : "none",
     branding_file: brandingOn ? brandingFile : null,
     per_part: perPart !== "" ? parseInt(perPart, 10) : null,
@@ -907,11 +944,23 @@ function ReadingAssembleFields() {
       : `${((speedNum - 1) * 100).toFixed(1)} % faster`
     : "normal speed";
 
+  const rtGainNum  = parseFloat(bgGainDb);
+  const rtGainHint = isNaN(rtGainNum) || Math.abs(rtGainNum) < 0.05
+    ? "config default"
+    : rtGainNum > 0 ? `+${rtGainNum.toFixed(1)} dB louder` : `${rtGainNum.toFixed(1)} dB quieter`;
+
   return (
     <div className="fields">
       <div className="field-row">
         <div className="field"><label>Background Audio</label>
           <input value={bg} onChange={e=>setBg(e.target.value)} placeholder="e.g. office, park"/></div>
+        <div className="field"><label>Bg Volume
+            <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
+              ({rtGainHint})
+            </span>
+          </label>
+          <input type="number" min="-30" max="12" step="0.5" value={bgGainDb}
+            onChange={e=>setBgGainDb(e.target.value)} placeholder="0"/></div>
         <div className="field"><label>Sentences per vertical part</label>
           <input type="number" min="1" max="20" value={perPart} onChange={e=>setPerPart(e.target.value)}/></div>
       </div>

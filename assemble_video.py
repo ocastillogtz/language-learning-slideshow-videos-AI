@@ -19,7 +19,7 @@ from moviepy.editor import (
 from moviepy.config import change_settings
 from utils_config import load_config, load_background_audio_index
 
-logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +30,7 @@ def assemble_video(
     speed_factor=None,
     branding_file=None,
     branding_mode="none",
+    bg_audio_gain_db=0.0,
 ):
     cfg          = load_config()
     assets_dir   = cfg["assets_dir"]
@@ -82,7 +83,10 @@ def assemble_video(
         repeats   = int(content.duration / bg_clip.duration) + 2
         bg_looped = concatenate_audioclips([AudioFileClip(str(bg_audio_path))] * repeats)
         bg_looped = bg_looped.subclip(0, content.duration)
-        bg_looped = bg_looped.volumex(cfg["bg_audio_volume"])
+        bg_volume = cfg["bg_audio_volume"] * (10.0 ** (float(bg_audio_gain_db) / 20.0))
+        logger.info("Background audio gain: %+.1f dB (volume %.3f -> %.3f)",
+                    float(bg_audio_gain_db), cfg["bg_audio_volume"], bg_volume)
+        bg_looped = bg_looped.volumex(bg_volume)
         bg_looped = bg_looped.audio_fadein(cfg["bg_audio_fadein_s"])
         bg_looped = bg_looped.audio_fadeout(cfg["bg_audio_fadeout_s"])
         mixed     = CompositeAudioClip([content.audio, bg_looped]) if content.audio else bg_looped
@@ -377,6 +381,9 @@ def main():
     p = argparse.ArgumentParser(description="Assemble per-scene clips into a final video.")
     p.add_argument("project_name")
     p.add_argument("--bg-audio", default="office", dest="bg_audio_name")
+    p.add_argument("--bg-audio-gain-db", type=float, default=0.0, dest="bg_audio_gain_db",
+                   help="Adjust background audio volume in dB relative to config "
+                        "(positive = louder, negative = quieter, 0 = unchanged)")
     p.add_argument("--speed-factor", type=float, default=None, dest="speed_factor",
                    help="Playback speed multiplier (0.95 = 5 percent slower)")
     p.add_argument("--branding-file", dest="branding_file", default=None,
@@ -388,6 +395,7 @@ def main():
     assemble_video(
         a.project_name, a.bg_audio_name, a.overwrite, a.speed_factor,
         branding_file=a.branding_file, branding_mode=a.branding_mode,
+        bg_audio_gain_db=a.bg_audio_gain_db,
     )
 
 

@@ -22,7 +22,12 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
     Parse config.ini and return a flat dict of all pipeline parameters.
     Paths are returned as Path objects. Missing optional keys return None.
     """
-    cfg = configparser.RawConfigParser()
+    # inline_comment_prefixes lets a `key = value  ; note` line drop the trailing
+    # note (e.g. the empty `font = ; falls back to …` lines). Only ";" — NOT "#",
+    # since hex colours like markup_italic_colors = #FFD700 start with "#". A ";"
+    # only counts as a comment when preceded by whitespace, so values that embed
+    # ";" without a leading space (e.g. the image style_tokens) are left intact.
+    cfg = configparser.RawConfigParser(inline_comment_prefixes=(";",))
     cfg.read(config_path)
 
     def _p(section: str, key: str, fallback=None):
@@ -66,6 +71,15 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "narrator_blur_radius": _i("video", "narrator_blur_radius", 12),
         "blend_px":             _i("video", "blend_px",             120),
 
+        # Per-orientation render overrides (raw strings; applied at render time by
+        # apply_video_format()). Keys use the internal flat names (target_w,
+        # sub_fontsize, nar_fontsize, fal_image_size, …) and override the base values
+        # above for that orientation. Anything omitted keeps the base value.
+        "video_formats": {
+            fmt: (dict(cfg.items(fmt)) if cfg.has_section(fmt) else {})
+            for fmt in ("vertical", "horizontal")
+        },
+
         # Subtitles
         "sub_font":          _p("subtitles", "font",          "Arial-Bold"),
         "sub_fontsize":      _i("subtitles", "fontsize",       76),
@@ -108,6 +122,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "fn_stroke_width": _i("footnote", "stroke_width", 0),
         "fn_gap":          _i("footnote", "gap",          50),   # px between sub bg-bottom and footnote
         "fn_bg_opacity":   _f("footnote", "bg_opacity",   0.45),
+        # Extra silent hold (ms) after a footnote scene so it can be read. 0 = off.
+        "footnote_hold_ms": _i("footnote", "hold_ms",     0),
 
         # Repeat-prompt overlay (shadowing "intermediate" scene: image + readable
         # subtitle + a centered message such as "Jetzt wiederholen"). Text and font
@@ -200,6 +216,36 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "comfyui_host": _p("comfyui", "host", "127.0.0.1"),
         "comfyui_port": _i("comfyui", "port", 8000),
     }
+
+
+def apply_video_format(cfg: dict, video_format: str) -> dict:
+    """Override cfg in place with the [vertical] / [horizontal] section for this format.
+
+    Orientation sections in config.ini use the same internal key names as the flat cfg
+    dict (e.g. target_w, target_h, sub_fontsize, nar_fontsize, sub_margin_bottom,
+    icon_x, icon_y, fal_image_size). Each override is cast to the type of the existing
+    base value, so a string stays a string and a number stays a number. Unknown keys
+    are stored as strings. Returns cfg for chaining.
+
+    Call this once per render after load_config(), passing the project's video_format.
+    """
+    overrides = (cfg.get("video_formats") or {}).get(video_format, {})
+    for key, raw in overrides.items():
+        if raw is None:
+            continue
+        base = cfg.get(key)
+        try:
+            if isinstance(base, bool):                    # bool before int (bool ⊂ int)
+                cfg[key] = str(raw).strip().lower() in ("1", "true", "yes", "on")
+            elif isinstance(base, int):
+                cfg[key] = int(raw)
+            elif isinstance(base, float):
+                cfg[key] = float(raw)
+            else:
+                cfg[key] = raw
+        except (TypeError, ValueError):
+            logger.warning("Bad [%s] override %s=%r — keeping base %r", video_format, key, raw, base)
+    return cfg
 
 
 def load_characters(assets_dir: Path) -> dict[str, Any]:
