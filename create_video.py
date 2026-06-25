@@ -30,7 +30,7 @@ from moviepy.editor import (
     concatenate_videoclips,
 )
 from moviepy.config import change_settings
-from utils_config import load_config, load_new_characters
+from utils_config import load_config, load_new_characters, apply_video_format
 from utils_image import pad_image_to_frame, pil_to_numpy, make_icon_clip, make_corner_icon_clip
 from utils_markup import has_markup, to_pango, strip_markup
 from generate_annotations import generate_annotations
@@ -56,6 +56,7 @@ def create_videos(
     repeat_message: str = None,
     repeat_fontsize: int = None,
     repeat_font: str = None,
+    footnote_hold_ms: int = None,
 ) -> None:
     cfg           = load_config()
     chars_data    = load_new_characters(cfg["assets_dir"])
@@ -73,6 +74,11 @@ def create_videos(
     if repeat_font:
         cfg["repeat_font"] = repeat_font
 
+    # Extra silent hold after a footnote/disclaimer scene so it can be read.
+    # None -> config default; 0 disables.
+    if footnote_hold_ms is None:
+        footnote_hold_ms = cfg.get("footnote_hold_ms", 0)
+
     # Regenerating annotations only matters if the clips are also rebuilt, so force
     # an overwrite — otherwise existing clips would be skipped and you'd see no change.
     if regen_annotations:
@@ -84,20 +90,11 @@ def create_videos(
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
-    # Apply format-specific config overrides for horizontal (Full HD 16:9) projects.
+    # Apply per-orientation config overrides ([vertical] / [horizontal] in config.ini).
     # format_override lets reading_together render a horizontal pass for the long video.
     video_format = format_override or manifest.get("video_info", {}).get("video_format", "vertical")
-    if video_format == "horizontal":
-        cfg.update({
-            "target_w":         1920,
-            "target_h":         1080,
-            "sub_fontsize":     54,
-            "nar_fontsize":     54,
-            "sub_margin_bottom": 70,
-            "icon_x":           1650,
-            "icon_y":           50,
-        })
-        logger.info("Horizontal format — canvas set to 1920×1080, subtitle/icon positions adjusted")
+    apply_video_format(cfg, video_format)
+    logger.info("Render format: %s — canvas %d×%d", video_format, cfg["target_w"], cfg["target_h"])
 
     videos_dir = (project_path / "videos" / out_subdir) if out_subdir else (project_path / "videos")
     videos_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +151,7 @@ def create_videos(
                 annot_paths=annot_paths,
                 pre_pause_ms=scene_pre_pause,
                 repeat_message=repeat_message,
+                footnote_hold_ms=footnote_hold_ms,
             )
         except Exception as e:
             logger.error(f"Failed to build {sid}: {e}")
@@ -189,6 +187,7 @@ def create_video_single(
     repeat_message: str = None,
     repeat_fontsize: int = None,
     repeat_font: str = None,
+    footnote_hold_ms: int = None,
 ) -> None:
     """Re-render a single scene's clip and the silent display scenes that follow it.
 
@@ -214,23 +213,16 @@ def create_video_single(
         cfg["repeat_fontsize"] = repeat_fontsize
     if repeat_font:
         cfg["repeat_font"] = repeat_font
+    if footnote_hold_ms is None:
+        footnote_hold_ms = cfg.get("footnote_hold_ms", 0)
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
-    # Match create_videos' horizontal canvas/subtitle overrides so a single
-    # re-render looks identical to a full render of the same project.
+    # Apply the same per-orientation overrides as a full render so a single
+    # re-render looks identical to the rest of the project.
     video_format = manifest.get("video_info", {}).get("video_format", "vertical")
-    if video_format == "horizontal":
-        cfg.update({
-            "target_w":          1920,
-            "target_h":          1080,
-            "sub_fontsize":      54,
-            "nar_fontsize":      54,
-            "sub_margin_bottom": 70,
-            "icon_x":            1650,
-            "icon_y":            50,
-        })
+    apply_video_format(cfg, video_format)
 
     videos_dir = project_path / "videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
@@ -286,6 +278,7 @@ def create_video_single(
                 annot_paths=annot_paths,
                 pre_pause_ms=0,
                 repeat_message=repeat_message,
+                footnote_hold_ms=footnote_hold_ms,
             )
         except Exception as e:
             logger.error(f"Failed to build {sid}: {e}")
@@ -325,6 +318,7 @@ def _build_clip(
     annot_paths: dict | None = None,
     pre_pause_ms: int = 0,
     repeat_message: str = "",
+    footnote_hold_ms: int = 0,
 ):
     """
     Returns (clip, new_last_frame_np).
@@ -523,6 +517,12 @@ def _build_clip(
         # "your turn to read" cue. Prepended so the audio is unchanged afterwards.
         if pre_pause_ms and pre_pause_ms > 0:
             clip = _prepend_pre_pause(clip, pre_pause_ms, assets_dir, cfg, W, H)
+
+        # Footnote read-time: when a footnote/disclaimer is shown, hold the final
+        # frame (image + text + footnote still visible) silently for a moment after
+        # the narration ends so the viewer has time to read it.
+        if footnote and footnote_hold_ms and footnote_hold_ms > 0:
+            clip = _append_read_hold(clip, footnote_hold_ms, fps, W, H)
 
         return clip, frame_np
 
@@ -821,6 +821,19 @@ def _prepend_pre_pause(clip, pre_pause_ms: int, assets_dir: Path, cfg: dict, W: 
     return concatenate_videoclips([pre_clip, clip], method="compose")
 
 
+def _append_read_hold(clip, hold_ms: int, fps: int, W: int, H: int):
+    """
+    Append a silent freeze of the clip's final frame for `hold_ms` so the viewer has
+    time to read what's on screen (used to give footnote/disclaimer scenes extra time
+    after the narration audio ends). The held frame is the clip's last frame, so the
+    image, subtitle and footnote stay exactly as they were.
+    """
+    hold_s  = hold_ms / 1000.0
+    last_np = clip.get_frame(max(0.0, clip.duration - 1.0 / fps))
+    held    = (ImageClip(last_np).set_duration(hold_s).set_audio(_silent(hold_s)))
+    return concatenate_videoclips([clip, held], method="compose")
+
+
 # =============================================================================
 # AUDIO HELPERS
 # =============================================================================
@@ -948,6 +961,14 @@ def main() -> None:
         dest="repeat_fontsize",
         help="Shadowing repeat scenes: override the centered message font size.",
     )
+    p.add_argument(
+        "--footnote-hold-ms",
+        type=int,
+        default=None,
+        dest="footnote_hold_ms",
+        help="Extra silent hold (ms) after a footnote/disclaimer scene so it can be "
+             "read. Overrides config; 0 disables.",
+    )
     a = p.parse_args()
     if a.scene_id:
         create_video_single(a.project_name, a.scene_id,
@@ -955,7 +976,8 @@ def main() -> None:
                             footnote=a.footnote,
                             inter_pause_ms=a.inter_pause_ms,
                             repeat_message=a.repeat_message,
-                            repeat_fontsize=a.repeat_fontsize)
+                            repeat_fontsize=a.repeat_fontsize,
+                            footnote_hold_ms=a.footnote_hold_ms)
     else:
         create_videos(a.project_name, a.overwrite,
                       annotated_subtitles=a.annotated_subtitles,
@@ -965,7 +987,8 @@ def main() -> None:
                       out_subdir=a.out_subdir,
                       read_pre_pause_ms=a.read_pre_pause_ms,
                       repeat_message=a.repeat_message,
-                      repeat_fontsize=a.repeat_fontsize)
+                      repeat_fontsize=a.repeat_fontsize,
+                      footnote_hold_ms=a.footnote_hold_ms)
 
 
 if __name__ == "__main__":

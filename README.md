@@ -118,7 +118,7 @@ Each `_long` type mirrors its vertical counterpart in content and structure, but
 | `register_phrases_long` | `register_phrases` | 2 + optional extras | 6 pairs |
 | `grammar_pairs_long` | `grammar_pairs` | 2 | 8 pairs |
 
-When a horizontal type is selected, the pipeline automatically applies Full HD settings at every stage: fal.ai generates `landscape_16_9` images, the video canvas is set to 1920×1080, and subtitle/icon positions are adjusted for the wider frame. The `video_format` field in the manifest is set to `"horizontal"` at project creation and propagates through all downstream steps.
+When a horizontal type is selected, the pipeline applies Full HD settings at every stage: fal.ai generates `landscape_16_9` images, the video canvas is set to 1920×1080, and subtitle/icon positions are adjusted for the wider frame. The `video_format` field in the manifest is set to `"horizontal"` at project creation and propagates through all downstream steps. These per-orientation values live in the **`[vertical]` and `[horizontal]` sections of `config.ini`** (see [Configuration](#configuration-configini)) and are applied at render time by `apply_video_format()` — so each orientation can be tuned independently without code changes.
 
 **How scene images work:** every dialogue line includes a `scene_visual` field — a concrete English description of what the speaking character is *doing* relative to what they're saying. This description drives the image prompt, producing action-based illustrations rather than static talking-head shots.
 
@@ -176,7 +176,7 @@ The `none` mode uses a separate text-to-image call without any reference composi
 
 Image prompts are pre-built by `create_script.py` and stored in `scene.image.prompt_to_create`. This module only builds the reference and calls the API.
 
-**Format-aware image size:** the `image_size` passed to fal.ai is selected automatically based on the manifest's `video_format` field — `portrait_16_9` for vertical projects and `landscape_16_9` for horizontal Full HD projects. The default from `config.ini` is used as a fallback.
+**Format-aware image size:** the `image_size` passed to fal.ai comes from the orientation section in `config.ini` — `[vertical] fal_image_size` (default `portrait_16_9`) or `[horizontal] fal_image_size` (default `landscape_16_9`) — applied by `apply_video_format()` based on the manifest's `video_format`. The base `[fal] image_size` is the fallback.
 
 Flag: `--overwrite` — regenerate images even when the file already exists in `project/images/`.
 
@@ -190,7 +190,7 @@ Individual scenes can be regenerated via the web UI (Generated Items tab → Re-
 
 Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`.
 
-**Format-aware canvas:** before rendering begins the module reads `video_format` from the manifest. For horizontal projects the canvas is overridden to 1920×1080 and the subtitle/icon positions are adjusted accordingly (subtitle font size, bottom margin, icon position). Vertical projects use the values from `config.ini` unchanged.
+**Format-aware canvas:** before rendering begins the module reads `video_format` from the manifest and applies the matching `config.ini` section (`[vertical]` or `[horizontal]`) over the base config via `apply_video_format()`. Those sections hold the per-orientation canvas size, subtitle/narrator font size, subtitle bottom margin, and speaker-icon position — so horizontal (1920×1080) and vertical (1080×1920) are each tuned in config rather than hardcoded.
 
 | `audio.type` | Behaviour |
 |---|---|
@@ -198,6 +198,8 @@ Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`.
 | `"sfx"` | Freeze previous frame for SFX audio duration |
 | `"video_clip"` | Insert a raw `.mp4` file (e.g. intro/outro) |
 | `null` | Render a silent black pause of `scene.duration_ms` — unless it's a shadowing **repeat scene** (see below) |
+
+**Footnote / disclaimer + read time:** a scene-level `footnote` field (or the global footnote passed at render time, used on narration scenes) draws a small disclaimer below the subtitle. When a footnote is shown, the scene is held for an extra silent moment **after** the narration audio so viewers have time to read it — the held frame keeps the image, subtitle and footnote on screen. The hold defaults to `config.ini → [footnote] hold_ms` and is overridable per render from the Video step ("Footnote read time", in seconds); `0` disables it.
 
 **Shadowing repeat scenes:** an optional intermediate scene placed after each dialog line (before its pause) that holds the dialog's image with the subtitle **still readable** plus a centered message (the "now repeat" cue, e.g. *Jetzt wiederholen*) — so a learner can shadow/repeat the line while reading it. Add or remove them from the **Generated Items** tab (or `POST /projects/<name>/repeat_scenes`, or `python repeat_scenes.py <project> add|remove`). The message text and font live in `config.ini → [repeat_prompt]`; the message and font size can also be overridden per render from the Video step. The held duration defaults to the dialog line's own length (`duration_ms = 0` in config) times a **time factor** (`duration_factor`, or the "Time factor ×" field on the Add/Re-sync control) so you can give more reading/repeating time than the line took to speak (e.g. `1.5` = 50% longer); a fixed `duration_ms > 0` overrides the mirror+factor. Every hold is also editable per scene. The centered message is drawn like the on-screen warning label, over a semi-transparent box in the middle of the frame. When grammar-annotated subtitles are on, the repeat scene reuses the dialog's annotation so the two match.
 
@@ -407,7 +409,7 @@ Seven collapsible step cards covering the full pipeline:
 | 1 · Script | Character A/B (auto-detected from scene description); **Additional characters** (for `story`, `word_learning`, `register_phrases` and their `_long` variants); **"Use specific location" checkbox + dropdown** (optional), project type, **dialogue count** (optional number, uses type default if blank), prompt preview/override |
 | 2 · Audio | Run all scenes |
 | 3 · Images | Overwrite flag, ignore-cache flag, location-reference flag, **Image-saving mode** (2×2 mosaic, horizontal projects only) |
-| 4 · Video | Annotated subtitles flag, footnote/disclaimer text (optional) |
+| 4 · Video | Annotated subtitles flag, footnote/disclaimer text (optional) + footnote read time (extra seconds the scene is held so the footnote can be read), shadowing repeat overlay (message + font size) |
 | 5 · Assemble | Background audio, speed factor, branding file, branding position (none/intro/outro/both), overwrite flag |
 | 6 · YouTube Upload | Privacy, title override, description override |
 | 7 · Instagram Upload | Caption override, share-to-feed toggle; credential setup (App ID, App Secret, token, optional IG User ID); token status banner; reset |
@@ -437,6 +439,7 @@ Full CRUD for all asset types:
 | Project Types | Read-only display of `project_types.json` entries |
 | Background Audio | Audio tracks for assembly |
 | SFX | Sound effect assets |
+| Subtitle Preview | Render a still preview of narration/subtitle/footnote text over a sample background, using the live per-orientation config styling (matches the real render). Pick orientation + style (dialogue/narration), type text, optionally add a footnote or the centered "repeat" overlay |
 
 ---
 
@@ -464,8 +467,8 @@ Full CRUD for all asset types:
 | `POST` | `/projects/<name>/run/audio_scene` | Re-generate audio for one scene (`scene_id`) |
 | `POST` | `/projects/<name>/run/images` | Run image generation (all scenes) — params: `overwrite`, `ignore_cache`, `use_location_ref`, `mosaic_mode` (horizontal only — one 2×2 mosaic image shared by every 4 scenes) |
 | `POST` | `/projects/<name>/run/image_scene` | Re-generate one scene image — params: `scene_id`, `prompt_override`, `use_location_ref`, `characters_override` (`"both"` / `"single_speaker"` / `"none"`), `cast` (list of `rt_*` asset keys for reading scenes) |
-| `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`, `format_override`, `out_subdir`, `annot_font_scale` = annotation text size ×, `regen_annotations` = ignore the annotation cache and re-prompt OpenAI for every sentence — implies a clip overwrite; `repeat_message` + `repeat_fontsize` = shadowing repeat overlay overrides, blank = config default) |
-| `POST` | `/projects/<name>/run/video_scene` | Re-render one scene's clip and the silent display scenes after it — shadowing repeat + pause (`scene_id`, `annotated_subtitles`, `footnote`, `inter_pause_ms`, `annot_font_scale`, `regen_annotations`, `repeat_message`, `repeat_fontsize`) |
+| `POST` | `/projects/<name>/run/video` | Render scene clips (`annotated_subtitles`, `footnote`, `overwrite`, `format_override`, `out_subdir`, `annot_font_scale` = annotation text size ×, `regen_annotations` = ignore the annotation cache and re-prompt OpenAI for every sentence — implies a clip overwrite; `repeat_message` + `repeat_fontsize` = shadowing repeat overlay overrides, blank = config default; `footnote_hold_ms` = extra hold so a footnote can be read, blank = config default) |
+| `POST` | `/projects/<name>/run/video_scene` | Re-render one scene's clip and the silent display scenes after it — shadowing repeat + pause (`scene_id`, `annotated_subtitles`, `footnote`, `inter_pause_ms`, `annot_font_scale`, `regen_annotations`, `repeat_message`, `repeat_fontsize`, `footnote_hold_ms`) |
 | `POST` | `/projects/<name>/repeat_scenes` | Add or remove shadowing repeat scenes after every dialog line (`action` = `"add"` / `"remove"`; `factor` = time multiplier for the held duration on add/re-sync). Synchronous; render the Video step afterwards to apply |
 | `GET` | `/projects/<name>/annotations/<scene_id>` | Read one scene's grammar annotation (`tokens` + `spans`) from cache. Returns `{exists, annotatable, text, tokens, spans}` |
 | `POST` | `/projects/<name>/annotations/<scene_id>` | Save an edited annotation (body `tokens`, `spans` — sanitised), or with `{"regenerate": true}` re-prompt OpenAI. Writes the cache and clears the scene's clip(s) so a re-render applies it |
@@ -505,6 +508,13 @@ Full CRUD for all asset types:
 | `GET` | `/assets/branding/list` | List branding video files from `assets/branding/` |
 | `GET` | `/asset-files/<path>` | Serve a file from the assets directory |
 | `GET` | `/project-files/<path>` | Serve a file from the projects directory |
+
+### Preview
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/preview/text` | Render text over `assets/samples/<format>.png` and return a PNG. Params: `text`, `format` (`vertical`/`horizontal`), `style` (`dialog`/`narration`), `footnote`, `repeat_message`. Uses the live per-orientation config styling |
+| `GET` | `/preview/samples` | Report which sample backgrounds exist (`{vertical, horizontal}`) |
 
 ---
 
@@ -589,6 +599,7 @@ assets/
 │   ├── bell.mp3
 │   └── bitte_wiederholen.mp3
 ├── branding/                         ← intro/outro video clips (.mp4 / .mov / .webm)
+├── samples/                          ← vertical.png / horizontal.png backgrounds for the Subtitle Preview
 └── video_clips/                      ← other raw .mp4 clips
 ```
 
@@ -802,14 +813,43 @@ output_format    = mp3_44100_128
 [fal]
 model      = fal-ai/bytedance/seedream/v5/lite/edit          ; model used for scene images (image+reference → image)
 t2i_model  = fal-ai/bytedance/seedream/v5/lite/text-to-image ; model used for text-only generation and character/location art
-image_size = portrait_16_9                                   ; default for vertical projects; overridden to landscape_16_9 for horizontal projects
+image_size = portrait_16_9                                   ; base/fallback; per-orientation value lives in [vertical]/[horizontal]
 
 [video]
-target_w             = 1080   ; default for vertical projects; overridden to 1920 for horizontal
-target_h             = 1920   ; default for vertical projects; overridden to 1080 for horizontal
+target_w             = 1080   ; base/fallback canvas; per-orientation values live in [vertical]/[horizontal]
+target_h             = 1920
 fps                  = 30
 markup_italic_attrs  = style='italic'
 markup_bold_attrs    = weight='bold'
+
+; Per-orientation render overrides — applied at render time over the base config by
+; apply_video_format(), keyed on the manifest's video_format. Use the internal key
+; names; anything omitted keeps the base value. You may add any other key here too
+; (e.g. annotated_font_size, repeat_fontsize, sub_margin_left).
+[vertical]
+target_w = 1080
+target_h = 1920
+sub_fontsize = 42            ; dialogue subtitle size
+nar_fontsize = 96            ; narrator/title size
+sub_margin_bottom = 300
+icon_x = 700
+icon_y = 200
+fal_image_size = portrait_16_9
+
+[horizontal]
+target_w = 1920
+target_h = 1080
+sub_fontsize = 54
+nar_fontsize = 54
+sub_margin_bottom = 70
+icon_x = 1650
+icon_y = 50
+fal_image_size = landscape_16_9
+
+[footnote]
+; Disclaimer/note overlay shown below the subtitle (font/size/colour/opacity/gap …).
+hold_ms      = 3000                ; extra silent time the scene is held after the narration
+                                   ; so a footnote can be read (0 = off; overridable per render)
 
 [repeat_prompt]
 ; Shadowing "repeat" scene overlay (image + readable subtitle + centered message).

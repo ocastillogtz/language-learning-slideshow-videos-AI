@@ -31,7 +31,7 @@ from moviepy.config import change_settings
 import assemble_video as av
 from utils_config import load_config
 
-logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -181,7 +181,8 @@ def group_scenes_into_parts(scenes, per_part=None):
 
 def _finalize(clip_paths, out_path, cfg, assets_dir, project_path,
               bg_audio_name, speed_factor, branding_file, branding_mode,
-              overwrite, tag, corner_label=None, add_continuation=False):
+              overwrite, tag, corner_label=None, add_continuation=False,
+              bg_audio_gain_db=0.0):
     """
     Concat clips -> [continuation end-card] -> [corner label] -> bg audio ->
     speed -> branding -> out_path. Returns out_path or None.
@@ -222,7 +223,8 @@ def _finalize(clip_paths, out_path, cfg, assets_dir, project_path,
         bg_clip   = AudioFileClip(str(bg_audio_path))
         repeats   = int(content.duration / bg_clip.duration) + 2
         bg_looped = concatenate_audioclips([AudioFileClip(str(bg_audio_path))] * repeats)
-        bg_looped = bg_looped.subclip(0, content.duration).volumex(cfg["bg_audio_volume"])
+        bg_volume = cfg["bg_audio_volume"] * (10.0 ** (float(bg_audio_gain_db) / 20.0))
+        bg_looped = bg_looped.subclip(0, content.duration).volumex(bg_volume)
         bg_looped = bg_looped.audio_fadein(cfg["bg_audio_fadein_s"]).audio_fadeout(cfg["bg_audio_fadeout_s"])
         mixed     = CompositeAudioClip([content.audio, bg_looped]) if content.audio else bg_looped
         content   = content.set_audio(mixed)
@@ -271,7 +273,8 @@ def _finalize(clip_paths, out_path, cfg, assets_dir, project_path,
 
 def assemble_reading(project_name, bg_audio_name="office", overwrite=False,
                      speed_factor=None, branding_file=None, branding_mode="none",
-                     make_parts=True, make_long=True, per_part=None):
+                     make_parts=True, make_long=True, per_part=None,
+                     bg_audio_gain_db=0.0):
     cfg = load_config()
     assets_dir = cfg["assets_dir"]
     project_path = cfg["projects_dir"] / project_name
@@ -309,7 +312,8 @@ def assemble_reading(project_name, bg_audio_name="office", overwrite=False,
                             bg_audio_name, speed_factor, branding_file, branding_mode,
                             overwrite, tag=f"part{p + 1}",
                             corner_label=f"{word} {p + 1}",
-                            add_continuation=(p != last_key))
+                            add_continuation=(p != last_key),
+                            bg_audio_gain_db=bg_audio_gain_db)
             if res:
                 outputs.append(res)
 
@@ -323,7 +327,7 @@ def assemble_reading(project_name, bg_audio_name="office", overwrite=False,
         out = project_path / f"final_{project_name}_long.mp4"
         res = _finalize(clip_paths, out, cfg, assets_dir, project_path,
                         bg_audio_name, speed_factor, branding_file, branding_mode,
-                        overwrite, tag="long")
+                        overwrite, tag="long", bg_audio_gain_db=bg_audio_gain_db)
         if res:
             outputs.append(res)
 
@@ -335,6 +339,9 @@ def main():
     p = argparse.ArgumentParser(description="Assemble reading_together parts + long video")
     p.add_argument("project_name")
     p.add_argument("--bg-audio", default="office", dest="bg_audio_name")
+    p.add_argument("--bg-audio-gain-db", type=float, default=0.0, dest="bg_audio_gain_db",
+                   help="Adjust background audio volume in dB relative to config "
+                        "(positive = louder, negative = quieter, 0 = unchanged)")
     p.add_argument("--speed-factor", type=float, default=None, dest="speed_factor")
     p.add_argument("--branding-file", dest="branding_file", default=None)
     p.add_argument("--branding-mode", dest="branding_mode", default="none",
@@ -347,7 +354,8 @@ def main():
     a = p.parse_args()
     assemble_reading(a.project_name, a.bg_audio_name, a.overwrite, a.speed_factor,
                      branding_file=a.branding_file, branding_mode=a.branding_mode,
-                     make_parts=not a.no_parts, make_long=not a.no_long, per_part=a.per_part)
+                     make_parts=not a.no_parts, make_long=not a.no_long, per_part=a.per_part,
+                     bg_audio_gain_db=a.bg_audio_gain_db)
 
 
 if __name__ == "__main__":

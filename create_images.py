@@ -33,7 +33,7 @@ import fal_client
 from PIL import Image
 from dotenv import load_dotenv
 
-from utils_config import load_config, load_new_characters, get_new_locations_flat
+from utils_config import load_config, load_new_characters, get_new_locations_flat, apply_video_format
 from core import report_progress
 
 load_dotenv()
@@ -342,16 +342,16 @@ def create_images(
     images_dir = project_path / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    # Apply per-orientation overrides ([vertical]/[horizontal]) so fal_image_size
+    # (and any other overridden key) reflects the project's format.
+    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
+    apply_video_format(cfg, video_format)
+
     model      = cfg["fal_model"]
     t2i_model  = cfg["fal_t2i_model"]
     image_size = cfg["fal_image_size"]
     assets_dir = cfg["assets_dir"]
-
-    # Override image_size for horizontal (Full HD 16:9) projects
-    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
-    if video_format == "horizontal":
-        image_size = "landscape_16_9"
-        logger.info("Horizontal format detected — using landscape_16_9 image size")
+    logger.info("Image format: %s — image_size=%s", video_format, image_size)
 
     # Resolve character names and location from generation_config.
     # reading_together projects may have no fixed characters -> guard against it.
@@ -541,15 +541,14 @@ def create_image_single(
     images_dir = project_path / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    # Apply per-orientation overrides ([vertical]/[horizontal]) before reading sizes.
+    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
+    apply_video_format(cfg, video_format)
+
     model      = cfg["fal_model"]
     t2i_model  = cfg["fal_t2i_model"]
     image_size = cfg["fal_image_size"]
     assets_dir = cfg["assets_dir"]
-
-    # Override image_size for horizontal (Full HD 16:9) projects
-    video_format = manifest.get("video_info", {}).get("video_format", "vertical")
-    if video_format == "horizontal":
-        image_size = "landscape_16_9"
 
     gen        = manifest["generation_config"]
     char_names = gen.get("characters") or []
