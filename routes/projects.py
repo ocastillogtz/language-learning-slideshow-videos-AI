@@ -127,10 +127,12 @@ def update_scene(name: str, scene_id: str):
     Patch writable fields on a scene by scene_id.
 
     Accepted JSON fields (all optional):
-      tts_text    — override the spoken/subtitle text for a TTS scene
-      speaker     — change the speaker character name
-      shot_type   — change shot_type (both | over_shoulder_A | over_shoulder_B)
-      duration_ms — override the duration of a silent-pause scene (audio: null)
+      tts_text     — override the spoken/subtitle text for a TTS scene
+      subtitle_text — override the on-screen subtitle (independent of audio)
+      scene_visual — English description used to (re)generate the scene image
+      speaker      — change the speaker character name
+      shot_type    — change shot_type (both | over_shoulder_A | over_shoulder_B)
+      duration_ms  — override the duration of a silent-pause scene (audio: null)
     """
     try:
         data = request.get_json() or {}
@@ -148,6 +150,10 @@ def update_scene(name: str, scene_id: str):
         # subtitle_text — update the on-screen subtitle (independent of audio)
         if "subtitle_text" in data:
             scene["subtitle_text"] = data["subtitle_text"].strip()
+
+        # scene_visual — English action description used for image (re)generation
+        if "scene_visual" in data:
+            scene["scene_visual"] = (data["scene_visual"] or "").strip()
 
         # tts_text — update the spoken text on TTS audio scenes
         if "tts_text" in data:

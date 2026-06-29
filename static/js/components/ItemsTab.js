@@ -331,17 +331,26 @@ function VideoRegenBtn({ projectName, sceneId, onDone }) {
 function SceneEditZone({ scene, projectName, onSaved }) {
   const { toast } = useApp();
   const [text,    setText]    = useState(scene.subtitle_text || "");
+  const [visual,  setVisual]  = useState(scene.scene_visual || "");
   const [saving,  setSaving]  = useState(false);
   const [notice,  setNotice]  = useState(false);
+
+  // The visual description drives the scene image. Dialog scenes always store
+  // one; narration scenes don't yet, but can have one added since they too have
+  // an image, so expose the field for them as well.
+  const hasVisual = (scene.scene_visual !== undefined && scene.scene_visual !== null)
+    || (!!scene._is_narration && !!scene.image);
 
   async function save() {
     setSaving(true);
     try {
-      await apiPatch(`/projects/${projectName}/scenes/${scene.id}`, {
+      const payload = {
         subtitle_text: text.trim(),
         tts_text:      text.trim(),
-      });
-      toast("Saved", "Scene text updated.", "ok");
+      };
+      if (hasVisual) payload.scene_visual = visual.trim();
+      await apiPatch(`/projects/${projectName}/scenes/${scene.id}`, payload);
+      toast("Saved", "Scene updated.", "ok");
       setNotice(true);
       onSaved && onSaved();
     } catch(e) { toast("Error", e.message, "err"); }
@@ -355,6 +364,12 @@ function SceneEditZone({ scene, projectName, onSaved }) {
           <label>Text (German)</label>
           <textarea rows={3} value={text} onChange={e => setText(e.target.value)}/>
         </div>
+        {hasVisual && (
+          <div className="edit-f">
+            <label>Visual description (English — used to generate the image)</label>
+            <textarea rows={3} value={visual} onChange={e => setVisual(e.target.value)}/>
+          </div>
+        )}
       </div>
       <div className="edit-actions">
         <button className="edit-save" onClick={save} disabled={saving}>
@@ -461,8 +476,9 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
 
       {open && (
         <div className="item-body">
-          {/* Scene visual description (dialog scenes) */}
-          {scene.scene_visual && (
+          {/* Scene visual description (dialog scenes) — hidden while editing,
+              where it becomes an editable field in the edit zone below */}
+          {scene.scene_visual && !editing && (
             <div style={{fontSize:".8rem", color:"var(--muted)", marginTop:".7rem",
               fontStyle:"italic", borderLeft:"2px solid var(--border)", paddingLeft:".7rem"}}>
               <span style={{fontWeight:600, fontStyle:"normal", color:"var(--fg)"}}>Visual: </span>
