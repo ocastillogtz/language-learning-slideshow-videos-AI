@@ -84,8 +84,10 @@ function ProjectView() {
         ))}
       </div>
 
-      {tab === "pipeline" && <PipelineTab projectName={currentProject}/>}
-      {tab === "items"    && <ItemsTab    projectName={currentProject}/>}
+      {/* key by project so all per-project component state (running flags,
+          progress bars) is reset on switch rather than leaking across projects */}
+      {tab === "pipeline" && <PipelineTab key={currentProject} projectName={currentProject}/>}
+      {tab === "items"    && <ItemsTab    key={currentProject} projectName={currentProject}/>}
       {tab === "manifest" && <ManifestTab/>}
     </div>
   );
