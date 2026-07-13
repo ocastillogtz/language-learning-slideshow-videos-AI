@@ -42,6 +42,17 @@ async function apiDelete(path) {
   return d;
 }
 
+// Selectable fal.ai image models ({models:[{key,endpoint}], default_key}) —
+// fetched once and shared by every dropdown (pipeline step + per-scene regen).
+let _imageModelsPromise = null;
+function fetchImageModels() {
+  if (!_imageModelsPromise) {
+    _imageModelsPromise = apiGet("/config/image_models")
+      .catch(() => ({ models: [], default_key: null }));
+  }
+  return _imageModelsPromise;
+}
+
 function imgSrc(project, relPath) {
   return `/project-files/${project}/${relPath}?t=${Date.now()}`;
 }

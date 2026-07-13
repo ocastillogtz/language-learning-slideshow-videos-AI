@@ -42,6 +42,12 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
     projects_dir = Path(_p("paths", "projects_dir", "projects"))
     assets_dir   = Path(_p("paths", "assets_dir",   "assets"))
 
+    # [fal_models] lists the image (edit) models selectable in the UI dropdown
+    # (key = fal endpoint id). [fal] model is the default and may be either a key
+    # from that list or a raw endpoint id.
+    fal_models    = dict(cfg.items("fal_models")) if cfg.has_section("fal_models") else {}
+    raw_fal_model = _p("fal", "model", "fal-ai/bytedance/seedream/v4.5/edit")
+
     return {
         # Directories
         "projects_dir":   projects_dir,
@@ -186,7 +192,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "dialog_batch_size": _i("script", "dialog_batch_size", 40),
 
         # fal.ai images
-        "fal_model":      _p("fal", "model",      "fal-ai/bytedance/seedream/v4.5/edit"),
+        "fal_models":     fal_models,
+        "fal_model":      fal_models.get(raw_fal_model, raw_fal_model),
         "fal_t2i_model":  _p("fal", "t2i_model",  "fal-ai/bytedance/seedream/v5/lite/text-to-image"),
         "fal_image_size": _p("fal", "image_size", "portrait_16_9"),
 

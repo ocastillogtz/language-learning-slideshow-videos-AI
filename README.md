@@ -811,9 +811,13 @@ elevenlabs_model = eleven_multilingual_v2
 output_format    = mp3_44100_128
 
 [fal]
-model      = fal-ai/bytedance/seedream/v5/lite/edit          ; model used for scene images (image+reference → image)
+model      = seedream-5-lite                                 ; default scene-image model: a [fal_models] key or a full endpoint id
 t2i_model  = fal-ai/bytedance/seedream/v5/lite/text-to-image ; model used for text-only generation and character/location art
 image_size = portrait_16_9                                   ; base/fallback; per-orientation value lives in [vertical]/[horizontal]
+
+[fal_models]                                                 ; models selectable in the UI "Image model" dropdown (key = endpoint)
+seedream-4.5    = fal-ai/bytedance/seedream/v4.5/edit
+seedream-5-lite = fal-ai/bytedance/seedream/v5/lite/edit
 
 [video]
 target_w             = 1080   ; base/fallback canvas; per-orientation values live in [vertical]/[horizontal]

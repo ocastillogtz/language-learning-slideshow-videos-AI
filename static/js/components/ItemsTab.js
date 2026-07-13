@@ -217,7 +217,7 @@ function AnnotationPanel({ projectName, sceneId }) {
 
 // ── Per-scene image regen button ───────────────────────────────────────────────
 
-function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charactersMode, cast, onDone }) {
+function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charactersMode, cast, model, onDone }) {
   const { toast, startPoll, reloadManifest } = useApp();
   const [running, setRunning] = useState(false);
   const [log,     setLog]     = useState("");
@@ -232,6 +232,8 @@ function ImageRegenBtn({ projectName, sceneId, promptId, useLocationRef, charact
         prompt_override:     promptOverride,
         use_location_ref:    useLocationRef,
         characters_override: charactersMode,
+        // Blank = use the config default model.
+        model:               model || undefined,
       };
       if (cast != null) body.cast = cast;   // reading scenes: explicit character selection
       const d = await apiPost(`/projects/${projectName}/run/image_scene`, body);
@@ -407,6 +409,14 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
   const [charactersMode, setCharactersMode] = useState(
     _toCharMode(scene.image?.reference_type)
   );
+  const [imageModels,    setImageModels]    = useState([]);
+  const [imageModel,     setImageModel]     = useState("");
+  useEffect(() => {
+    fetchImageModels().then(d => {
+      setImageModels(d.models || []);
+      setImageModel(d.default_key || "");
+    });
+  }, []);
   // Cast-picker scenes: reading_together scenes AND multi-character dialog scenes
   // both choose which characters appear from a list (vs the none/single/both radio).
   const isReadingCast = scene.image?.reference_type === "reading_cast"
@@ -520,6 +530,7 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
               <div className="prompt-section" style={{marginTop:"1rem"}}>
                 <div className="prompt-header"><span>Image Prompt</span></div>
                 <textarea className="prompt-editor" id={promptId}
+                  key={scene.image.prompt_to_create || ""}
                   defaultValue={scene.image.prompt_to_create || ""}
                   style={{minHeight:"90px"}}/>
               </div>
@@ -616,6 +627,18 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
                   )}
                 </div>
               )}
+
+              {/* Image model */}
+              {imageModels.length > 0 && (
+                <div style={{display:"flex", alignItems:"center", gap:".5rem", fontSize:".78rem"}}>
+                  <label htmlFor={`img-model-${scene.id}`} style={{fontWeight:500}}>Image model</label>
+                  <select id={`img-model-${scene.id}`} value={imageModel}
+                    onChange={e=>setImageModel(e.target.value)}
+                    style={{fontSize:".78rem", padding:".25rem .5rem"}}>
+                    {imageModels.map(m => <option key={m.key} value={m.key}>{m.key}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
           )}
 
@@ -625,7 +648,7 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
               {scene.image && (
                 <ImageRegenBtn projectName={projectName} sceneId={scene.id}
                   promptId={promptId} useLocationRef={useLocationRef}
-                  charactersMode={charactersMode}
+                  charactersMode={charactersMode} model={imageModel}
                   cast={isReadingCast ? Array.from(selectedCast) : null}
                   onDone={m => { setImgVersion(Date.now()); onChanged && onChanged(m); }}/>
               )}

@@ -59,9 +59,11 @@ def run_images(name):
         ignore_cache      = bool(data.get("ignore_cache", False))
         use_location_ref  = bool(data.get("use_location_ref", True))
         mosaic_mode       = bool(data.get("mosaic_mode", False))
+        model_override    = (data.get("model") or "").strip() or None
         from create_images import create_images
         run_job(name, "images", create_images, name, overwrite, ignore_cache,
-                use_location_ref=use_location_ref, mosaic_mode=mosaic_mode)
+                use_location_ref=use_location_ref, mosaic_mode=mosaic_mode,
+                model_override=model_override)
         return jsonify({"message": "Image generation started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -90,6 +92,7 @@ def run_image_scene(name):
         prompt_override     = data.get("prompt_override", "").strip() or None
         use_location_ref    = bool(data.get("use_location_ref", True))
         characters_override = data.get("characters_override") or None  # "none"|"single_speaker"|"both"
+        model_override      = (data.get("model") or "").strip() or None
         cast_override       = data.get("cast")  # list[str] of asset keys (reading_cast scenes) or None
         if isinstance(cast_override, list):
             cast_override = [str(x) for x in cast_override]
@@ -101,8 +104,25 @@ def run_image_scene(name):
         step_key = "image_" + scene_id
         run_job(name, step_key, create_image_single, name, scene_id,
                 prompt_override=prompt_override, use_location_ref=use_location_ref,
-                characters_override=characters_override, cast_override=cast_override)
+                characters_override=characters_override, cast_override=cast_override,
+                model_override=model_override)
         return jsonify({"message": "Image regeneration started", "step_key": step_key})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/config/image_models", methods=["GET"])
+def list_image_models():
+    """Selectable fal.ai image (edit) models for the UI dropdown, plus the config
+    default. Reads config.ini fresh so edits apply without a server restart."""
+    try:
+        from utils_config import load_config
+        c = load_config()
+        models = [{"key": k, "endpoint": v} for k, v in c["fal_models"].items()]
+        default_key = next((k for k, v in c["fal_models"].items()
+                            if v == c["fal_model"]), None)
+        return jsonify({"models": models, "default_key": default_key,
+                        "default_endpoint": c["fal_model"]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

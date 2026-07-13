@@ -92,6 +92,14 @@ def _to_bytes(img: Image.Image) -> bytes:
 # FAL.AI
 # =============================================================================
 
+def _resolve_model(cfg: dict, override: str | None) -> str:
+    """Map a UI model choice — a key from [fal_models] or a raw fal endpoint id —
+    to the endpoint to call. No override → the config default."""
+    if not override:
+        return cfg["fal_model"]
+    return cfg["fal_models"].get(override, override)
+
+
 def _log_progress(update: Any) -> None:
     if isinstance(update, fal_client.InProgress):
         for log in update.logs:
@@ -325,6 +333,7 @@ def create_images(
     ignore_cache: bool = False,   # kept for API compat; has no effect (caching removed)
     use_location_ref: bool = True,
     mosaic_mode: bool = False,
+    model_override: str | None = None,
 ) -> None:
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
@@ -347,11 +356,11 @@ def create_images(
     video_format = manifest.get("video_info", {}).get("video_format", "vertical")
     apply_video_format(cfg, video_format)
 
-    model      = cfg["fal_model"]
+    model      = _resolve_model(cfg, model_override)
     t2i_model  = cfg["fal_t2i_model"]
     image_size = cfg["fal_image_size"]
     assets_dir = cfg["assets_dir"]
-    logger.info("Image format: %s — image_size=%s", video_format, image_size)
+    logger.info("Image format: %s — model=%s image_size=%s", video_format, model, image_size)
 
     # Resolve character names and location from generation_config.
     # reading_together projects may have no fixed characters -> guard against it.
@@ -517,6 +526,7 @@ def create_image_single(
     use_location_ref: bool = True,
     characters_override: str | None = None,
     cast_override: list | None = None,
+    model_override: str | None = None,
 ) -> None:
     """Regenerate the image for a single scene by ID.
 
@@ -549,7 +559,7 @@ def create_image_single(
     video_format = manifest.get("video_info", {}).get("video_format", "vertical")
     apply_video_format(cfg, video_format)
 
-    model      = cfg["fal_model"]
+    model      = _resolve_model(cfg, model_override)
     t2i_model  = cfg["fal_t2i_model"]
     image_size = cfg["fal_image_size"]
     assets_dir = cfg["assets_dir"]
@@ -591,7 +601,7 @@ def create_image_single(
         target["_cast"] = list(cast_override)
     dest           = images_dir / f"{scene_id}.png"
 
-    logger.info(f"Re-generating [{scene_id}] reference_type={reference_type}")
+    logger.info(f"Re-generating [{scene_id}] reference_type={reference_type} model={model}")
 
     if reference_type == "none":
         # Text-only generation — no reference composite
@@ -664,13 +674,18 @@ def main() -> None:
     p.add_argument("--mosaic", action="store_true", dest="mosaic_mode",
                    help="Image-saving mode (horizontal only): one 2x2 mosaic image "
                         "shared by every 4 scenes")
+    p.add_argument("--model", dest="model_override",
+                   help="Image model: a key from [fal_models] or a fal endpoint id "
+                        "(default: [fal] model in config.ini)")
     a = p.parse_args()
 
     if a.scene_id:
         create_image_single(a.project_name, a.scene_id,
-                            prompt_override=a.prompt_override)
+                            prompt_override=a.prompt_override,
+                            model_override=a.model_override)
     else:
-        create_images(a.project_name, overwrite=a.overwrite, mosaic_mode=a.mosaic_mode)
+        create_images(a.project_name, overwrite=a.overwrite, mosaic_mode=a.mosaic_mode,
+                      model_override=a.model_override)
 
 
 if __name__ == "__main__":

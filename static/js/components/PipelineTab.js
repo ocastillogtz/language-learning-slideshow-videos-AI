@@ -385,15 +385,40 @@ function ImagesFields() {
   const [ignoreCache,     setIgnoreCache]     = useState(false);
   const [useLocationRef,  setUseLocationRef]  = useState(true);
   const [mosaicMode,      setMosaicMode]      = useState(false);
+  const [imageModels,     setImageModels]     = useState([]);
+  const [imageModel,      setImageModel]      = useState("");
+  useEffect(() => {
+    fetchImageModels().then(d => {
+      setImageModels(d.models || []);
+      setImageModel(d.default_key || "");
+    });
+  }, []);
   // Mosaic mode is horizontal-only; never send it for vertical projects.
   ImagesFields._getPayload = () => ({
     overwrite,
     ignore_cache:      ignoreCache,
     use_location_ref:  useLocationRef,
     mosaic_mode:       isHorizontal && mosaicMode,
+    // Blank = use the config default model.
+    model:             imageModel || undefined,
   });
   return (
     <div className="fields">
+      {imageModels.length > 0 && (
+        <div className="field" style={{maxWidth:"19rem"}}>
+          <label htmlFor="f_img_model">Image model</label>
+          <select id="f_img_model" value={imageModel}
+            onChange={e=>setImageModel(e.target.value)}>
+            {imageModels.map(m => (
+              <option key={m.key} value={m.key}>{m.key}</option>
+            ))}
+          </select>
+          <div style={{fontSize:".74rem", color:"var(--muted)", marginTop:".25rem"}}>
+            Default comes from <code>[fal] model</code> in <code>config.ini</code>;
+            picking another here only affects this run.
+          </div>
+        </div>
+      )}
       <div className="toggle-row">
         <input type="checkbox" id="f_ow_img" checked={overwrite}
           onChange={e=>setOverwrite(e.target.checked)}/>
