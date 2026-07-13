@@ -54,13 +54,15 @@ def _write_manifest(manifest_path: Path, manifest: dict) -> None:
 
 
 def _is_dialog(scene: dict) -> bool:
-    """A spoken dialog line: TTS audio, not narration/repetition, not a reading sentence."""
+    """A spoken dialog line: TTS audio, not narration/repetition, not a reading
+    sentence, not a custom intro/outro scene."""
     audio = scene.get("audio") or {}
     return (
         audio.get("type") == "tts"
         and not scene.get("_is_narration")
         and not scene.get("_is_repetition")
         and not scene.get("_reading")
+        and not scene.get("_is_custom")
     )
 
 

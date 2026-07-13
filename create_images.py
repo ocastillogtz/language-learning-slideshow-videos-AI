@@ -405,6 +405,10 @@ def create_images(
 
         dest = images_dir / f"{scene['id']}.png"
 
+        if not (img.get("prompt_to_create") or "").strip():
+            logger.warning(f"  [{scene['id']}] has no image prompt yet — skipping.")
+            continue
+
         if not overwrite and dest.exists():
             logger.info(f"  Exists: {dest.name} — skipping")
             img["file_path"] = f"images/{scene['id']}.png"
@@ -569,6 +573,8 @@ def create_image_single(
         img["prompt_to_create"] = prompt_override
 
     prompt = img.get("prompt_to_create", "")
+    if not prompt.strip():
+        raise ValueError(f"Scene '{scene_id}' has no image prompt yet — write one in the Image Prompt box first.")
     stored_ref = img.get("reference_type", "both")
     # Use characters_override if provided, otherwise fall back to stored reference_type
     reference_type = characters_override if characters_override else stored_ref

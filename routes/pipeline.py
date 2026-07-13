@@ -224,6 +224,35 @@ def manage_repeat_scenes(name):
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/projects/<name>/custom_scenes", methods=["POST"])
+def manage_custom_scenes(name):
+    """Add or remove an empty custom scene at the start or end of the video.
+
+    Body: {"action": "add" | "remove", "position": "start" | "end" ("all" for remove)}
+
+    Synchronous manifest mutation (fast). The scene is created empty; fill in its
+    text and image prompt in the Generated Items tab, then generate its audio and
+    image per-scene and render the Video step.
+    """
+    try:
+        data     = request.get_json() or {}
+        action   = (data.get("action") or "add").strip()
+        position = (data.get("position") or "start").strip()
+        if action not in ("add", "remove"):
+            return jsonify({"error": "action must be 'add' or 'remove'"}), 400
+        if action == "add":
+            from custom_scenes import add_custom_scene
+            return jsonify(add_custom_scene(name, position))
+        from custom_scenes import remove_custom_scene
+        return jsonify(remove_custom_scene(name, position))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/projects/<name>/pauses", methods=["PATCH"])
 def update_pauses(name):
     """Bulk-set the duration of silent pause scenes.

@@ -431,7 +431,10 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
 
   // Label chip
   let label, labelStyle;
-  if (isNarration) {
+  if (scene._is_custom) {
+    label = scene.id === "custom_start" ? "INTRO" : "OUTRO";
+    labelStyle = {background:"var(--green, #4ade80)", color:"#0d0d10", fontSize:".6rem"};
+  } else if (isNarration) {
     label = "NAR"; labelStyle = {background:"var(--blue)", color:"#fff"};
   } else if (isRepetition) {
     label = "REP"; labelStyle = {background:"var(--purple)", color:"#0d0d10"};
@@ -770,6 +773,76 @@ function ReadingCastGallery({ castChars, castAssets, allChars }) {
   );
 }
 
+// ── Custom intro/outro scene control ─────────────────────────────────────────────
+
+function CustomScenesControl({ projectName, customStart, customEnd, onChanged }) {
+  const { toast } = useApp();
+  const [busy, setBusy] = useState(false);
+
+  async function run(action, position) {
+    setBusy(true);
+    try {
+      const d = await apiPost(`/projects/${projectName}/custom_scenes`, { action, position });
+      if (action === "add") {
+        toast("Done", d.created
+          ? `Empty scene added at ${position} — fill in its text and image prompt in the card below.`
+          : `A custom ${position} scene already exists.`, "ok");
+      } else {
+        toast("Removed", `Custom ${position} scene removed.`, "ok");
+      }
+      onChanged && onChanged();
+    } catch(e) { toast("Error", e.message, "err"); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="item-card" style={{padding:".9rem 1rem", marginBottom:".7rem"}}>
+      <div style={{fontWeight:600, marginBottom:".15rem"}}>
+        Custom intro / outro scene
+        {(customStart || customEnd) && (
+          <span style={{color:"var(--accent)", fontWeight:600, fontSize:".78rem", marginLeft:".5rem"}}>
+            {[customStart && "start", customEnd && "end"].filter(Boolean).join(" + ")} active
+          </span>
+        )}
+      </div>
+      <div style={{fontSize:".76rem", color:"var(--muted)", marginBottom:".55rem"}}>
+        Adds an empty scene before the first scene or after the last one. It appears as a
+        normal card in the list below: use <strong>✎ Edit</strong> to write its German text
+        and visual description, edit the image prompt (prefilled with the project's art style),
+        then generate its audio and image per-scene.
+      </div>
+      <div style={{display:"flex", gap:".7rem", alignItems:"center", flexWrap:"wrap"}}>
+        {customStart ? (
+          <button className="btn-cancel" onClick={() => run("remove", "start")} disabled={busy}
+            style={{fontSize:".82rem"}}>
+            ✕ Remove start scene
+          </button>
+        ) : (
+          <button className="btn-primary" onClick={() => run("add", "start")} disabled={busy}
+            style={{fontSize:".82rem"}}>
+            {busy ? "Working…" : "Add at start"}
+          </button>
+        )}
+        {customEnd ? (
+          <button className="btn-cancel" onClick={() => run("remove", "end")} disabled={busy}
+            style={{fontSize:".82rem"}}>
+            ✕ Remove end scene
+          </button>
+        ) : (
+          <button className="btn-primary" onClick={() => run("add", "end")} disabled={busy}
+            style={{fontSize:".82rem"}}>
+            {busy ? "Working…" : "Add at end"}
+          </button>
+        )}
+      </div>
+      <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".4rem", fontStyle:"italic"}}>
+        Removing a custom scene also deletes its generated image, audio and clip. While the
+        scene is still empty, full Audio/Images runs simply skip it.
+      </div>
+    </div>
+  );
+}
+
 // ── Bulk after-pause control ────────────────────────────────────────────────────
 
 function BulkPauseControl({ projectName, onChanged }) {
@@ -992,6 +1065,7 @@ function ItemsTab({ projectName }) {
 
   const scenes = (manifest?.scenes || []).filter(s =>
     // Show TTS, SFX, narration scenes, pure pause scenes AND shadowing repeat scenes
+    // (custom intro/outro scenes carry a TTS audio block, so they pass too)
     s.audio !== null || s.image !== null || s.description === "pause" || s._is_repeat_prompt
   );
 
@@ -1011,6 +1085,8 @@ function ItemsTab({ projectName }) {
   const allScenes   = manifest?.scenes || [];
   const hasPauses   = allScenes.some(s => s.description === "pause");
   const repeatCount = allScenes.filter(s => s._is_repeat_prompt).length;
+  const customStart = allScenes.some(s => s._is_custom && s.id === "custom_start");
+  const customEnd   = allScenes.some(s => s._is_custom && s.id === "custom_end");
   // The repeat-scenes control is only meaningful for projects with spoken dialog.
   const hasDialog   = allScenes.some(s =>
     (s.audio && s.audio.type === "tts") && !s._is_narration && !s._is_repetition && !s._reading);
@@ -1026,6 +1102,9 @@ function ItemsTab({ projectName }) {
         <BulkPauseControl projectName={projectName}
           onChanged={() => reloadManifest(projectName)}/>
       )}
+      <CustomScenesControl projectName={projectName}
+        customStart={customStart} customEnd={customEnd}
+        onChanged={() => reloadManifest(projectName)}/>
       {scenes.map(scene =>
         scene._is_repeat_prompt ? (
           <RepeatCard

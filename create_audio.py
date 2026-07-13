@@ -122,6 +122,10 @@ def create_audio(project_name: str, overwrite: bool = False) -> None:
             tts_pos += 1
             report_progress(tts_pos, tts_total, f"Audio {tts_pos}/{tts_total}")
 
+            if not (audio.get("tts_text") or "").strip():
+                logger.warning(f"  [{scene['id']}] has no text yet — skipping.")
+                continue
+
             if not overwrite and audio.get("file_path") and (project_path / audio["file_path"]).exists():
                 logger.info(f"  [{scene['id']}] TTS exists, skipping.")
                 continue
@@ -195,6 +199,8 @@ def create_audio_single(project_name: str, scene_id: str) -> None:
     audio = target.get("audio")
     if not audio or audio.get("type") != "tts":
         raise ValueError(f"Scene '{scene_id}' is not a TTS scene (type={audio.get('type') if audio else None})")
+    if not (audio.get("tts_text") or "").strip():
+        raise ValueError(f"Scene '{scene_id}' has no text yet — edit the scene and add its German text first.")
 
     # Build the ordered list of TTS texts for prosody context
     tts_scenes = [
