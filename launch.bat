@@ -17,6 +17,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+for /f "delims=" %%p in ('where python') do (
+    echo Using Python: %%p
+    goto :gotpython
+)
+:gotpython
+
 REM Open the browser in the background once the server is reachable
 start "" /b cmd /c ""%~f0" --open-browser"
 

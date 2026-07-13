@@ -3,10 +3,12 @@ app.py
 Main Flask application — routes live in routes/.
 """
 import logging
+import sys
 from flask import Flask, render_template
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+print(f"Python interpreter: {sys.executable}", flush=True)
 
 app = Flask(__name__)
 
