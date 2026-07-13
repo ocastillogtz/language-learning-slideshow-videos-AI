@@ -43,6 +43,7 @@ import json
 import logging
 import argparse
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -453,6 +454,30 @@ def _action_multi_prompt(present: list, chars_data: dict, loc_desc: str, scene_v
         "Integrate them naturally into the environment. "
         "No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
     )
+
+
+_ACTION_SEGMENT_RE = re.compile(r"(Action: ).*?(\n\n)", re.S)
+
+
+def update_prompt_scene_visual(prompt: str, scene_visual: str) -> str:
+    """Swap the visual/action portion of a stored image prompt for a new one,
+    keeping the style/framing header and closing instructions intact.
+
+    Dialog prompts embed the visual as an "Action: ...\\n\\n" paragraph — that
+    segment is replaced. Narration prompts have no Action marker; there the whole
+    body after the style/FRAMING header is replaced by the new visual (plus the
+    standard no-text safety tokens). Unrecognized shapes are returned unchanged.
+    """
+    if not prompt or not scene_visual:
+        return prompt
+    if "Action: " in prompt:
+        return _ACTION_SEGMENT_RE.sub(
+            lambda m: m.group(1) + scene_visual + m.group(2), prompt, count=1)
+    head, sep, _body = prompt.partition("\n\n")
+    if not sep:
+        return prompt
+    return (f"{head}{sep}{scene_visual}. "
+            "No text, no subtitles, no speech bubbles, no anime eyes, no watermarks.")
 
 
 # =============================================================================

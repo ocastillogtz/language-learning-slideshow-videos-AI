@@ -151,9 +151,16 @@ def update_scene(name: str, scene_id: str):
         if "subtitle_text" in data:
             scene["subtitle_text"] = data["subtitle_text"].strip()
 
-        # scene_visual — English action description used for image (re)generation
+        # scene_visual — English action description used for image (re)generation.
+        # The image prompt embeds the visual at script time, so rewrite the stored
+        # prompt too — otherwise a later image regen still uses the old visual.
         if "scene_visual" in data:
             scene["scene_visual"] = (data["scene_visual"] or "").strip()
+            img = scene.get("image")
+            if scene["scene_visual"] and img and img.get("prompt_to_create"):
+                from create_script import update_prompt_scene_visual
+                img["prompt_to_create"] = update_prompt_scene_visual(
+                    img["prompt_to_create"], scene["scene_visual"])
 
         # tts_text — update the spoken text on TTS audio scenes
         if "tts_text" in data:
