@@ -330,12 +330,19 @@ function VideoRegenBtn({ projectName, sceneId, onDone }) {
 
 // ── Scene edit zone (text + prompt) ───────────────────────────────────────────
 
-function SceneEditZone({ scene, projectName, onSaved }) {
+function SceneEditZone({ scene, projectName, onSaved, speakerOptions }) {
   const { toast } = useApp();
   const [text,    setText]    = useState(scene.subtitle_text || "");
   const [visual,  setVisual]  = useState(scene.scene_visual || "");
+  const [speaker, setSpeaker] = useState(scene.characters?.[0] || "");
   const [saving,  setSaving]  = useState(false);
   const [notice,  setNotice]  = useState(false);
+
+  // Speaker is only editable on spoken (TTS) non-narration scenes, and only when
+  // the project has a named cast to pick from (the backend validates against it).
+  const canEditSpeaker = !scene._is_narration
+    && scene.audio?.type === "tts"
+    && (speakerOptions || []).length > 0;
 
   // The visual description drives the scene image. Dialog scenes always store
   // one; narration scenes don't yet, but can have one added since they too have
@@ -351,6 +358,9 @@ function SceneEditZone({ scene, projectName, onSaved }) {
         tts_text:      text.trim(),
       };
       if (hasVisual) payload.scene_visual = visual.trim();
+      if (canEditSpeaker && speaker && speaker !== (scene.characters?.[0] || "")) {
+        payload.speaker = speaker;
+      }
       await apiPatch(`/projects/${projectName}/scenes/${scene.id}`, payload);
       toast("Saved", "Scene updated.", "ok");
       setNotice(true);
@@ -362,6 +372,25 @@ function SceneEditZone({ scene, projectName, onSaved }) {
   return (
     <div className="edit-zone" style={{marginTop:"1rem"}}>
       <div className="edit-grid">
+        {canEditSpeaker && (
+          <div className="edit-f">
+            <label>Speaker</label>
+            <select value={speaker} onChange={e => setSpeaker(e.target.value)}
+              style={{padding:".35rem .5rem", borderRadius:"5px",
+                border:"1px solid var(--border)", background:"var(--surface-2)",
+                color:"var(--fg)", fontSize:".84rem", maxWidth:"14rem"}}>
+              {!speaker && <option value="">— pick a speaker —</option>}
+              {/* Current speaker may predate a cast change; keep it selectable so the
+                  select doesn't render blank, though the backend only accepts cast names. */}
+              {speaker && !speakerOptions.includes(speaker) && (
+                <option value={speaker}>{speaker} (not in cast)</option>
+              )}
+              {speakerOptions.map(name => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="edit-f">
           <label>Text (German)</label>
           <textarea rows={3} value={text} onChange={e => setText(e.target.value)}/>
@@ -401,7 +430,7 @@ const CHAR_MODE_OPTIONS = [
   { value: "none",           label: "None (text only)" },
 ];
 
-function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
+function SceneCard({ scene, projectName, onChanged, num, castOptions, speakerOptions }) {
   const [open,           setOpen]           = useState(false);
   const [editing,        setEditing]        = useState(false);
   const [imgVersion,     setImgVersion]     = useState(Date.now());
@@ -521,6 +550,7 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions }) {
           {/* Edit zone */}
           {editing && (isDialog || isNarration) && (
             <SceneEditZone scene={scene} projectName={projectName}
+              speakerOptions={speakerOptions}
               onSaved={() => { onChanged && onChanged(); setEditing(false); }}/>
           )}
 
@@ -1151,6 +1181,7 @@ function ItemsTab({ projectName }) {
             scene={scene}
             num={numById[scene.id]}
             castOptions={castOptions}
+            speakerOptions={projectCast}
             projectName={projectName}
             onChanged={handleChanged}
           />
