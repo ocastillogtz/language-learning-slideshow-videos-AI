@@ -12,6 +12,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
+# moviepy 1.0.3 (pinned, see requirements.txt) calls Image.ANTIALIAS, which
+# Pillow 10+ removed in favour of Image.LANCZOS (the same filter). Restore the
+# alias here since every moviepy-using module imports utils_config.
+from PIL import Image
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.LANCZOS
+
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path("config.ini")

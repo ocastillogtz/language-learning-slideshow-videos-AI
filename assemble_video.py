@@ -72,7 +72,7 @@ def assemble_video(
     # repeats the last audio buffer at each clip boundary -> audible glitch.
     concat_tmp = project_path / ("_concat_" + project_name + ".mp4")
     ffmpeg_concat_scenes(clip_paths, concat_tmp, fps=cfg["fps"])
-    content = VideoFileClip(str(concat_tmp))
+    content = clamp_to_video_stream(VideoFileClip(str(concat_tmp)), concat_tmp, cfg["fps"])
 
     # Background audio
     bg_audio_path = _resolve_bg_audio(bg_audio_name, assets_dir)
@@ -163,6 +163,37 @@ def _probe_duration(path):
         return float(out)
     except ValueError:
         return 0.0
+
+
+def _probe_video_frames(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_frames", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True).stdout.strip()
+    try:
+        return int(out)
+    except ValueError:
+        return 0
+
+
+def clamp_to_video_stream(clip, path, fps):
+    """
+    Trim `clip` so MoviePy never reads past the last real video frame.
+
+    The AAC track of an MP4 is padded to a whole 1024-sample frame, so the
+    container duration can exceed the video stream by a fraction of a frame.
+    MoviePy trusts the container duration, computes one frame more than the
+    stream holds, and the read of that phantom frame returns 0 bytes ("Using
+    the last valid frame instead"); the audio reader fills the same gap by
+    repeating the last decoded buffer -- the audible echo of the final moments.
+    Clamping to nb_frames/fps removes the phantom tail entirely.
+    """
+    nframes = _probe_video_frames(path)
+    if nframes:
+        true_end = nframes / float(fps)
+        if clip.duration and clip.duration > true_end:
+            clip = clip.subclip(0, true_end)
+    return clip
 
 
 def _has_audio_stream(path):

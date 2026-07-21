@@ -3,7 +3,7 @@
 # .subclip / volumex API, which moviepy 2.x removed. Do not bump to 2.x.
 moviepy==1.0.3
 numpy<2.0            # moviepy 1.0.3 is not compatible with numpy 2.x
-Pillow
+Pillow               # 10+ removed Image.ANTIALIAS; utils_config.py restores it for moviepy 1.x
 imageio-ffmpeg      # ffmpeg backend MoviePy uses internally
 playwright          # headless Chromium for HTML annotation rendering
 pydub               # audio handling (needs system ffmpeg)

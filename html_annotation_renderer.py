@@ -517,8 +517,15 @@ class AnnotationBatchRenderer:
     def __enter__(self):
         from playwright.sync_api import sync_playwright   # local import: optional dep
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(args=["--force-color-profile=srgb"])
-        self._page = self._browser.new_page(device_scale_factor=self.scale)
+        try:
+            self._browser = self._pw.chromium.launch(args=["--force-color-profile=srgb"])
+            self._page = self._browser.new_page(device_scale_factor=self.scale)
+        except BaseException:
+            # A failed launch (e.g. Chromium not installed) must still stop the
+            # driver: it parks an asyncio loop in this thread, and leaking it makes
+            # every later sync_playwright() here fail with "inside the asyncio loop".
+            self.__exit__()
+            raise
         return self
 
     def _png_bytes(self, annotation: dict) -> bytes:
@@ -546,10 +553,13 @@ class AnnotationBatchRenderer:
         return out_path
 
     def __exit__(self, *exc):
-        if self._browser:
-            self._browser.close()
-        if self._pw:
-            self._pw.stop()
+        try:
+            if self._browser:
+                self._browser.close()
+        finally:
+            if self._pw:
+                self._pw.stop()
+            self._pw = self._browser = self._page = None
 
 
 def render_annotation_png(annotation: dict, out_path: str | Path,

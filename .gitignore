@@ -10,6 +10,16 @@ instagram_creds.json
 
 # ─── Generated project output ─────────────────────────────────────────────────
 projects/
+reading_source_output/
+annotation_test_output/
+
+# ─── Media assets (kept local; only manifests/templates are tracked) ──────────
+assets/**
+!assets/**/
+!assets/**/*.example.json
+!assets/characters.json
+!assets/locations.json
+!assets/project_types/project_types.json
 
 # ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/

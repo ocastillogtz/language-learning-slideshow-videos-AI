@@ -203,7 +203,7 @@ def _finalize(clip_paths, out_path, cfg, assets_dir, project_path,
     # audio buffer at each boundary -> tiny audible echo before silent pauses.
     concat_tmp = project_path / ("_concat_" + tag + ".mp4")
     av.ffmpeg_concat_scenes(clip_paths, concat_tmp, fps=cfg["fps"])
-    content = VideoFileClip(str(concat_tmp))
+    content = av.clamp_to_video_stream(VideoFileClip(str(concat_tmp)), concat_tmp, cfg["fps"])
 
     # Append the continuation end-card (frozen last frame + centered legend).
     if add_continuation and float(cfg.get("continuation_seconds", 0)) > 0:
