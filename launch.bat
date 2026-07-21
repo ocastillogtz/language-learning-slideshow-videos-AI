@@ -15,7 +15,13 @@ REM PATH is not necessarily the one where requirements.txt was installed.
 set "PYEXE="
 set "PYCHECK=import flask, elevenlabs, moviepy, pydub, dotenv, openai"
 
-for /f "delims=" %%p in ('where python 2^>nul') do (
+REM Prefer a project-local virtual environment if install_dependencies.bat made one.
+if not defined PYEXE if exist "%~dp0.venv\Scripts\python.exe" (
+    "%~dp0.venv\Scripts\python.exe" -c "%PYCHECK%" >nul 2>&1
+    if not errorlevel 1 set "PYEXE=%~dp0.venv\Scripts\python.exe"
+)
+
+if not defined PYEXE for /f "delims=" %%p in ('where python 2^>nul') do (
     if not defined PYEXE (
         "%%p" -c "%PYCHECK%" >nul 2>&1
         if not errorlevel 1 set "PYEXE=%%p"
@@ -30,6 +36,19 @@ if not defined PYEXE (
             if not errorlevel 1 (
                 for /f "delims=" %%q in ('py %%v -c "import sys; print(sys.executable)"') do set "PYEXE=%%q"
             )
+        )
+    )
+)
+
+REM Fall back to known conda environments (not on PATH unless activated).
+if not defined PYEXE (
+    for %%c in (
+        "%USERPROFILE%\anaconda3\envs\germanvids\python.exe"
+        "%USERPROFILE%\miniconda3\envs\germanvids\python.exe"
+    ) do (
+        if not defined PYEXE if exist "%%~c" (
+            "%%~c" -c "%PYCHECK%" >nul 2>&1
+            if not errorlevel 1 set "PYEXE=%%~c"
         )
     )
 )
