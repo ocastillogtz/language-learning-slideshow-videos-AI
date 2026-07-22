@@ -215,6 +215,37 @@ def update_scene(name: str, scene_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/projects/<name>/scenes/insert", methods=["POST"])
+def insert_scene(name: str):
+    """Insert an empty custom scene anywhere in the timeline.
+
+    Body: {"before_id": "<scene_id>"} — insert immediately before that scene;
+    omit / null to append at the very end. The scene is created empty (same shape
+    as a normal TTS scene) so the per-scene Edit / Image / Audio tools work on it.
+    """
+    try:
+        data      = request.get_json(silent=True) or {}
+        before_id = (data.get("before_id") or "").strip() or None
+        from custom_scenes import insert_custom_scene
+        return jsonify(insert_custom_scene(name, before_id=before_id))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/scenes/<scene_id>", methods=["DELETE"])
+def delete_scene_route(name: str, scene_id: str):
+    """Delete a scene by id, along with its generated image, audio and clips."""
+    try:
+        from custom_scenes import delete_scene
+        return jsonify(delete_scene(name, scene_id))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/create_project", methods=["POST"])
 def create_project():
     try:

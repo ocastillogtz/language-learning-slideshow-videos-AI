@@ -36,6 +36,7 @@ Both functions are idempotent and safe to re-run.
 """
 
 import json
+import uuid
 import logging
 import argparse
 from pathlib import Path
@@ -99,6 +100,43 @@ def _template_prompt(manifest: dict, position: str) -> str:
     return ""
 
 
+def _new_custom_id(scenes: list) -> str:
+    """A unique custom-scene id that doesn't collide with any existing scene."""
+    existing = {s.get("id") for s in scenes}
+    while True:
+        sid = f"custom_{uuid.uuid4().hex[:8]}"
+        if sid not in existing:
+            return sid
+
+
+def _make_custom_scene(cfg, manifest: dict, sid: str, prompt_seed: str) -> dict:
+    """Build the empty-custom-scene dict shared by the start/end and the
+    insert-anywhere paths. Shape matches a normal TTS scene so the existing
+    per-scene tools (Edit / Re-generate Image / Audio) work on it directly."""
+    chars_data = load_new_characters(cfg["assets_dir"])
+    return {
+        "id":            sid,
+        "description":   sid,
+        "_is_custom":    True,
+        "characters":    [],
+        "scene_visual":  "",
+        "image": {
+            "file_path":        None,
+            "prompt_to_create": prompt_seed,
+            "reference_type":   "none",
+        },
+        "audio": {
+            "type":        "tts",
+            "file_path":   None,
+            "tts_text":    "",
+            "voice_id":    _default_voice(manifest, chars_data),
+            "duration_ms": None,
+        },
+        "subtitle_text": "",
+        "duration_ms":   None,
+    }
+
+
 def add_custom_scene(project_name: str, position: str) -> dict:
     """Insert an empty custom scene at `position` ("start" | "end").
 
@@ -116,28 +154,7 @@ def add_custom_scene(project_name: str, position: str) -> dict:
         logger.info("Custom scene '%s' already exists in project '%s'.", sid, project_name)
         return {"id": sid, "created": False}
 
-    chars_data = load_new_characters(cfg["assets_dir"])
-    scene = {
-        "id":            sid,
-        "description":   sid,
-        "_is_custom":    True,
-        "characters":    [],
-        "scene_visual":  "",
-        "image": {
-            "file_path":        None,
-            "prompt_to_create": _template_prompt(manifest, position),
-            "reference_type":   "none",
-        },
-        "audio": {
-            "type":        "tts",
-            "file_path":   None,
-            "tts_text":    "",
-            "voice_id":    _default_voice(manifest, chars_data),
-            "duration_ms": None,
-        },
-        "subtitle_text": "",
-        "duration_ms":   None,
-    }
+    scene = _make_custom_scene(cfg, manifest, sid, _template_prompt(manifest, position))
     if position == "start":
         scenes.insert(0, scene)
     else:
@@ -147,6 +164,64 @@ def add_custom_scene(project_name: str, position: str) -> dict:
     _write_manifest(manifest_path, manifest)
     logger.info("Custom scene '%s' added to project '%s'.", sid, project_name)
     return {"id": sid, "created": True}
+
+
+def insert_custom_scene(project_name: str, before_id: str = None) -> dict:
+    """Insert an empty custom scene anywhere in the timeline.
+
+    `before_id` — insert immediately BEFORE the scene with this id. When None
+    (or the id isn't found) the scene is appended at the very end.
+
+    The image prompt is seeded from the nearest neighbouring scene's prompt
+    (searching backward first, then forward) so the art-style tokens carry over.
+
+    Returns {"id": str, "created": True, "index": int}.
+    """
+    cfg, project_path, manifest_path, manifest = _load_manifest(project_name)
+    scenes = manifest.get("scenes", [])
+
+    if before_id:
+        idx = next((i for i, s in enumerate(scenes) if s.get("id") == before_id), len(scenes))
+    else:
+        idx = len(scenes)
+
+    # Seed the image prompt from the closest neighbour that has one.
+    seed = ""
+    for s in list(reversed(scenes[:idx])) + scenes[idx:]:
+        p = ((s.get("image") or {}).get("prompt_to_create") or "").strip()
+        if p:
+            seed = p
+            break
+
+    sid   = _new_custom_id(scenes)
+    scene = _make_custom_scene(cfg, manifest, sid, seed)
+    scenes.insert(idx, scene)
+
+    manifest["scenes"] = scenes
+    _write_manifest(manifest_path, manifest)
+    logger.info("Custom scene '%s' inserted at index %d in project '%s'.", sid, idx, project_name)
+    return {"id": sid, "created": True, "index": idx}
+
+
+def delete_scene(project_name: str, scene_id: str) -> dict:
+    """Remove ANY scene by id and delete its generated image, audio and clips.
+
+    Returns {"removed": int, "id": str}. Idempotent: removing a missing id is a
+    no-op that returns removed=0.
+    """
+    cfg, project_path, manifest_path, manifest = _load_manifest(project_name)
+    scenes = manifest.get("scenes", [])
+
+    if not any(s.get("id") == scene_id for s in scenes):
+        logger.info("Scene '%s' not found in project '%s'.", scene_id, project_name)
+        return {"removed": 0, "id": scene_id}
+
+    manifest["scenes"] = [s for s in scenes if s.get("id") != scene_id]
+    _write_manifest(manifest_path, manifest)
+    _delete_artifacts(project_path, scene_id)
+
+    logger.info("Deleted scene '%s' from project '%s'.", scene_id, project_name)
+    return {"removed": 1, "id": scene_id}
 
 
 def remove_custom_scene(project_name: str, position: str) -> dict:

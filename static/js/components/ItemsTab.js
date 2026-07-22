@@ -430,7 +430,7 @@ const CHAR_MODE_OPTIONS = [
   { value: "none",           label: "None (text only)" },
 ];
 
-function SceneCard({ scene, projectName, onChanged, num, castOptions, speakerOptions }) {
+function SceneCard({ scene, projectName, onChanged, onDelete, num, castOptions, speakerOptions }) {
   const [open,           setOpen]           = useState(false);
   const [editing,        setEditing]        = useState(false);
   const [imgVersion,     setImgVersion]     = useState(Date.now());
@@ -471,7 +471,8 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions, speakerOpt
   // Label chip
   let label, labelStyle;
   if (scene._is_custom) {
-    label = scene.id === "custom_start" ? "INTRO" : "OUTRO";
+    label = scene.id === "custom_start" ? "INTRO"
+          : scene.id === "custom_end"   ? "OUTRO" : "NEW";
     labelStyle = {background:"var(--green, #4ade80)", color:"#0d0d10", fontSize:".6rem"};
   } else if (isNarration) {
     label = "NAR"; labelStyle = {background:"var(--blue)", color:"#fff"};
@@ -513,6 +514,7 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions, speakerOpt
             ✎ Edit
           </button>
         )}
+        {onDelete && <DeleteSceneBtn onClick={onDelete}/>}
         <div className="chevron" style={{marginLeft:".5rem"}}>▼</div>
       </div>
 
@@ -703,7 +705,7 @@ function SceneCard({ scene, projectName, onChanged, num, castOptions, speakerOpt
 
 // ── Pause scene card ───────────────────────────────────────────────────────────
 
-function PauseCard({ scene, projectName, onChanged, num }) {
+function PauseCard({ scene, projectName, onChanged, onDelete, num }) {
   const { toast } = useApp();
   const [durMs,   setDurMs]   = useState(String(scene.duration_ms ?? 350));
   const [saving,  setSaving]  = useState(false);
@@ -769,6 +771,7 @@ function PauseCard({ scene, projectName, onChanged, num }) {
             {saving ? "…" : "Save"}
           </button>
         )}
+        {onDelete && <DeleteSceneBtn onClick={onDelete}/>}
       </div>
     </div>
   );
@@ -826,71 +829,112 @@ function ReadingCastGallery({ castChars, castAssets, allChars }) {
   );
 }
 
-// ── Custom intro/outro scene control ─────────────────────────────────────────────
+// ── Insert-scene divider button ──────────────────────────────────────────────────
 
-function CustomScenesControl({ projectName, customStart, customEnd, onChanged }) {
+// Sits between two cards (and at the very top / bottom). Clicking inserts an empty
+// custom scene at that position; `beforeId` is the id of the scene the new one lands
+// in front of (null → append at the very end).
+function InsertSceneButton({ projectName, beforeId, onInserted }) {
   const { toast } = useApp();
-  const [busy, setBusy] = useState(false);
+  const [busy,  setBusy]  = useState(false);
+  const [hover, setHover] = useState(false);
 
-  async function run(action, position) {
+  async function insert() {
     setBusy(true);
     try {
-      const d = await apiPost(`/projects/${projectName}/custom_scenes`, { action, position });
-      if (action === "add") {
-        toast("Done", d.created
-          ? `Empty scene added at ${position} — fill in its text and image prompt in the card below.`
-          : `A custom ${position} scene already exists.`, "ok");
-      } else {
-        toast("Removed", `Custom ${position} scene removed.`, "ok");
-      }
-      onChanged && onChanged();
+      const d = await apiPost(`/projects/${projectName}/scenes/insert`,
+        beforeId ? { before_id: beforeId } : {});
+      toast("Scene added",
+        "Empty scene inserted — use ✎ Edit to write its text, then generate its image & audio.",
+        "ok");
+      onInserted && onInserted(d);
     } catch(e) { toast("Error", e.message, "err"); }
     finally { setBusy(false); }
   }
 
   return (
-    <div className="item-card" style={{padding:".9rem 1rem", marginBottom:".7rem"}}>
-      <div style={{fontWeight:600, marginBottom:".15rem"}}>
-        Custom intro / outro scene
-        {(customStart || customEnd) && (
-          <span style={{color:"var(--accent)", fontWeight:600, fontSize:".78rem", marginLeft:".5rem"}}>
-            {[customStart && "start", customEnd && "end"].filter(Boolean).join(" + ")} active
-          </span>
-        )}
-      </div>
-      <div style={{fontSize:".76rem", color:"var(--muted)", marginBottom:".55rem"}}>
-        Adds an empty scene before the first scene or after the last one. It appears as a
-        normal card in the list below: use <strong>✎ Edit</strong> to write its German text
-        and visual description, edit the image prompt (prefilled with the project's art style),
-        then generate its audio and image per-scene.
-      </div>
-      <div style={{display:"flex", gap:".7rem", alignItems:"center", flexWrap:"wrap"}}>
-        {customStart ? (
-          <button className="btn-cancel" onClick={() => run("remove", "start")} disabled={busy}
-            style={{fontSize:".82rem"}}>
-            ✕ Remove start scene
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{display:"flex", alignItems:"center", gap:".6rem",
+        padding:".1rem 0", cursor:"pointer", opacity: hover ? 1 : .45,
+        transition:"opacity .15s"}}
+      onClick={busy ? undefined : insert}
+      title="Insert a new empty scene here">
+      <div style={{flex:1, height:"1px", background:"var(--border)"}}/>
+      <button className="btn-ghost" disabled={busy}
+        style={{fontSize:".74rem", padding:".2rem .7rem", borderRadius:"999px",
+          borderColor: hover ? "var(--accent)" : "var(--border)",
+          color: hover ? "var(--accent)" : "var(--muted)", whiteSpace:"nowrap"}}>
+        {busy ? "Adding…" : "＋ Add scene here"}
+      </button>
+      <div style={{flex:1, height:"1px", background:"var(--border)"}}/>
+    </div>
+  );
+}
+
+// ── Per-card delete icon ──────────────────────────────────────────────────────────
+
+// Small trash icon shown inside a card head; opens the confirmation modal.
+function DeleteSceneBtn({ onClick }) {
+  return (
+    <button
+      onClick={e => { e.stopPropagation(); onClick(); }}
+      title="Delete this scene"
+      className="btn-ghost"
+      style={{marginLeft:".4rem", padding:".2rem .45rem", fontSize:".9rem",
+        lineHeight:1, color:"var(--muted)", borderColor:"transparent"}}
+      onMouseEnter={e => { e.currentTarget.style.color = "var(--red, #f87171)";
+                           e.currentTarget.style.borderColor = "var(--red, #f87171)"; }}
+      onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)";
+                           e.currentTarget.style.borderColor = "transparent"; }}>
+      🗑
+    </button>
+  );
+}
+
+// ── Delete confirmation modal ──────────────────────────────────────────────────────
+
+function DeleteSceneModal({ projectName, scene, num, onClose, onDeleted }) {
+  const { toast } = useApp();
+  const [busy, setBusy] = useState(false);
+
+  const text = scene.subtitle_text || scene.audio?.tts_text || scene.description || scene.id;
+
+  async function del() {
+    setBusy(true);
+    try {
+      await apiDelete(`/projects/${projectName}/scenes/${scene.id}`);
+      toast("Deleted", "Scene removed — re-render the Video step to update the final video.", "ok");
+      onDeleted && onDeleted();
+    } catch(e) { toast("Error", e.message, "err"); setBusy(false); }
+  }
+
+  return (
+    <div className="modal-bg open" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="modal-box" style={{maxWidth:"440px"}}>
+        <div className="modal-hdr">
+          <h3>Delete scene?</h3>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <p style={{margin:"0 0 .6rem", fontSize:".9rem"}}>
+            This permanently removes scene {num != null ? <strong>#{num}</strong> : null} and its
+            generated image, audio and rendered clips. This can’t be undone.
+          </p>
+          <div style={{fontSize:".82rem", color:"var(--muted)", fontStyle:"italic",
+            borderLeft:"2px solid var(--border)", paddingLeft:".7rem",
+            maxHeight:"5rem", overflow:"auto"}}>
+            {text}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn-cancel" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn-cancel" onClick={del} disabled={busy}
+            style={{background:"var(--red, #f87171)", color:"#fff", borderColor:"var(--red, #f87171)"}}>
+            {busy ? "Deleting…" : "Delete scene"}
           </button>
-        ) : (
-          <button className="btn-primary" onClick={() => run("add", "start")} disabled={busy}
-            style={{fontSize:".82rem"}}>
-            {busy ? "Working…" : "Add at start"}
-          </button>
-        )}
-        {customEnd ? (
-          <button className="btn-cancel" onClick={() => run("remove", "end")} disabled={busy}
-            style={{fontSize:".82rem"}}>
-            ✕ Remove end scene
-          </button>
-        ) : (
-          <button className="btn-primary" onClick={() => run("add", "end")} disabled={busy}
-            style={{fontSize:".82rem"}}>
-            {busy ? "Working…" : "Add at end"}
-          </button>
-        )}
-      </div>
-      <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".4rem", fontStyle:"italic"}}>
-        Removing a custom scene also deletes its generated image, audio and clip. While the
-        scene is still empty, full Audio/Images runs simply skip it.
+        </div>
       </div>
     </div>
   );
@@ -1026,7 +1070,7 @@ function RepeatScenesControl({ projectName, count, onChanged }) {
 
 // ── Repeat scene card ────────────────────────────────────────────────────────────
 
-function RepeatCard({ scene, projectName, onChanged, num }) {
+function RepeatCard({ scene, projectName, onChanged, onDelete, num }) {
   const { toast } = useApp();
   const [durMs,  setDurMs]  = useState(String(scene.duration_ms ?? 2500));
   const [saving, setSaving] = useState(false);
@@ -1086,6 +1130,7 @@ function RepeatCard({ scene, projectName, onChanged, num }) {
             {saving ? "…" : "Save"}
           </button>
         )}
+        {onDelete && <DeleteSceneBtn onClick={onDelete}/>}
       </div>
     </div>
   );
@@ -1096,6 +1141,8 @@ function RepeatCard({ scene, projectName, onChanged, num }) {
 function ItemsTab({ projectName }) {
   const { manifest, reloadManifest } = useApp();
   const [allChars, setAllChars] = useState({});
+  // Scene queued for deletion → drives the confirmation modal.
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   useEffect(() => {
     fetch("/assets/characters").then(r => r.json()).then(d => setAllChars(d || {})).catch(() => {});
@@ -1138,54 +1185,54 @@ function ItemsTab({ projectName }) {
   const allScenes   = manifest?.scenes || [];
   const hasPauses   = allScenes.some(s => s.description === "pause");
   const repeatCount = allScenes.filter(s => s._is_repeat_prompt).length;
-  const customStart = allScenes.some(s => s._is_custom && s.id === "custom_start");
-  const customEnd   = allScenes.some(s => s._is_custom && s.id === "custom_end");
   // The repeat-scenes control is only meaningful for projects with spoken dialog.
   const hasDialog   = allScenes.some(s =>
     (s.audio && s.audio.type === "tts") && !s._is_narration && !s._is_repetition && !s._reading);
+
+  const reload = () => reloadManifest(projectName);
+
+  function renderCard(scene) {
+    const common = {
+      scene,
+      num:         numById[scene.id],
+      projectName,
+      onChanged:   handleChanged,
+      onDelete:    () => setDeleteTarget(scene),
+    };
+    if (scene._is_repeat_prompt) return <RepeatCard {...common}/>;
+    if (scene.description === "pause") return <PauseCard {...common}/>;
+    return <SceneCard {...common} castOptions={castOptions} speakerOptions={projectCast}/>;
+  }
 
   return (
     <div className="items-grid">
       <ReadingCastGallery castChars={castChars} castAssets={castAssets} allChars={allChars}/>
       {hasDialog && (
         <RepeatScenesControl projectName={projectName} count={repeatCount}
-          onChanged={() => reloadManifest(projectName)}/>
+          onChanged={reload}/>
       )}
       {hasPauses && (
-        <BulkPauseControl projectName={projectName}
-          onChanged={() => reloadManifest(projectName)}/>
+        <BulkPauseControl projectName={projectName} onChanged={reload}/>
       )}
-      <CustomScenesControl projectName={projectName}
-        customStart={customStart} customEnd={customEnd}
-        onChanged={() => reloadManifest(projectName)}/>
-      {scenes.map(scene =>
-        scene._is_repeat_prompt ? (
-          <RepeatCard
-            key={scene.id}
-            scene={scene}
-            num={numById[scene.id]}
-            projectName={projectName}
-            onChanged={handleChanged}
-          />
-        ) : scene.description === "pause" ? (
-          <PauseCard
-            key={scene.id}
-            scene={scene}
-            num={numById[scene.id]}
-            projectName={projectName}
-            onChanged={handleChanged}
-          />
-        ) : (
-          <SceneCard
-            key={scene.id}
-            scene={scene}
-            num={numById[scene.id]}
-            castOptions={castOptions}
-            speakerOptions={projectCast}
-            projectName={projectName}
-            onChanged={handleChanged}
-          />
-        )
+
+      {/* Interleave an insert-here divider before every scene and one at the end. */}
+      {scenes.map(scene => (
+        <React.Fragment key={scene.id}>
+          <InsertSceneButton projectName={projectName} beforeId={scene.id}
+            onInserted={reload}/>
+          {renderCard(scene)}
+        </React.Fragment>
+      ))}
+      <InsertSceneButton projectName={projectName} beforeId={null} onInserted={reload}/>
+
+      {deleteTarget && (
+        <DeleteSceneModal
+          projectName={projectName}
+          scene={deleteTarget}
+          num={numById[deleteTarget.id]}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => { setDeleteTarget(null); reload(); }}
+        />
       )}
     </div>
   );
