@@ -43,5 +43,10 @@ Thumbs.db
 .idea/
 .vscode/
 
+# ─── Non-code working files (design sources, thumbnails, scratch notes) ───────
+*.pdn
+thumbnail*.png
+lan_learn_videos_file_system_overview.txt
+
 # ─── Legacy / backups ─────────────────────────────────────────────────────────
 static/js/components/old_28_4/
