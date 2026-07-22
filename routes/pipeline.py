@@ -513,6 +513,19 @@ def run_assemble(name):
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/projects/<name>/upload_meta", methods=["GET"])
+def upload_meta(name):
+    """Return the title, description, and tags that would be sent to YouTube,
+    so the frontend can preview and edit them before uploading."""
+    try:
+        from upload_video import _read_manifest, _build_metadata
+        manifest = _read_manifest(name)
+        title, description, tags = _build_metadata(manifest)
+        return jsonify({"title": title, "description": description, "tags": tags})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/projects/<name>/run/upload", methods=["POST"])
 def run_upload(name):
     try:
@@ -520,15 +533,44 @@ def run_upload(name):
         privacy        = data.get("privacy", "private").strip()
         title_override = data.get("title", "").strip() or None
         desc_override  = data.get("description", "").strip() or None
+        category_id    = (data.get("category_id") or "22").strip() or "22"
+        made_for_kids  = bool(data.get("made_for_kids", False))
+        publish_at     = (data.get("publish_at") or "").strip() or None
+        raw_tags       = data.get("tags")
+        tags_override  = None
+        if isinstance(raw_tags, list):
+            tags_override = [str(t).strip().lstrip("#") for t in raw_tags if str(t).strip()]
+        elif isinstance(raw_tags, str) and raw_tags.strip():
+            tags_override = [t.strip().lstrip("#") for t in raw_tags.split(",") if t.strip()]
+
         if privacy not in ("public", "private", "unlisted"):
             return jsonify({"error": "Invalid privacy value"}), 400
+
+        # ── Validate the scheduled release time (must parse and be in the future) ──
+        if publish_at:
+            from datetime import datetime, timezone
+            try:
+                dt = datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
+            except ValueError:
+                return jsonify({"error": "Invalid publish_at — expected an ISO 8601 / RFC 3339 timestamp"}), 400
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt <= datetime.now(timezone.utc):
+                return jsonify({"error": "Scheduled release time must be in the future"}), 400
+            privacy = "private"   # YouTube requires private when publishAt is set
 
         def _do():
             from upload_video import _read_manifest, _final_video_path, _build_metadata, upload_video
             manifest = _read_manifest(name)
             t, d, tgs = _build_metadata(manifest)
             upload_video(_final_video_path(name, manifest),
-                         title_override or t, desc_override or d, tgs, privacy)
+                         title_override or t,
+                         desc_override or d,
+                         tags_override if tags_override else tgs,
+                         privacy,
+                         category_id=category_id,
+                         publish_at=publish_at,
+                         made_for_kids=made_for_kids)
 
         run_job(name, "upload", _do)
         return jsonify({"message": "Upload started"})

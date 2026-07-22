@@ -259,7 +259,7 @@ The branding file is selectable from a dropdown in the UI (populated live from `
 
 #### YouTube (`upload_video.py`)
 
-Uploads the final video to YouTube via the YouTube Data API v3. Reads title, description, and tags from the manifest. Supports resumable chunked upload with retry. Caches OAuth credentials in `token.json`.
+Uploads the final video to YouTube via the YouTube Data API v3. Reads title, description, and tags from the manifest — the UI pre-fills these as **editable fields** so you can preview and tweak them before uploading. Supports privacy, category, made-for-kids, and **scheduled release**: pick a future date/time and the video is uploaded private with `status.publishAt` set, which YouTube auto-flips to public at that time (`--publish-at <RFC3339-UTC>` on the CLI). Supports resumable chunked upload with retry. Caches OAuth credentials in `token.json`.
 
 #### Instagram (`upload_instagram.py`)
 
@@ -411,7 +411,7 @@ Seven collapsible step cards covering the full pipeline:
 | 3 · Images | Overwrite flag, ignore-cache flag, location-reference flag, **Image-saving mode** (2×2 mosaic, horizontal projects only) |
 | 4 · Video | Annotated subtitles flag, footnote/disclaimer text (optional) + footnote read time (extra seconds the scene is held so the footnote can be read), shadowing repeat overlay (message + font size) |
 | 5 · Assemble | Background audio, speed factor, branding file, branding position (none/intro/outro/both), overwrite flag |
-| 6 · YouTube Upload | Privacy, title override, description override |
+| 6 · YouTube Upload | **Editable preview of the generated title, description, and tags** (pre-filled from the manifest); privacy; category; made-for-kids toggle; **scheduled release** (date/time picker — uploads private and YouTube auto-publishes at that time via `publishAt`) |
 | 7 · Instagram Upload | Caption override, share-to-feed toggle; credential setup (App ID, App Secret, token, optional IG User ID); token status banner; reset |
 
 Steps run in background threads — the UI stays responsive during long operations. Live status badges (`idle` / `running` / `done` / `error`) are updated by background polling.
@@ -477,7 +477,8 @@ Full CRUD for all asset types:
 | `POST` | `/projects/<name>/run/reading_cast` | Reading Together: create single-image character assets and wire them into the scenes. Params: `regenerate` (redo reference images), `reanalyze` (re-detect + merge missing characters; default true). Non-destructive. |
 | `POST` | `/projects/<name>/run/reading_assemble` | Reading Together: build vertical parts + long horizontal video (`bg_audio_name`, `make_parts`, `make_long`, `overwrite`, `per_part` = sentences per vertical part) |
 | `POST` | `/projects/<name>/run/assemble` | Assemble final video (`bg_audio_name`, `speed_factor`, `branding_file`, `branding_mode`, `overwrite`) |
-| `POST` | `/projects/<name>/run/upload` | Upload to YouTube (`privacy`, `title`, `description`) |
+| `GET`  | `/projects/<name>/upload_meta` | Preview the generated YouTube `title`, `description`, and `tags` (read from the manifest) so they can be edited before upload |
+| `POST` | `/projects/<name>/run/upload` | Upload to YouTube (`privacy`, `title`, `description`, `tags`, `category_id`, `made_for_kids`, `publish_at` for scheduled release) |
 | `POST` | `/projects/<name>/run/upload_instagram` | Upload to Instagram (`caption`, `share_to_feed`) |
 
 ### Auth

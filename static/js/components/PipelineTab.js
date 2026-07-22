@@ -712,14 +712,57 @@ function AssembleFields() {
   );
 }
 
-function UploadFields() {
+// Common YouTube category IDs (snippet.categoryId).
+const YT_CATEGORIES = [
+  ["22", "People & Blogs"],
+  ["27", "Education"],
+  ["24", "Entertainment"],
+  ["26", "Howto & Style"],
+  ["1",  "Film & Animation"],
+  ["10", "Music"],
+  ["20", "Gaming"],
+  ["23", "Comedy"],
+];
+
+function UploadFields({ projectName }) {
   const [privacy,    setPrivacy]    = useState("private");
   const [title,      setTitle]      = useState("");
   const [desc,       setDesc]       = useState("");
+  const [tags,       setTags]       = useState("");
+  const [category,   setCategory]   = useState("22");
+  const [madeForKids,setMadeForKids]= useState(false);
+  const [schedule,   setSchedule]   = useState(false);
+  const [publishAt,  setPublishAt]  = useState("");   // datetime-local value (local time)
+  const [metaLoaded, setMetaLoaded] = useState(false);
   const [resetMsg,   setResetMsg]   = useState("");
   const [resetting,  setResetting]  = useState(false);
 
-  UploadFields._getPayload = () => ({ privacy, title, description: desc });
+  // Pre-fill the editable fields with the exact metadata that would be sent,
+  // so the user can preview and tweak the title/description/tags before upload.
+  useEffect(() => {
+    if (!projectName) return;
+    fetch(`/projects/${projectName}/upload_meta`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) return;
+        setTitle(d.title || "");
+        setDesc(d.description || "");
+        setTags((d.tags || []).join(", "));
+        setMetaLoaded(true);
+      })
+      .catch(() => {});
+  }, [projectName]);
+
+  UploadFields._getPayload = () => ({
+    privacy,
+    title,
+    description: desc,
+    tags,
+    category_id: category,
+    made_for_kids: madeForKids,
+    // Convert the local datetime-local value to an RFC 3339 UTC string.
+    publish_at: schedule && publishAt ? new Date(publishAt).toISOString() : "",
+  });
 
   async function resetAuth() {
     setResetting(true);
@@ -738,23 +781,63 @@ function UploadFields() {
   return (
     <div className="fields">
       <div className="field">
-        <label>Privacy</label>
-        <select value={privacy} onChange={e=>setPrivacy(e.target.value)}>
-          <option value="private">Private</option>
-          <option value="unlisted">Unlisted</option>
-          <option value="public">Public</option>
-        </select>
-      </div>
-      <div className="field">
-        <label>Title Override <span style={{color:"var(--muted)",fontWeight:300}}>(optional)</span></label>
+        <label>Title <span style={{color:"var(--muted)",fontWeight:300}}>
+          {metaLoaded ? "(pre-filled — edit before upload)" : "(loading…)"}</span></label>
         <input value={title} onChange={e=>setTitle(e.target.value)}
-          placeholder="Leave blank to use manifest title"/>
+          placeholder="Loading from manifest…"/>
       </div>
       <div className="field">
-        <label>Description Override <span style={{color:"var(--muted)",fontWeight:300}}>(optional)</span></label>
-        <textarea rows={3} value={desc} onChange={e=>setDesc(e.target.value)}
-          placeholder="Leave blank to auto-generate"/>
+        <label>Description <span style={{color:"var(--muted)",fontWeight:300}}>
+          {metaLoaded ? "(pre-filled — edit before upload)" : "(loading…)"}</span></label>
+        <textarea rows={6} value={desc} onChange={e=>setDesc(e.target.value)}
+          placeholder="Loading from manifest…"/>
       </div>
+      <div className="field">
+        <label>Tags <span style={{color:"var(--muted)",fontWeight:300}}>(comma-separated)</span></label>
+        <textarea rows={2} value={tags} onChange={e=>setTags(e.target.value)}
+          placeholder="german, deutschlernen, shorts"/>
+      </div>
+
+      <div className="field-row">
+        <div className="field">
+          <label>Privacy</label>
+          <select value={privacy} onChange={e=>setPrivacy(e.target.value)} disabled={schedule}>
+            <option value="private">Private</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="public">Public</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Category</label>
+          <select value={category} onChange={e=>setCategory(e.target.value)}>
+            {YT_CATEGORIES.map(([id, label]) =>
+              <option key={id} value={id}>{label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="toggle-row">
+        <input type="checkbox" id="f_yt_kids" checked={madeForKids}
+          onChange={e=>setMadeForKids(e.target.checked)}/>
+        <label htmlFor="f_yt_kids">Made for kids</label>
+      </div>
+
+      <div className="toggle-row">
+        <input type="checkbox" id="f_yt_sched" checked={schedule}
+          onChange={e=>setSchedule(e.target.checked)}/>
+        <label htmlFor="f_yt_sched">Schedule release (publish later automatically)</label>
+      </div>
+      {schedule && (
+        <div className="field">
+          <label>Release date &amp; time <span style={{color:"var(--muted)",fontWeight:300}}>(your local time)</span></label>
+          <input type="datetime-local" value={publishAt}
+            onChange={e=>setPublishAt(e.target.value)}/>
+          <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".3rem"}}>
+            The video uploads as <strong>Private</strong> and YouTube flips it to public at this time.
+          </div>
+        </div>
+      )}
+
       <div style={{borderTop:"1px solid var(--border)", paddingTop:".75rem", marginTop:".25rem"}}>
         <div style={{fontSize:".78rem", color:"var(--muted)", marginBottom:".5rem"}}>
           If you see an <strong>invalid_grant</strong> error, the saved login token has expired.

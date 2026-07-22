@@ -222,11 +222,18 @@ def upload_video(
     tags: list[str],
     privacy: str,
     category_id: str = "22",   # 22 = People & Blogs (common for Shorts)
+    publish_at: Optional[str] = None,
+    made_for_kids: bool = False,
 ) -> str:
     """
     Upload *file_path* to YouTube and return the video ID.
 
     Implements chunked resumable upload with retry on transient errors.
+
+    If *publish_at* (an RFC 3339 UTC timestamp, e.g. "2026-07-01T17:00:00Z")
+    is supplied, the video is uploaded as private and YouTube automatically
+    flips it to public at that time. The YouTube API requires privacyStatus to
+    be "private" when publishAt is set, so privacy is forced accordingly.
     """
     if not file_path.exists():
         raise FileNotFoundError(f"Video file not found: {file_path}")
@@ -235,6 +242,13 @@ def upload_video(
     creds   = authenticate()
     youtube = build("youtube", "v3", credentials=creds)
 
+    status: dict = {
+        "privacyStatus":            "private" if publish_at else privacy,
+        "selfDeclaredMadeForKids":  made_for_kids,
+    }
+    if publish_at:
+        status["publishAt"] = publish_at
+
     body = {
         "snippet": {
             "title":       title[:100],         # YouTube title limit
@@ -242,10 +256,7 @@ def upload_video(
             "tags":        tags[:500],           # API limit
             "categoryId":  category_id,
         },
-        "status": {
-            "privacyStatus":            privacy,
-            "selfDeclaredMadeForKids":  False,
-        },
+        "status": status,
     }
 
     logger.info("Starting upload: %s  (%s MB)", file_path.name,
@@ -319,6 +330,11 @@ Examples:
     parser.add_argument("--description", help="Override video description")
     parser.add_argument("--privacy",  default="private",
                         choices=["public", "private", "unlisted"])
+    parser.add_argument("--publish-at", dest="publish_at",
+                        help="Schedule release: RFC 3339 UTC timestamp, "
+                             "e.g. 2026-07-01T17:00:00Z (forces private until then)")
+    parser.add_argument("--made-for-kids", dest="made_for_kids", action="store_true",
+                        help="Mark the video as made for kids")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
@@ -347,11 +363,13 @@ Examples:
 
     try:
         vid_id = upload_video(
-            file_path   = file_path,
-            title       = title,
-            description = description,
-            tags        = tags,
-            privacy     = args.privacy,
+            file_path     = file_path,
+            title         = title,
+            description   = description,
+            tags          = tags,
+            privacy       = args.privacy,
+            publish_at    = args.publish_at,
+            made_for_kids = args.made_for_kids,
         )
         print(f"\nVideo ID : {vid_id}")
         print(f"Watch    : https://youtu.be/{vid_id}")
