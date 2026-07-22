@@ -1,0 +1,52 @@
+File system overview:
+    - assets [folder]
+        - [folder] audio_cache : In this folder we save audios that we have already created in the past. 
+        - [folder] background_audio : In here we save the ambience sound that accompanies the video, like coffeshop noise, or nature sounds. 
+        - [folder] branding : In here we save video clips to be used in the final video composition, like an opening or ending sub video
+        - [folder] character_art : In here we save the reference art of the characters created.
+        - [folder] character_art_cache : In here we save character art created in the past that might be usable in the future, for example, we might have the character a and b chat in the park, many times, we don't create an image each time.
+        - [folder] location : In here we have images of the locations where the characters interact with each other. Note, if we have a location called "cafe", then we might also have "cafe_single_1" and "cafe_single_2" this means that "cafe" should show 2 characters and "cafe_single_1" or "cafe_single_2" single characters. This is to create the impression that the conversation goes to one character and then to the other, like focusing on one and then the other.
+        - [folder] sfx : in here we save audio files that are going to be used as sound effects in the video
+        - [json file] characters.json
+            - We have characters with the following structure:
+            {
+                "<character name>": {
+                    "voice_id": "nGISSznGHAgSTKaMXEPO"[example], # eleven labs voice id
+                    "art": "assets/character_art/Olena_art.png"[example], # where we can find the reference character art (this is a turnaround of the character)
+                    "34left":"assets/character_art/Olena34left.png"[example],  # where we can find the reference character art (this is full body standing 3/4 side view of the character)
+                    "lora":"OlenaBrezel_pytorch_lora_weights.safetensors"[example],  # this is a lORA for local image creation.
+                    "thumbnail":"assets/character_art/OlenaThumbnail.png"[example], # this is a small icon with the face of the character.
+                    "height":"168"[example], # the height of the character
+                    "location":["cafe","cafe_single_2"][example], # in which location it can be found
+                    "description": "Olena is from Ukraine, wears a light purple blouse, light colored hair but not blonde, female, 25 years old, brown eyes, slightly chubby,  friendly adult woman with long wavy blonde hair and light skin, curvy body type, wearing a light purple t shirt and blue jeans with casual shoes, warm approachable personality"[example] # the description of the aspect of the character, very detailed. 
+                },
+            }
+        - [json file] locations.json
+            - We have the following structure. This is an example:
+            {
+            "cafe": {
+                "description": "cozy coffeshop, characters are sitting chatting looking at each other", # description of the location and how the characters act in this location
+                "file": "assets/locations/cafe.png", # where can I find the file
+                "characters_amount":2, # amount of characters allowed per location
+                "eligible_characters":["Amir","Mario","Sani","Olena","Zahra","Wiebke"], # which characters can I find already in images cached
+                "character_art_cache" : "assets/character_art_cache",
+                "files_for_prod":["Amir_Mario__cafe.png","Amir_Zahra__cafe.png","Mario_Zahra__cafe.png","Amir_Sani__cafe.png","Sani_Wiebke__cafe.png","Mario_Olena__cafe.png","Olena_Sani__cafe.png","Sani_Zahra__cafe.png","Amir_Wiebke__cafe.png","Olena_Wiebke__cafe.png","Wiebke_Zahra__cafe.png","Amir_Olena__cafe.png","Mario_Sani__cafe.png","Mario_Wiebke__cafe.png","Olena_Zahra__cafe.png"],
+                "file_name_syntax" : "<character name>_<character name>__<location name>" # characters are written first separated by one underscore (if there is only one character, then there's no single underscore), then the location is added after two underscores.
+                "sub_locations":{
+                    "cafe_single_1": {
+                    "description": "coffeeshop, this character is sitting on the chair shown, the table covers a bit of his or her legs, chatting direct to the camera", # description of the location and how the character act in this location
+                    "file": "assets/locations/cafe_single_1.png",
+                    "characters_amount":1,
+                    "files_for_prod":["Amir__cafe_single_1.png"],
+                    "eligible_characters":["Amir","Mario","Olena"]  # which characters can I find already in images cached
+                    },
+                    "cafe_single_2": {
+                    "description":  "coffeeshop, this character is sitting on the chair shown, the table covers a bit of his or her legs, chatting direct to the camera",
+                    "file": "assets/locations/cafe_single_2.png",
+                    "characters_amount":1,
+                    "files_for_prod":["Wiebke__cafe_single_2.png"],
+                    "eligible_characters":["Sani","Zahra","Wiebke","Olena"]
+                        }
+                    }
+                }
+            }
