@@ -319,6 +319,56 @@ def _generate_script_batched(
     return gpt_output, raw_content
 
 
+def _refresh_insights_after_batch(gpt_output: dict, level: str, model: str) -> None:
+    """Batched generation writes title/tags/insights on the FIRST batch, before most
+    dialog lines exist — so the description's glossary can only cover the opening
+    lines. Rewrite the insights from the COMPLETE dialog in one extra call so the
+    glossary of the most advanced words spans the whole video."""
+    lines = [f"{item.get('speaker') or item.get('character') or '?'}: "
+             f"{_strip_fancy_notation(item.get('text', ''))}"
+             for item in gpt_output.get("dialog", []) if item.get("text")]
+    current = gpt_output.get("insights") or ""
+    if not lines or not current:
+        return
+
+    dialog_block = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(lines))
+    prompt = f"""
+You wrote a YouTube description for a German learning video (level {level}) after seeing
+only the first part of the dialog. Here is the COMPLETE dialog:
+
+{dialog_block}
+
+Current description:
+{current}
+
+Rewrite the description so it reflects the whole dialog. Keep the same structure and tone:
+plain text only (no markdown, no bullet points, no headers, no asterisks), 5-8 sentences,
+immediately copy-pasteable into a YouTube description as-is.
+
+MANDATORY: the description must contain a GLOSSARY of the most advanced words and
+expressions actually spoken anywhere in the dialog — the ones most challenging for a
+{level} learner — each with the article for nouns and a brief English gloss, inline,
+e.g.: "leihen (to borrow), das Lager (the warehouse), sofort (immediately)".
+
+Return ONLY a JSON object of the form {{"insights": "..."}}
+""".strip("\n")
+
+    logger.info("Refreshing insights from the complete dialog …")
+    try:
+        resp = client.chat.completions.create(
+            model           = model,
+            messages        = [{"role": "user", "content": prompt}],
+            response_format = {"type": "json_object"},
+        )
+        _check_not_truncated(resp, "insights refresh")
+        new_insights = json.loads(resp.choices[0].message.content).get("insights")
+    except Exception as e:  # keep the first-batch insights rather than failing the run
+        logger.warning(f"Insights refresh failed — keeping first-batch insights: {e}")
+        return
+    if new_insights and isinstance(new_insights, str):
+        gpt_output["insights"] = new_insights
+
+
 # =============================================================================
 # REPETITION SELECTION (shadowing only — second GPT pass)
 # =============================================================================
@@ -742,6 +792,11 @@ def create_script(
             target=target_count, batch_size=batch_size,
         )
         manifest["generation_config"]["raw_gpt_script"] = raw_content
+        _refresh_insights_after_batch(
+            gpt_output,
+            level = manifest["generation_config"]["level"],
+            model = cfg["script_model"],
+        )
     else:
         logger.info(f"Calling GPT ({cfg['script_model']}) for {project_name} …")
         resp = client.chat.completions.create(

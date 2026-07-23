@@ -1002,7 +1002,7 @@ Available `description_for_prompt` template placeholders:
 
 **Important:** any literal `{` or `}` inside the prompt template (e.g. in JSON examples) must be escaped as `{{` and `}}` so Python's `.format()` does not treat them as placeholders.
 
-Every project type prompt should include a `VIDEO METADATA` section instructing GPT to return meaningful `title`, `tags`, and `insights` fields. `insights` is formatted for use as a YouTube/Instagram video description.
+Every project type prompt should include a `VIDEO METADATA` section instructing GPT to return meaningful `title`, `tags`, and `insights` fields. `insights` is formatted for use as a YouTube/Instagram video description and MUST include a glossary of the most advanced words/expressions from the dialog (with article for nouns and a brief English gloss). For batched long-video generation, `create_script.py` regenerates `insights` from the complete dialog after all batches finish (`_refresh_insights_after_batch`), so the glossary covers every line — not just the first batch.
 
 ---
 
