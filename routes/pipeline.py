@@ -39,6 +39,20 @@ def run_script(name):
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/projects/<name>/run/review", methods=["POST"])
+def run_review(name):
+    """Proofread the generated script with Claude. Writes a structured report
+    into the manifest under "manifest_review"; the UI reloads and renders it."""
+    try:
+        data            = request.get_json(silent=True) or {}
+        prompt_override = (data.get("prompt_override") or "").strip() or None
+        from review_manifest import review_manifest
+        run_job(name, "review", review_manifest, name, prompt_override=prompt_override)
+        return jsonify({"message": "Manifest review started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/projects/<name>/run/audio", methods=["POST"])
 def run_audio(name):
     try:

@@ -1186,6 +1186,102 @@ function PromoVideoFields() {
   );
 }
 
+// ── Claude manifest review ─────────────────────────────────────────────────────
+
+const SEV_STYLE = {
+  error:      { color:"var(--red, #f87171)",   label:"Error"      },
+  warning:    { color:"var(--amber, #fbbf24)", label:"Warning"    },
+  suggestion: { color:"var(--muted)",          label:"Suggestion" },
+};
+
+function ReviewFields() {
+  const { manifest } = useApp();
+  const review = manifest?.manifest_review || null;
+  const [prompt, setPrompt] = React.useState("");
+
+  ReviewFields._getPayload = () => ({
+    prompt_override: prompt.trim() || null,
+  });
+
+  const counts = review?.counts || {};
+
+  return (
+    <div className="fields">
+      <div style={{fontSize:".84rem", color:"var(--muted)", marginBottom:".2rem"}}>
+        Claude proofreads every narration, dialog, and repetition line for German
+        grammar, spelling, naturalness, level fit, and consistency. Run it after
+        <strong> Generate Script</strong> and before audio/images. Requires{" "}
+        <code>ANTHROPIC_API_KEY</code>.
+      </div>
+
+      <div className="prompt-section">
+        <div className="prompt-header">
+          <span>What should Claude focus on? (optional)</span>
+        </div>
+        <textarea className="prompt-editor" value={prompt}
+          onChange={e=>setPrompt(e.target.value)}
+          placeholder="Leave blank for the default review (grammar, spelling, naturalness, CEFR level, consistency). Or narrow it, e.g. 'Only check case endings and verb position.'"/>
+      </div>
+
+      {review && (
+        <div style={{borderTop:"1px solid var(--border)", paddingTop:".6rem", marginTop:".4rem"}}>
+          <div style={{fontSize:".78rem", color:"var(--muted)", marginBottom:".4rem"}}>
+            Last reviewed {review.reviewed_at} · {review.model} · level {review.level} ·{" "}
+            {review.lines_reviewed} lines
+          </div>
+          <div style={{display:"flex", gap:".5rem", marginBottom:".5rem", flexWrap:"wrap"}}>
+            {["error","warning","suggestion"].map(sev => (
+              <span key={sev} style={{fontSize:".76rem", fontWeight:600,
+                color: SEV_STYLE[sev].color}}>
+                {counts[sev] || 0} {SEV_STYLE[sev].label.toLowerCase()}
+                {(counts[sev] || 0) !== 1 ? "s" : ""}
+              </span>
+            ))}
+          </div>
+          {review.summary && (
+            <div style={{fontSize:".82rem", marginBottom:".6rem", lineHeight:1.4}}>
+              {review.summary}
+            </div>
+          )}
+          {(review.issues || []).length === 0 ? (
+            <div style={{fontSize:".82rem", color:"var(--green, #4ade80)"}}>
+              ✓ No issues found.
+            </div>
+          ) : (
+            <div style={{display:"flex", flexDirection:"column", gap:".4rem"}}>
+              {review.issues.map((it, i) => {
+                const sev = SEV_STYLE[it.severity] || SEV_STYLE.suggestion;
+                return (
+                  <div key={i} style={{borderLeft:`3px solid ${sev.color}`,
+                    padding:".35rem .6rem", background:"var(--surface-2)",
+                    borderRadius:"4px"}}>
+                    <div style={{fontSize:".72rem", color:sev.color, fontWeight:600,
+                      textTransform:"uppercase", letterSpacing:".02em"}}>
+                      {sev.label} · {it.category} · {it.scene_id}
+                    </div>
+                    {it.quote && (
+                      <div style={{fontSize:".82rem", fontStyle:"italic", margin:".2rem 0"}}>
+                        “{it.quote}”
+                      </div>
+                    )}
+                    <div style={{fontSize:".8rem"}}>{it.issue}</div>
+                    {it.suggestion && (
+                      <div style={{fontSize:".8rem", marginTop:".2rem"}}>
+                        <span style={{color:"var(--muted)"}}>→ </span>
+                        <span style={{color:"var(--green, #4ade80)"}}>{it.suggestion}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Step definitions ───────────────────────────────────────────────────────────
 
 function makeSteps(projectName, manifest) {
@@ -1258,7 +1354,15 @@ function makeSteps(projectName, manifest) {
       endpoint: n => `/projects/${n}/run/script`,
     },
     {
-      id:"audio", num:2,
+      id:"review", num:2,
+      title:"Review Script (Claude)",
+      desc:"Claude proofreads the German script for grammar, naturalness, and level.",
+      Fields: ReviewFields,
+      payload: () => ReviewFields._getPayload?.() || {},
+      endpoint: n => `/projects/${n}/run/review`,
+    },
+    {
+      id:"audio", num:3,
       title:"Generate Audio",
       desc:"ElevenLabs TTS for narration, dialogue, and repetitions.",
       Fields: AudioFields,
@@ -1266,7 +1370,7 @@ function makeSteps(projectName, manifest) {
       endpoint: n => `/projects/${n}/run/audio`,
     },
     {
-      id:"images", num:3,
+      id:"images", num:4,
       title:"Generate Images",
       desc:"fal.ai generates scene images for every dialogue line.",
       Fields: ImagesFields,
@@ -1274,7 +1378,7 @@ function makeSteps(projectName, manifest) {
       endpoint: n => `/projects/${n}/run/images`,
     },
     {
-      id:"video", num:4,
+      id:"video", num:5,
       title:"Render Scene Clips",
       desc:"MoviePy renders one .mp4 per scene.",
       Fields: VideoFields,
@@ -1282,7 +1386,7 @@ function makeSteps(projectName, manifest) {
       endpoint: n => `/projects/${n}/run/video`,
     },
     {
-      id:"assemble", num:5,
+      id:"assemble", num:6,
       title:"Assemble Final Video",
       desc:"Concatenates clips, adds background music and branding.",
       Fields: AssembleFields,
@@ -1290,7 +1394,7 @@ function makeSteps(projectName, manifest) {
       endpoint: n => `/projects/${n}/run/assemble`,
     },
     {
-      id:"upload", num:6,
+      id:"upload", num:7,
       title:"Upload to YouTube",
       desc:"Metadata auto-read from manifest.",
       Fields: UploadFields,
@@ -1298,7 +1402,7 @@ function makeSteps(projectName, manifest) {
       endpoint: n => `/projects/${n}/run/upload`,
     },
     {
-      id:"upload_instagram", num:7,
+      id:"upload_instagram", num:8,
       title:"Upload to Instagram",
       desc:"Publish as a Reel via Instagram Graph API.",
       Fields: InstagramUploadFields,

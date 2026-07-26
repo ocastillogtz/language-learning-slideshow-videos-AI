@@ -191,6 +191,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
 
         # Script / GPT
         "script_model": _p("script", "openai_model", "gpt-4.1-mini"),
+        # Manifest review / Claude (review_manifest.py)
+        "review_model": _p("review", "anthropic_model", "claude-opus-4-8"),
         "level":        _p("script", "level",         "B1"),
         # Max distinct characters composited into one scene image (multi-character types).
         "max_scene_characters": _i("script", "max_scene_characters", 2),

@@ -10,6 +10,7 @@ pydub               # audio handling (needs system ffmpeg)
 python-dotenv
 requests
 openai
+anthropic            # Claude — review_manifest.py proofreads the generated script
 elevenlabs
 fal-client
 Flask
