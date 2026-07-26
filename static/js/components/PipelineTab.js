@@ -1186,7 +1186,7 @@ function PromoVideoFields() {
   );
 }
 
-// ── Claude manifest review ─────────────────────────────────────────────────────
+// ── GPT manifest review ────────────────────────────────────────────────────────
 
 const SEV_STYLE = {
   error:      { color:"var(--red, #f87171)",   label:"Error"      },
@@ -1194,33 +1194,71 @@ const SEV_STYLE = {
   suggestion: { color:"var(--muted)",          label:"Suggestion" },
 };
 
-function ReviewFields() {
-  const { manifest } = useApp();
+// Rule id → short human label + which group it belongs to (for display only).
+const RULE_LABELS = {
+  grammar:        "Grammar",
+  spelling:       "Spelling",
+  highlight:      "Highlight missing",
+  highlight_qual: "Highlight quality",
+  level:          "Level fit",
+  coherence:      "Coherence",
+  register:       "Register",
+  speaker_flow:   "Speaker flow",
+  visual_detail:  "Visual detail",
+  visual_match:   "Visual match",
+  narration:      "Narration",
+  length:         "Length",
+  other:          "Other",
+};
+
+const FIELD_LABELS = { subtitle_text: "subtitle", scene_visual: "visual" };
+
+function ReviewFields({ projectName }) {
+  const { manifest, reloadManifest, toast } = useApp();
   const review = manifest?.manifest_review || null;
-  const [prompt, setPrompt] = React.useState("");
+  const [prompt, setPrompt]     = React.useState("");
+  const [applying, setApplying] = React.useState(null);   // null | "all" | "<key>"
 
   ReviewFields._getPayload = () => ({
     prompt_override: prompt.trim() || null,
   });
 
-  const counts = review?.counts || {};
+  const counts   = review?.counts || {};
+  const issues   = review?.issues || [];
+  const remaining = issues.filter(i => i.fixed && !i.applied).length;
+
+  async function applyFixes(keys, tag) {
+    setApplying(tag);
+    try {
+      const d = await apiPost(`/projects/${projectName}/review/apply`,
+        keys ? { keys } : {});
+      toast("Fixes applied", `${d.applied} correction${d.applied !== 1 ? "s" : ""} written to the manifest.`, "ok");
+      await reloadManifest(projectName);
+    } catch (e) {
+      toast("Error", e.message, "err");
+    } finally {
+      setApplying(null);
+    }
+  }
 
   return (
     <div className="fields">
       <div style={{fontSize:".84rem", color:"var(--muted)", marginBottom:".2rem"}}>
-        Claude proofreads every narration, dialog, and repetition line for German
-        grammar, spelling, naturalness, level fit, and consistency. Run it after
-        <strong> Generate Script</strong> and before audio/images. Requires{" "}
-        <code>ANTHROPIC_API_KEY</code>.
+        GPT checks every narration, dialog, and repetition line against the review
+        rules (grammar, spelling, vocabulary highlighting, CEFR level, coherence,
+        register, speaker flow, and the visual prompts). It is an independent
+        pass — it never sees the prompt used to generate the script. Run it after
+        <strong> Generate Script</strong> and before audio/images. Fixes are only
+        written when you click <strong>Apply</strong>. Requires <code>OPENAI_API_KEY</code>.
       </div>
 
       <div className="prompt-section">
         <div className="prompt-header">
-          <span>What should Claude focus on? (optional)</span>
+          <span>What should GPT focus on? (optional)</span>
         </div>
         <textarea className="prompt-editor" value={prompt}
           onChange={e=>setPrompt(e.target.value)}
-          placeholder="Leave blank for the default review (grammar, spelling, naturalness, CEFR level, consistency). Or narrow it, e.g. 'Only check case endings and verb position.'"/>
+          placeholder="Leave blank to run the full rule set. Or narrow it, e.g. 'Only check case endings and Sie/du consistency.'"/>
       </div>
 
       {review && (
@@ -1229,7 +1267,7 @@ function ReviewFields() {
             Last reviewed {review.reviewed_at} · {review.model} · level {review.level} ·{" "}
             {review.lines_reviewed} lines
           </div>
-          <div style={{display:"flex", gap:".5rem", marginBottom:".5rem", flexWrap:"wrap"}}>
+          <div style={{display:"flex", gap:".5rem", marginBottom:".5rem", flexWrap:"wrap", alignItems:"center"}}>
             {["error","warning","suggestion"].map(sev => (
               <span key={sev} style={{fontSize:".76rem", fontWeight:600,
                 color: SEV_STYLE[sev].color}}>
@@ -1237,27 +1275,38 @@ function ReviewFields() {
                 {(counts[sev] || 0) !== 1 ? "s" : ""}
               </span>
             ))}
+            {remaining > 0 && (
+              <button className="btn-primary" style={{marginLeft:"auto", fontSize:".78rem", padding:".3rem .7rem"}}
+                disabled={!!applying}
+                onClick={() => applyFixes(null, "all")}>
+                {applying === "all" ? "Applying…" : `Apply all ${remaining} fix${remaining !== 1 ? "es" : ""}`}
+              </button>
+            )}
           </div>
           {review.summary && (
             <div style={{fontSize:".82rem", marginBottom:".6rem", lineHeight:1.4}}>
               {review.summary}
             </div>
           )}
-          {(review.issues || []).length === 0 ? (
+          {issues.length === 0 ? (
             <div style={{fontSize:".82rem", color:"var(--green, #4ade80)"}}>
               ✓ No issues found.
             </div>
           ) : (
             <div style={{display:"flex", flexDirection:"column", gap:".4rem"}}>
-              {review.issues.map((it, i) => {
+              {issues.map((it, i) => {
                 const sev = SEV_STYLE[it.severity] || SEV_STYLE.suggestion;
+                const key = `${it.scene_id}::${it.field}`;
+                const ruleLabel  = RULE_LABELS[it.rule] || it.rule;
+                const fieldLabel = FIELD_LABELS[it.field];
                 return (
                   <div key={i} style={{borderLeft:`3px solid ${sev.color}`,
                     padding:".35rem .6rem", background:"var(--surface-2)",
-                    borderRadius:"4px"}}>
+                    borderRadius:"4px", opacity: it.applied ? 0.6 : 1}}>
                     <div style={{fontSize:".72rem", color:sev.color, fontWeight:600,
                       textTransform:"uppercase", letterSpacing:".02em"}}>
-                      {sev.label} · {it.category} · {it.scene_id}
+                      {sev.label} · {ruleLabel} · {it.scene_id}
+                      {fieldLabel ? ` · ${fieldLabel}` : ""}
                     </div>
                     {it.quote && (
                       <div style={{fontSize:".82rem", fontStyle:"italic", margin:".2rem 0"}}>
@@ -1265,10 +1314,21 @@ function ReviewFields() {
                       </div>
                     )}
                     <div style={{fontSize:".8rem"}}>{it.issue}</div>
-                    {it.suggestion && (
-                      <div style={{fontSize:".8rem", marginTop:".2rem"}}>
-                        <span style={{color:"var(--muted)"}}>→ </span>
-                        <span style={{color:"var(--green, #4ade80)"}}>{it.suggestion}</span>
+                    {it.fixed && (
+                      <div style={{display:"flex", alignItems:"flex-start", gap:".5rem", marginTop:".3rem"}}>
+                        <div style={{fontSize:".8rem", flex:1}}>
+                          <span style={{color:"var(--muted)"}}>→ </span>
+                          <span style={{color:"var(--green, #4ade80)"}}>{it.fixed}</span>
+                        </div>
+                        {it.applied ? (
+                          <span style={{fontSize:".74rem", color:"var(--green, #4ade80)", whiteSpace:"nowrap"}}>✓ Applied</span>
+                        ) : (
+                          <button className="btn-ghost" style={{fontSize:".74rem", padding:".2rem .55rem", whiteSpace:"nowrap"}}
+                            disabled={!!applying}
+                            onClick={() => applyFixes([key], key)}>
+                            {applying === key ? "…" : "Apply"}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1355,8 +1415,8 @@ function makeSteps(projectName, manifest) {
     },
     {
       id:"review", num:2,
-      title:"Review Script (Claude)",
-      desc:"Claude proofreads the German script for grammar, naturalness, and level.",
+      title:"Review Script (GPT)",
+      desc:"GPT proofreads the German script for grammar, naturalness, and level.",
       Fields: ReviewFields,
       payload: () => ReviewFields._getPayload?.() || {},
       endpoint: n => `/projects/${n}/run/review`,

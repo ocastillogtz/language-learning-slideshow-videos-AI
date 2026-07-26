@@ -41,7 +41,7 @@ def run_script(name):
 
 @bp.route("/projects/<name>/run/review", methods=["POST"])
 def run_review(name):
-    """Proofread the generated script with Claude. Writes a structured report
+    """Proofread the generated script with GPT. Writes a structured report
     into the manifest under "manifest_review"; the UI reloads and renders it."""
     try:
         data            = request.get_json(silent=True) or {}
@@ -49,6 +49,23 @@ def run_review(name):
         from review_manifest import review_manifest
         run_job(name, "review", review_manifest, name, prompt_override=prompt_override)
         return jsonify({"message": "Manifest review started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/review/apply", methods=["POST"])
+def apply_review(name):
+    """Write the review's corrected values back into the manifest. Body may carry
+    {"keys": ["<scene_id>::<field>", ...]} to apply a subset; omit to apply all.
+    Synchronous manifest mutation (fast) — reload the manifest afterwards."""
+    try:
+        data = request.get_json(silent=True) or {}
+        raw  = data.get("keys")
+        keys = [str(k) for k in raw] if isinstance(raw, list) else None
+        from review_manifest import apply_review_fixes
+        return jsonify(apply_review_fixes(name, keys))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
