@@ -55,6 +55,80 @@ _SUBTITLE_MAX_CHARS = 120   # subtitle longer than this is hard to read (length)
 # A vocabulary highlight: _word_ or *word* with non-space content inside.
 _HIGHLIGHT_RE = re.compile(r"_[^_\s][^_]*_|\*[^*\s][^*]*\*")
 
+# ── Auto-highlight (deterministic fix for the "highlight" rule) ─────────────────
+# A dialog line with no _word_/*word* highlight can be fixed without an LLM by
+# underlining one meaningful vocabulary word. German nouns are capitalized, so a
+# capitalized word that sits *mid-sentence* is almost certainly a noun — the ideal
+# thing to highlight. We fall back to the longest non-filler word otherwise.
+_WORD_RE       = re.compile(r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß]*")
+_GRAMMAR_TAG_RE = re.compile(r"-\[[^\]]*\]-")           # inline -[label]- tag, never highlight inside
+_SPEAKER_RE    = re.compile(r"^\s*[A-ZÄÖÜ][A-Za-zÄÖÜäöüß]+:\s*")  # leading "Name: " speaker prefix
+_SENT_END      = ".!?…:"                                # a capital right after these is sentence-initial
+
+# Filler words we never highlight (articles, pronouns, conjunctions, prepositions,
+# auxiliaries, common particles). Lower-cased; capitalized pronouns like "Sie"
+# are caught by the lower-cased comparison.
+_HL_STOPWORDS = {
+    "der","die","das","den","dem","des","ein","eine","einen","einem","einer","eines",
+    "ich","du","er","sie","es","wir","ihr","man","mich","dich","sich","uns","euch",
+    "mir","dir","ihm","ihn","ihnen","mein","dein","sein","unser","euer",
+    "und","oder","aber","denn","sondern","dass","weil","wenn","als","wie","ob","damit","dann",
+    "in","an","auf","für","mit","von","zu","bei","nach","aus","über","unter","vor","hinter",
+    "um","durch","gegen","ohne","seit","bis","zwischen","gegenüber",
+    "ist","sind","war","waren","bin","bist","hat","haben","hatte","hatten","sein",
+    "wird","werden","kann","können","muss","müssen","soll","sollen","will","wollen",
+    "nicht","auch","nur","schon","noch","sehr","so","ja","nein","mal","doch","immer",
+    "hier","da","dort","jetzt","etwas","alle","viel","mehr","gut","selbst","gerade",
+    "wichtig","richtig","genau","absolut","manchmal","natürlich","vielleicht","wirklich",
+}
+
+
+def _auto_highlight(text: str) -> str | None:
+    """Add a vocabulary highlight to a line that has none, by underlining one
+    meaningful word with `_word_`. Returns the corrected line, or None if the line
+    already has a highlight or no suitable word could be chosen (leave it to a human).
+
+    The choice is deterministic: prefer a mid-sentence capitalized word (a German
+    noun), else the longest non-filler word (>= 5 letters). Speaker prefixes and
+    inline `-[label]-` grammar tags are never touched.
+    """
+    if not text or _HIGHLIGHT_RE.search(text):
+        return None
+
+    prefix_end = (_SPEAKER_RE.match(text).end() if _SPEAKER_RE.match(text) else 0)
+    tag_spans  = [t.span() for t in _GRAMMAR_TAG_RE.finditer(text)]
+
+    def _blocked(a: int, b: int) -> bool:
+        # inside the speaker prefix or overlapping a -[label]- tag
+        return a < prefix_end or any(s < b and a < e for s, e in tag_spans)
+
+    def _sentence_initial(start: int) -> bool:
+        i = start - 1
+        while i >= 0 and text[i].isspace():
+            i -= 1
+        return i < 0 or text[i] in _SENT_END
+
+    words = [w for w in _WORD_RE.finditer(text) if not _blocked(*w.span())]
+    if not words:
+        return None
+
+    def _cap(w) -> bool:
+        return w.group(0)[:1].isupper()
+
+    # Preferred: capitalized, mid-sentence, not a filler word (→ a real noun).
+    nouns = [w for w in words
+             if _cap(w) and len(w.group(0)) >= 2 and not _sentence_initial(w.start())
+             and w.group(0).lower() not in _HL_STOPWORDS]
+    pool = nouns or [w for w in words
+                     if len(w.group(0)) >= 5 and w.group(0).lower() not in _HL_STOPWORDS]
+    if not pool:
+        return None
+
+    # Longest word wins; ties break toward the earliest occurrence.
+    best  = max(pool, key=lambda w: (len(w.group(0)), -w.start()))
+    a, b  = best.span()
+    return f"{text[:a]}_{text[a:b]}_{text[b:]}"
+
 # Subtitle markup used across the pipeline, explained to GPT so it doesn't flag
 # the markers themselves as spelling errors:
 #   _word_    vocabulary highlight (underline)
@@ -178,13 +252,18 @@ def _deterministic_findings(manifest: dict) -> list[dict]:
         role = _scene_role(scene)
         text = _scene_text(scene)
 
-        # R3 — every dialog line must highlight at least one word.
+        # R3 — every dialog line must highlight at least one word. We can fix this
+        # deterministically by underlining a meaningful word; if no good candidate
+        # is found, it stays a flag-only finding for a human to resolve.
         if role == "dialog" and text and not _HIGHLIGHT_RE.search(text):
+            auto = _auto_highlight(text)
             out.append({
                 "scene_id": sid, "field": "subtitle_text", "rule": "highlight",
                 "severity": "warning", "quote": text,
-                "issue": "No highlighted vocabulary word (_word_ or *word*).",
-                "fixed": "",
+                "issue": "No highlighted vocabulary word (_word_ or *word*)."
+                         + ("" if auto else " No obvious word to auto-highlight —"
+                                            " add one manually."),
+                "fixed": auto or "",
             })
 
         # R9 — a dialog scene's visual must be present and detailed enough.
