@@ -57,9 +57,11 @@ _HIGHLIGHT_RE = re.compile(r"_[^_\s][^_]*_|\*[^*\s][^*]*\*")
 
 # ── Auto-highlight (deterministic fix for the "highlight" rule) ─────────────────
 # A dialog line with no _word_/*word* highlight can be fixed without an LLM by
-# underlining one meaningful vocabulary word. German nouns are capitalized, so a
-# capitalized word that sits *mid-sentence* is almost certainly a noun — the ideal
+# marking one meaningful vocabulary word. German nouns are capitalized, so a
+# capitalized word that sits mid-sentence is almost certainly a noun — the ideal
 # thing to highlight. We fall back to the longest non-filler word otherwise.
+# Because this adds exactly ONE highlight, it uses *asterisks* per the pipeline
+# convention (one highlight → *word*; several → _word_ each).
 _WORD_RE       = re.compile(r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß]*")
 _GRAMMAR_TAG_RE = re.compile(r"-\[[^\]]*\]-")           # inline -[label]- tag, never highlight inside
 _SPEAKER_RE    = re.compile(r"^\s*[A-ZÄÖÜ][A-Za-zÄÖÜäöüß]+:\s*")  # leading "Name: " speaker prefix
@@ -84,8 +86,8 @@ _HL_STOPWORDS = {
 
 
 def _auto_highlight(text: str) -> str | None:
-    """Add a vocabulary highlight to a line that has none, by underlining one
-    meaningful word with `_word_`. Returns the corrected line, or None if the line
+    """Add a vocabulary highlight to a line that has none, by marking one
+    meaningful word with `*word*`. Returns the corrected line, or None if the line
     already has a highlight or no suitable word could be chosen (leave it to a human).
 
     The choice is deterministic: prefer a mid-sentence capitalized word (a German
@@ -127,20 +129,23 @@ def _auto_highlight(text: str) -> str | None:
     # Longest word wins; ties break toward the earliest occurrence.
     best  = max(pool, key=lambda w: (len(w.group(0)), -w.start()))
     a, b  = best.span()
-    return f"{text[:a]}_{text[a:b]}_{text[b:]}"
+    return f"{text[:a]}*{text[a:b]}*{text[b:]}"
 
 # Subtitle markup used across the pipeline, explained to GPT so it doesn't flag
-# the markers themselves as spelling errors:
-#   _word_    vocabulary highlight (underline)
-#   *word*    emphasis
+# the markers themselves as spelling errors. Both `*word*` and `_word_` mark a
+# vocabulary highlight; the convention is count-based:
+#   *word*    the sole highlight in a line (one highlight → asterisks)
+#   _word_    one of several highlights in a line (many → underscores each)
 #   -[label]- inline grammar/tense tag shown before the phrase
 _MARKUP_NOTE = (
     "The text uses pipeline markup that is NOT part of the German and must not "
-    "be reported as an error: `_word_` marks a vocabulary highlight, `*word*` "
-    "marks emphasis, and `-[label]-` is an inline grammar/tense tag. Review the "
-    "German inside and around the markup, never the markers themselves. Any "
-    "corrected line you return must KEEP this markup and still highlight at "
-    "least one meaningful vocabulary word with `_word_` or `*word*`."
+    "be reported as an error: `*word*` and `_word_` both mark a vocabulary "
+    "highlight (a line with one highlight uses *asterisks*; a line with several "
+    "wraps each in _underscores_), and `-[label]-` is an inline grammar/tense "
+    "tag. Review the German inside and around the markup, never the markers "
+    "themselves. Every dialog line must keep at least one highlight, so any "
+    "corrected line you return must still highlight at least one meaningful "
+    "vocabulary word — one with *asterisks*, or several each with _underscores_."
 )
 
 _RULES_BLOCK = """Check every scene against these rules and report each violation:
