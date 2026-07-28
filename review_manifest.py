@@ -268,6 +268,23 @@ def _build_prompt(manifest: dict, lines: list[dict], level: str,
     return system, user
 
 
+# GPT sometimes echoes the field name from the review records we feed it (which
+# use `text` for the German line and `visual` for the image prompt) instead of
+# the manifest field names we ask for. Normalize those aliases so a corrected
+# value is still applied to the right manifest field rather than silently dropped.
+_FIELD_ALIASES = {
+    "text":         "subtitle_text",
+    "subtitle":     "subtitle_text",
+    "subtitle_text": "subtitle_text",
+    "visual":       "scene_visual",
+    "scene_visual": "scene_visual",
+}
+
+
+def _normalize_field(field: str) -> str:
+    return _FIELD_ALIASES.get((field or "").strip(), (field or "").strip())
+
+
 def _current_value(scene: dict, field: str):
     if field == "subtitle_text":
         return scene.get("subtitle_text")
@@ -339,7 +356,7 @@ def review_manifest(project_name: str, prompt_override: str | None = None) -> di
     issues, counts = [], {"error": 0, "warning": 0, "suggestion": 0}
     for f in merged:
         sev   = f.get("severity", "suggestion")
-        field = f.get("field", "general")
+        field = _normalize_field(f.get("field", "general"))
         sid   = f.get("scene_id", "general")
         fixed = (f.get("fixed") or "").strip()
         original = _current_value(scenes_by_id.get(sid, {}), field)
