@@ -49,18 +49,23 @@ def create_project(
     context: str,
     learning_points: str = "",
     level: str | None = None,
+    visual_guidelines: str = "",
 ) -> Path:
     """
     Create the project folder structure and initial manifest.
 
     Parameters
     ----------
-    project_name     : Unique folder name for the project.
-    project_type_key : Key from assets/project_types/project_types.json
-                       (e.g. "shadowing", "story", "word_learning").
-    context          : Free-text description of the scene / video topic.
-    learning_points  : Optional learning objectives or word list.
-    level            : Target language level (A1–C2). Defaults to config value.
+    project_name      : Unique folder name for the project.
+    project_type_key  : Key from assets/project_types/project_types.json
+                        (e.g. "shadowing", "story", "word_learning").
+    context           : Free-text description of the scene / video topic.
+    learning_points   : Optional learning objectives or word list.
+    level             : Target language level (A1–C2). Defaults to config value.
+    visual_guidelines : Optional art-direction brief applied to every scene —
+                        setting, character clothing/props, mood/style. Drives the
+                        image prompts when no pre-made location_key is chosen (the
+                        default), so you don't need a location-library entry.
     """
     cfg          = load_config()
     project_path = cfg["projects_dir"] / project_name
@@ -119,6 +124,7 @@ def create_project(
             "level":                    resolved_level,
             "provided_context":         context,
             "provided_learning_points": learning_points,
+            "visual_guidelines":        visual_guidelines,
             "words": _parse_words(project_type, learning_points),
             "prompt_script":            None,
             "prompt_repetitions":       None,
@@ -152,8 +158,12 @@ def main() -> None:
                    help="Learning objectives or word list")
     p.add_argument("--level", default=None,
                    help=f"Target language level, e.g. B1 (default: config value). One of {VALID_LEVELS}")
+    p.add_argument("--visual-guidelines", default="", dest="visual_guidelines",
+                   help="Optional art-direction brief applied to every scene "
+                        "(setting, character clothing/props, mood/style)")
     a = p.parse_args()
-    create_project(a.project_name, a.project_type_key, a.context, a.learning_points, a.level)
+    create_project(a.project_name, a.project_type_key, a.context, a.learning_points,
+                   a.level, a.visual_guidelines)
 
 
 if __name__ == "__main__":

@@ -16,3 +16,4 @@ Flask
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2
+mcp                 # MCP server bridge (mcp_server.py) — Claude ↔ pipeline

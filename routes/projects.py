@@ -83,6 +83,7 @@ def _summarise_project(d: Path, m: dict) -> dict:
         "title":            vi.get("title") or m.get("title"),
         "project_type_key": meta.get("project_type_key") or m.get("style"),
         "location_key":     gen.get("location_key") or m.get("location-key"),
+        "visual_guidelines": gen.get("visual_guidelines") or "",
         "characters":       gen.get("characters") or [],
         "scene_count":      len(scenes),
         "has_script":       bool(tts_scenes),
@@ -255,12 +256,13 @@ def create_project():
         context          = data.get("context", data.get("scene", "")).strip()
         learning_points  = data.get("learning_points", data.get("learning", "")).strip()
         level            = data.get("level", "").strip() or None
+        visual_guidelines = data.get("visual_guidelines", "").strip()
 
         if not name or not context:
             return jsonify({"error": "project_name and context are required"}), 400
 
         from create_project import create_project as _create
-        _create(name, project_type_key, context, learning_points, level)
+        _create(name, project_type_key, context, learning_points, level, visual_guidelines)
         return jsonify({"message": "Created", "project_name": name})
     except FileExistsError as e:
         return jsonify({"error": str(e)}), 409

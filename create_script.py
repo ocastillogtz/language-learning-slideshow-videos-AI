@@ -129,12 +129,18 @@ def _build_prompt(
     char_names = gen["characters"]
     char_a, char_b = char_names[0], char_names[1]
     location_key   = gen.get("location_key") or ""
+    visual_guidelines = (gen.get("visual_guidelines") or "").strip()
     level          = gen["level"]
     dialog_count   = dialog_count_override if dialog_count_override is not None else (gen.get("dialog_count") or None)
 
     if location_key and location_key in all_locs:
         loc_data      = all_locs[location_key]
         location_desc = loc_data["description"]
+    elif visual_guidelines:
+        # No pre-made location (the default): derive the setting from the
+        # project's visual guidelines so the GPT-authored scene_visuals match it.
+        location_key  = ""
+        location_desc = visual_guidelines
     else:
         location_key  = ""
         location_desc = (
@@ -201,6 +207,23 @@ def _build_prompt(
             f"plus up to {max(0, max_scene_chars - 1)} other). The conversation as a whole still "
             "involves the full cast — just don't crowd a single image. Use this instead of "
             "\"scene_characters\".\n"
+        )
+
+    # Visual guidelines: an art-direction brief that must shape EVERY illustration,
+    # regardless of project type (word_learning templates, for example, don't inject
+    # the free-text context at all). Appended last so it applies on top of the type's
+    # own scene rules.
+    if visual_guidelines:
+        prompt += (
+            "\n\n=== VISUAL GUIDELINES (MANDATORY, apply to every image) ===\n"
+            f"{visual_guidelines}\n\n"
+            "These guidelines define the setting/environment, the characters' clothing "
+            "and props, and the overall mood/art-direction for this whole video. Honor "
+            "them in EVERY \"scene_visual\" and in \"main_background\": keep the setting, "
+            "the described outfits/props and the mood consistent across all scenes. When "
+            "a word or line calls for a specific action, stage that action WITHIN this "
+            "setting and wardrobe rather than switching to a generic environment or the "
+            "characters' default clothing.\n"
         )
     return prompt
 
@@ -550,6 +573,7 @@ def build_scene_list(
     gen        = manifest["generation_config"]
     pipe       = manifest["pipeline_config"]
     loc_key    = gen.get("location_key") or ""
+    visual_guidelines = (gen.get("visual_guidelines") or "").strip()
     char_names = gen["characters"]
     cast       = list(char_names)
     multi      = bool(project_type.get("supports_multi_character")) and len(cast) > 2
@@ -559,6 +583,11 @@ def build_scene_list(
     if loc_key and loc_key in all_locs:
         loc_data = all_locs[loc_key]
         loc_desc = loc_data["description"]
+    elif visual_guidelines:
+        # Default path: no pre-made location. Feed the visual guidelines into every
+        # image prompt's "Scene at:" line and the establishing shot so the setting
+        # and character attire stay consistent without a location-library entry.
+        loc_desc = visual_guidelines
     else:
         loc_desc = "a setting chosen by the model to fit the scene"
     inter_ms       = pipe["inter_pause_ms"]

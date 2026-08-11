@@ -1,6 +1,6 @@
 # AI-Powered Language Learning Video Generator
 
-An automated pipeline for creating educational German language learning videos. Provide characters, a location, and a learning objective — the system writes the script, generates voiced audio, illustrates every scene with AI art, renders subtitled clips, and assembles a finished video ready for upload.
+An automated pipeline for creating educational German language learning videos. Provide characters, a scene description with optional **visual guidelines**, and a learning objective — the system writes the script, generates voiced audio, illustrates every scene with AI art, renders subtitled clips, and assembles a finished video ready for upload. By default no pre-made location is used: the setting and the characters' attire come straight from your scene description and visual guidelines (a location from the library is an opt-in override).
 
 Two output formats are supported:
 
@@ -15,10 +15,25 @@ A **web-based control panel** (`app.py`) lets you manage every project and asset
 
 ---
 
+## Two Ways to Work
+
+There are two ways to drive the pipeline. They share the same manifest and the same generation code — pick whichever fits how you're working.
+
+| | **Method 1 — Classic Web UI** | **Method 2 — Claude Code (MCP)** |
+|---|---|---|
+| How | Point-and-click in the browser (`app.py`) | Chat naturally in Claude Code; Claude calls the pipeline via MCP tools |
+| Best for | Full control: editing scenes, regenerating single images/audio, previewing, assembly, upload | Refining an idea in chat and turning it straight into a project + script — no copy-pasting |
+| Covers | Every pipeline step, end to end | The **brief seam** only: `create_project` + `generate_script` (the GPT step) |
+| Setup | [Start the web control panel](#6-start-the-web-control-panel) | [Claude Code MCP Bridge](#claude-code-mcp-bridge) |
+
+A common workflow is to **combine them**: use Claude Code to refine the idea and generate the script, then open the web UI on that same project to review, generate audio/images, and assemble the final video.
+
+---
+
 ## Web UI
 
 ### Projects dashboard
-The sidebar lists all your projects with status indicators. Hit **+ New Project** to open the creation modal — pick a project type, language level, describe the scene, and optionally specify learning points.
+The sidebar lists all your projects with status indicators. Hit **+ New Project** to open the creation modal — pick a project type, language level, describe the scene, and optionally specify learning points and **visual guidelines** (an art-direction brief — setting, character clothing/props, mood — applied to every scene).
 
 <p align="center">
   <img src="readme_resources/initial_screen.png" width="780" alt="Projects dashboard">
@@ -82,7 +97,7 @@ Manifest sections created:
 |---|---|
 | `project_metadata` | name, creation date, project type key |
 | `video_info` | title, tags, format, insights (filled by script step) |
-| `generation_config` | location, characters, level, prompts, raw GPT output |
+| `generation_config` | location (optional), visual guidelines, characters, level, prompts, raw GPT output |
 | `pipeline_config` | inter-pause duration, repetition pause factor |
 | `scenes` | empty list; populated by script step |
 
@@ -146,7 +161,9 @@ The raw GPT JSON response is saved to `generation_config.raw_gpt_script` before 
 
 **Character auto-detection:** when opening the Script step, the UI scans `provided_context` (your scene description) for known character names and pre-fills the Character A / Character B dropdowns automatically. For multi-character types (`story`, `word_learning`, `register_phrases` and their `_long` variants), additional cast members beyond the first two can be added via checkboxes that appear below the main dropdowns.
 
-**Optional location:** the location field is optional. When the "Use specific location" checkbox is unchecked, no location key is sent and GPT chooses an appropriate setting based on the scene content and learning objectives. The model's chosen setting is then reflected in the generated image prompts.
+**Visual guidelines & locations:** by default **no pre-made location is used**. The setting, the characters' clothing/props and the overall mood come from the optional **`visual_guidelines`** field (set at project creation) together with the scene description. When `visual_guidelines` is provided, it is injected verbatim into every scene's `Scene at:` image prompt and appended to the GPT script prompt as a mandatory `=== VISUAL GUIDELINES ===` block — so it shapes both the authored `scene_visual`s and the illustrations, and it applies even to project types (like `word_learning`) that don't otherwise read the free-text context. If neither a location nor visual guidelines are given, GPT falls back to choosing an appropriate setting on its own.
+
+Selecting a pre-made location is now an **opt-in override**: tick "Use specific location" (or pass `location_key` to `generate_script`) to reuse a library location's description and reference artwork instead of the guidelines-driven environment.
 
 **Dialogue count override:** you can specify exactly how many dialogue lines (or pairs, for `register_phrases`/`grammar_pairs`) to generate. Leave blank to use the project type's default range. The count is injected into the GPT prompt via the `{DIALOG_COUNT}` placeholder.
 
@@ -397,7 +414,7 @@ A Flask + React (Babel standalone) single-page application.
 
 ### Projects sidebar
 
-- Create projects via a modal (name, project type, scene description, learning points)
+- Create projects via a modal (name, project type, scene description, learning points, visual guidelines)
 - All projects listed with location, type, and character pair
 
 ### Pipeline tab
@@ -406,7 +423,7 @@ Seven collapsible step cards covering the full pipeline:
 
 | Step | Controls |
 |---|---|
-| 1 · Script | Character A/B (auto-detected from scene description); **Additional characters** (for `story`, `word_learning`, `register_phrases` and their `_long` variants); **"Use specific location" checkbox + dropdown** (optional), project type, **dialogue count** (optional number, uses type default if blank), prompt preview/override |
+| 1 · Script | Character A/B (auto-detected from scene description); **Additional characters** (for `story`, `word_learning`, `register_phrases` and their `_long` variants); **"Use specific location" checkbox + dropdown** (opt-in override — off by default, environment comes from the project's visual guidelines instead), project type, **dialogue count** (optional number, uses type default if blank), prompt preview/override |
 | 2 · Audio | Run all scenes |
 | 3 · Images | Overwrite flag, ignore-cache flag, location-reference flag, **Image-saving mode** (2×2 mosaic, horizontal projects only) |
 | 4 · Video | Annotated subtitles flag, footnote/disclaimer text (optional) + footnote read time (extra seconds the scene is held so the footnote can be read), shadowing repeat overlay (message + font size) |
@@ -440,6 +457,98 @@ Full CRUD for all asset types:
 | Background Audio | Audio tracks for assembly |
 | SFX | Sound effect assets |
 | Subtitle Preview | Render a still preview of narration/subtitle/footnote text over a sample background, using the live per-orientation config styling (matches the real render). Pick orientation + style (dialogue/narration), type text, optionally add a footnote or the centered "repeat" overlay |
+
+---
+
+## Claude Code MCP Bridge
+
+`mcp_server.py` exposes the pipeline to a Claude chat (Claude Code or Claude Desktop) as **MCP tools**, so you can refine a video idea in chat and have Claude create the project and run the script step directly — no copy-pasting into the web UI.
+
+This is the **brief seam**: Claude fills in the project brief and kicks off the existing GPT script step ([`create_script.py`](create_script.py)). All heavy generation still runs through the normal pipeline; audio, images and assembly stay in the web UI.
+
+### Tools exposed
+
+| Tool | What it does |
+|---|---|
+| `list_project_types` | Available video types + which ones need a word list |
+| `list_characters` | Castable speakers + their descriptions |
+| `list_locations` | Location keys + descriptions (only needed for the opt-in location override) |
+| `create_project` | Create the project folder + manifest from the brief (name, type, level, scene description, optional learning points, optional **visual guidelines**) |
+| `generate_script` | Run the GPT script step (title, dialog, scenes) |
+| `get_project_status` | Inspect a project's current pipeline state |
+
+The three `list_*` tools let Claude discover valid types, characters and locations, so it fills the brief with real values instead of guessing.
+
+### Registration
+
+The server runs under the **Anaconda base** interpreter (the same environment as the pipeline), not the repo `.venv`. Install the SDK once:
+
+```bash
+python -m pip install "mcp[cli]"
+```
+
+**Claude Code** — already wired via [`.mcp.json`](.mcp.json) in the project root. Open Claude Code in this directory and approve the server when prompted; verify with `/mcp`.
+
+**Claude Desktop** — add this to `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json`) and restart the app:
+
+```json
+{
+  "mcpServers": {
+    "german-video-pipeline": {
+      "command": "C:\\Users\\Omar\\anaconda3\\python.exe",
+      "args": ["C:\\Users\\Omar\\Documents\\germanLearningVidsAIPowered\\mcp_server.py"]
+    }
+  }
+}
+```
+
+`generate_script` calls the OpenAI API, so `OPENAI_API_KEY` must be set in `.env` (the pipeline already loads it). See [`MCP_BRIDGE.md`](MCP_BRIDGE.md) for full details.
+
+### Troubleshooting: `german-video-pipeline` doesn't show up
+
+If `/mcp` doesn't list the server, the most common cause is **launch surface**:
+
+- **You're running Claude Code inside the Claude Desktop app** (Cowork / local-code-session mode), not the standalone `claude` CLI. Symptom: typing `claude` in a terminal (Git Bash / PowerShell) fails with "command not found", because the CLI isn't installed — the desktop app is what's running Claude Code. You can confirm with `echo $CLAUDE_CODE_ENTRYPOINT` → `claude-desktop`.
+- In that case the project-scoped [`.mcp.json`](.mcp.json) may not be picked up. Register the server in the **Claude Desktop config** instead: `%APPDATA%\Claude\claude_desktop_config.json` (`C:\Users\<you>\AppData\Roaming\Claude\claude_desktop_config.json`). Add an `mcpServers` block at the **top level** of that JSON (alongside `coworkUserFilesPath` / `preferences` — do not put it inside `preferences`):
+
+  ```json
+  "mcpServers": {
+    "german-video-pipeline": {
+      "command": "C:\\Users\\Omar\\anaconda3\\python.exe",
+      "args": ["C:\\Users\\Omar\\Documents\\germanLearningVidsAIPowered\\mcp_server.py"]
+    }
+  }
+  ```
+
+  Then **fully quit and reopen the Claude Desktop app** (a new session alone isn't enough — the app reads this file at startup) and check `/mcp` again.
+- Other things to check: the `command` path points at the **Anaconda** interpreter (where `mcp` and the pipeline deps are installed), not the repo `.venv`; the `mcp_server.py` path is absolute; and the JSON is still valid after editing (a stray comma will silently disable the whole file).
+
+### Tutorial: idea → finished video
+
+A short end-to-end walk-through combining both methods.
+
+**Method 2 — refine and script in Claude Code**
+
+1. Open Claude Code in the project folder and confirm the bridge is live with `/mcp` (you should see `german-video-pipeline` with 6 tools).
+2. Refine your idea in chat as usual — the scenario, the grammar point, the vocabulary.
+3. When it's ready, ask Claude to build it, e.g.:
+
+   > "Create a `shadowing` project called `cafe_smalltalk` about two friends ordering coffee and making weekend plans, learning point: separable verbs. Then generate the script with Zahra and Amir at the `cafe`."
+
+4. Claude calls `create_project` then `generate_script`. Ask `get_project_status` any time to see what exists.
+
+> Tip: if you're unsure what's available, just ask "what project types / characters / locations can I use?" — Claude reads them live via the `list_*` tools.
+
+**Method 1 — finish in the Web UI**
+
+5. Start the control panel (`python app.py`, then open `http://localhost:5000`).
+6. Open the `cafe_smalltalk` project — the script Claude generated is already there.
+7. Review and tweak scenes, then run **Audio**, **Images**, **Render** and **Assemble** from the Pipeline tab.
+8. Upload the finished video.
+
+**Fully classic (Method 1 only)**
+
+Skip Claude entirely: hit **+ New Project** in the web UI, fill in the same brief fields, and run every step — including script generation — from the browser.
 
 ---
 
@@ -536,11 +645,12 @@ Full CRUD for all asset types:
     "video_format": "vertical"   // "vertical" (1080×1920) or "horizontal" (1920×1080)
   },
   "generation_config": {
-    "location_key": "cafe",       // empty string when no location was specified
+    "location_key": "",           // empty by default (no pre-made location); a key like "cafe" only when the location override is used
     "characters": ["Wiebke", "Sani"],
     "level": "B1",
     "provided_context": "...",
     "provided_learning_points": "...",
+    "visual_guidelines": "...",   // optional art-direction brief (setting, attire, props, mood) applied to every scene
     "dialog_count": null,         // null = use project type default; integer = explicit override
     "words": [],                  // word_learning type only
     "prompt_script": "...",

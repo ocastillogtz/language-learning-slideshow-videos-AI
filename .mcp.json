@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "german-video-pipeline": {
+      "command": "C:\\Users\\Omar\\anaconda3\\python.exe",
+      "args": ["C:\\Users\\Omar\\Documents\\germanLearningVidsAIPowered\\mcp_server.py"]
+    }
+  }
+}

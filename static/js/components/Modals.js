@@ -33,6 +33,7 @@ function NewProjectModal({ open, onClose }) {
   const [level,    setLevel]    = useState("B1");
   const [context,  setContext]  = useState("");
   const [learning, setLearning] = useState("");
+  const [visualGuidelines, setVisualGuidelines] = useState("");
   const [err,      setErr]      = useState("");
   const [saving,   setSaving]   = useState(false);
 
@@ -56,15 +57,17 @@ function NewProjectModal({ open, onClose }) {
     setSaving(true);
     try {
       await apiPost("/create_project", {
-        project_name:     name.trim().replace(/ /g, "_"),
-        project_type_key: projType,
-        level:            level,
-        context:          context.trim(),
-        learning_points:  learning.trim(),
+        project_name:      name.trim().replace(/ /g, "_"),
+        project_type_key:  projType,
+        level:             level,
+        context:           context.trim(),
+        learning_points:   learning.trim(),
+        visual_guidelines: visualGuidelines.trim(),
       });
       const safeName = name.trim().replace(/ /g, "_");
       toast("Created!", `Project "${safeName}" created.`, "ok");
-      setName(""); setContext(""); setLearning(""); setProjType("shadowing"); setLevel("B1");
+      setName(""); setContext(""); setLearning(""); setVisualGuidelines("");
+      setProjType("shadowing"); setLevel("B1");
       onClose();
       await refreshSidebar();
       setCurrentProject(safeName);
@@ -147,6 +150,17 @@ function NewProjectModal({ open, onClose }) {
                 One word per entry, comma-separated. The video will cover them in this order.
               </span>
             )}
+          </div>}
+          {!isReading && !isPromotional && <div className="field">
+            <label>
+              Visual Guidelines
+              <span style={{color:"var(--muted)",fontWeight:300}}> (optional)</span>
+            </label>
+            <textarea rows={3} value={visualGuidelines} onChange={e=>setVisualGuidelines(e.target.value)}
+              placeholder="Setting, character clothing/props, and mood/style — applied to every scene. e.g. a cozy local bakery; both wear white aprons, gloves and hair nets; warm morning light."/>
+            <span style={{fontSize:"0.78rem",color:"var(--muted)"}}>
+              Used to art-direct every image. With this set you don't need a pre-made location.
+            </span>
           </div>}
           {err && <div className="err-msg" style={{display:"block"}}>{err}</div>}
         </div>
