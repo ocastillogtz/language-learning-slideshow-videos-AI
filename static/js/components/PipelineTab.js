@@ -1470,6 +1470,14 @@ function makeSteps(projectName, manifest) {
       endpoint: n => `/projects/${n}/run/upload_instagram`,
       disabledReason: igDisabled,
     },
+    {
+      id:"upload_facebook", num:9,
+      title:"Upload to Facebook",
+      desc:"Publish to a Facebook Page (feed video or Reel).",
+      Fields: FacebookUploadFields,
+      payload: () => FacebookUploadFields._getPayload?.() || {},
+      endpoint: n => `/projects/${n}/run/upload_facebook`,
+    },
   ];
 }
 
@@ -1485,85 +1493,54 @@ function PipelineTab({ projectName }) {
   );
 }
 
+// ── Connection banner (shared by IG/FB upload steps) ──────────────────────────
+// Credential setup now lives on the Connections page; each upload step only shows
+// whether the connection is ready and links there when it isn't.
+
+function ConnectionBanner({ configured, connectedText }) {
+  if (configured == null) return null;  // status not loaded yet
+  return (
+    <div style={{
+      padding: ".5rem .75rem", borderRadius: 6, marginBottom: ".75rem", fontSize: ".8rem",
+      background: configured ? "rgba(74,222,128,.12)" : "rgba(248,113,113,.12)",
+      color: configured ? "var(--green, #4ade80)" : "var(--red, #f87171)",
+      border: `1px solid ${configured ? "rgba(74,222,128,.3)" : "rgba(248,113,113,.3)"}`,
+    }}>
+      {configured
+        ? connectedText
+        : "Not connected — set this up on the Connections page (top nav) before uploading."}
+    </div>
+  );
+}
+
 // ── Instagram Upload Fields ───────────────────────────────────────────────────
 
 function InstagramUploadFields() {
-  const [caption,      setCaption]      = React.useState("");
-  const [shareToFeed,  setShareToFeed]  = React.useState(true);
+  const [caption,     setCaption]     = React.useState("");
+  const [shareToFeed, setShareToFeed] = React.useState(true);
+  const [coverSec,    setCoverSec]    = React.useState("");   // cover-frame time in seconds
+  const [status,      setStatus]      = React.useState(null);
 
-  // Setup section state
-  const [appId,        setAppId]        = React.useState("");
-  const [appSecret,    setAppSecret]    = React.useState("");
-  const [shortToken,   setShortToken]   = React.useState("");
-  const [igUserId,     setIgUserId]     = React.useState("");
-  const [setupMsg,     setSetupMsg]     = React.useState("");
-  const [settingUp,    setSettingUp]    = React.useState(false);
-
-  // Status section state
-  const [status,       setStatus]       = React.useState(null);
-  const [resetting,    setResetting]    = React.useState(false);
-  const [resetMsg,     setResetMsg]     = React.useState("");
-
-  InstagramUploadFields._getPayload = () => ({ caption, share_to_feed: shareToFeed });
+  InstagramUploadFields._getPayload = () => ({
+    caption,
+    share_to_feed: shareToFeed,
+    // Seconds in the UI → milliseconds for the API (thumb_offset). Blank = default.
+    thumb_offset_ms: coverSec !== "" ? Math.round(parseFloat(coverSec) * 1000) : "",
+  });
 
   React.useEffect(() => {
-    fetch("/auth/instagram/status")
-      .then(r => r.json())
-      .then(d => setStatus(d))
-      .catch(() => {});
+    fetch("/auth/instagram/status").then(r => r.json()).then(setStatus).catch(() => {});
   }, []);
 
-  async function doSetup() {
-    setSettingUp(true); setSetupMsg("");
-    try {
-      const r = await fetch("/auth/instagram/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ app_id: appId, app_secret: appSecret, short_token: shortToken, ig_user_id: igUserId }),
-      });
-      const d = await r.json();
-      setSetupMsg(d.message || d.error || "Done");
-      if (d.message) {
-        const s = await fetch("/auth/instagram/status").then(x => x.json());
-        setStatus(s);
-      }
-    } catch(e) { setSetupMsg("Request failed: " + e.message); }
-    finally { setSettingUp(false); }
-  }
-
-  async function doReset() {
-    setResetting(true); setResetMsg("");
-    try {
-      const r = await fetch("/auth/instagram/reset", { method: "POST" });
-      const d = await r.json();
-      setResetMsg(d.message || d.error || "Done");
-      if (d.message) setStatus({ configured: false, days_left: 0 });
-    } catch(e) { setResetMsg("Request failed: " + e.message); }
-    finally { setResetting(false); }
-  }
-
-  const tokenOk = status && status.configured;
+  const configured = status ? !!status.configured : null;
 
   return (
     <div className="fields">
-      {/* Token status banner */}
-      {status && (
-        <div style={{
-          padding: ".5rem .75rem",
-          borderRadius: "6px",
-          marginBottom: ".75rem",
-          fontSize: ".8rem",
-          background: tokenOk ? "rgba(74,222,128,.12)" : "rgba(248,113,113,.12)",
-          color: tokenOk ? "var(--green, #4ade80)" : "var(--red, #f87171)",
-          border: `1px solid ${tokenOk ? "rgba(74,222,128,.3)" : "rgba(248,113,113,.3)"}`,
-        }}>
-          {tokenOk
-            ? `Connected — token valid for ${status.days_left} more day${status.days_left !== 1 ? "s" : ""}`
-            : "Not configured — fill in the Setup section below"}
-        </div>
-      )}
-
-      {/* Upload options */}
+      <ConnectionBanner
+        configured={configured}
+        connectedText={status
+          ? `Connected — token valid for ${status.days_left} more day${status.days_left !== 1 ? "s" : ""}`
+          : ""} />
       <div className="field">
         <label>Caption Override <span style={{color:"var(--muted)",fontWeight:300}}>(optional)</span></label>
         <textarea rows={3} value={caption} onChange={e=>setCaption(e.target.value)}
@@ -1574,69 +1551,86 @@ function InstagramUploadFields() {
           onChange={e=>setShareToFeed(e.target.checked)}/>
         <label htmlFor="f_ig_feed">Share Reel to Feed</label>
       </div>
+      <div className="field">
+        <label>Cover frame <span style={{color:"var(--muted)",fontWeight:300}}>(seconds into the video — optional)</span></label>
+        <input type="number" min="0" step="0.1" value={coverSec}
+          onChange={e=>setCoverSec(e.target.value)}
+          placeholder="Blank = first frame"/>
+        <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".3rem"}}>
+          Instagram grabs the frame at this time as the Reel thumbnail.
+        </div>
+      </div>
+    </div>
+  );
+}
 
-      {/* Setup section */}
-      <div style={{borderTop:"1px solid var(--border)", paddingTop:".75rem", marginTop:".5rem"}}>
-        <div style={{fontSize:".85rem", fontWeight:600, marginBottom:".5rem", color:"var(--fg)"}}>
-          {tokenOk ? "Re-authenticate" : "Setup (one-time)"}
-        </div>
-        <div style={{fontSize:".78rem", color:"var(--muted)", marginBottom:".6rem"}}>
-          Get a short-lived token from the{" "}
-          <a href="https://developers.facebook.com/tools/explorer/" target="_blank"
-             rel="noreferrer" style={{color:"var(--accent)"}}>
-            Graph API Explorer
-          </a>{" "}
-          with <code>instagram_basic</code>, <code>instagram_content_publish</code> permissions.
-        </div>
-        <div className="field-row">
-          <div className="field">
-            <label>App ID</label>
-            <input value={appId} onChange={e=>setAppId(e.target.value)} placeholder="1234567890"/>
-          </div>
-          <div className="field">
-            <label>App Secret</label>
-            <input type="password" value={appSecret} onChange={e=>setAppSecret(e.target.value)} placeholder="abc123..."/>
-          </div>
-        </div>
-        <div className="field">
-          <label>Short-Lived Token</label>
-          <input value={shortToken} onChange={e=>setShortToken(e.target.value)}
-            placeholder="EAA..."/>
-        </div>
-        <div className="field">
-          <label>
-            Instagram User ID{" "}
-            <span style={{color:"var(--muted)",fontWeight:300}}>(optional — auto-detected if blank)</span>
-          </label>
-          <input value={igUserId} onChange={e=>setIgUserId(e.target.value)}
-            placeholder="e.g. 17841400000000000"/>
-          <div style={{fontSize:".74rem",color:"var(--muted)",marginTop:".3rem"}}>
-            Find it in Graph API Explorer:{" "}
-            <code style={{fontSize:".74rem"}}>GET /me/accounts?fields=instagram_business_account</code>
-            {" "}or query your Page username directly.
-          </div>
-        </div>
-        <button className="btn-primary" onClick={doSetup} disabled={settingUp || !appId || !appSecret || !shortToken}
-          style={{fontSize:".8rem", marginTop:".25rem"}}>
-          {settingUp ? "Saving…" : "Save Credentials"}
-        </button>
-        {setupMsg && (
-          <div style={{marginTop:".4rem", fontSize:".78rem", color:"var(--muted)"}}>{setupMsg}</div>
-        )}
+// ── Facebook Upload Fields ────────────────────────────────────────────────────
+
+function FacebookUploadFields() {
+  const [caption,   setCaption]   = React.useState("");
+  const [asReel,    setAsReel]    = React.useState(false);
+  const [coverSec,  setCoverSec]  = React.useState("");   // feed-video cover frame (seconds)
+  const [schedule,  setSchedule]  = React.useState(false);
+  const [publishAt, setPublishAt] = React.useState("");   // datetime-local (local time)
+  const [status,    setStatus]    = React.useState(null);
+
+  FacebookUploadFields._getPayload = () => ({
+    caption,
+    as_reel: asReel,
+    // Cover frame only applies to feed videos (Reels have no thumbnail param).
+    thumb_offset_ms: (!asReel && coverSec !== "") ? Math.round(parseFloat(coverSec) * 1000) : "",
+    // datetime-local is local time → ISO 8601 UTC for the backend.
+    publish_at: schedule && publishAt ? new Date(publishAt).toISOString() : "",
+  });
+
+  React.useEffect(() => {
+    fetch("/auth/facebook/status").then(r => r.json()).then(setStatus).catch(() => {});
+  }, []);
+
+  const configured = status ? !!status.configured : null;
+
+  return (
+    <div className="fields">
+      <ConnectionBanner
+        configured={configured}
+        connectedText={status ? `Connected to Page ${status.page_name || status.page_id}` : ""} />
+      <div className="field">
+        <label>Caption / Description <span style={{color:"var(--muted)",fontWeight:300}}>(optional)</span></label>
+        <textarea rows={3} value={caption} onChange={e=>setCaption(e.target.value)}
+          placeholder="Leave blank to auto-generate from manifest"/>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_fb_reel" checked={asReel}
+          onChange={e=>setAsReel(e.target.checked)}/>
+        <label htmlFor="f_fb_reel">Publish as a Reel (vertical 9:16)</label>
       </div>
 
-      {/* Reset section */}
-      {tokenOk && (
-        <div style={{borderTop:"1px solid var(--border)", paddingTop:".75rem", marginTop:".5rem"}}>
-          <div style={{fontSize:".78rem", color:"var(--muted)", marginBottom:".5rem"}}>
-            Token expired or revoked? Clear it here — the next upload will fail until you re-authenticate above.
+      {/* Cover frame — feed videos only; Facebook Reels have no thumbnail parameter. */}
+      {!asReel && (
+        <div className="field">
+          <label>Cover frame <span style={{color:"var(--muted)",fontWeight:300}}>(seconds into the video — optional)</span></label>
+          <input type="number" min="0" step="0.1" value={coverSec}
+            onChange={e=>setCoverSec(e.target.value)}
+            placeholder="Blank = Facebook default"/>
+          <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".3rem"}}>
+            A frame at this time is extracted and used as the video thumbnail.
           </div>
-          <button className="btn-cancel" onClick={doReset} disabled={resetting} style={{fontSize:".8rem"}}>
-            {resetting ? "Clearing…" : "Reset Instagram Login"}
-          </button>
-          {resetMsg && (
-            <div style={{marginTop:".4rem", fontSize:".78rem", color:"var(--muted)"}}>{resetMsg}</div>
-          )}
+        </div>
+      )}
+
+      <div className="toggle-row">
+        <input type="checkbox" id="f_fb_sched" checked={schedule}
+          onChange={e=>setSchedule(e.target.checked)}/>
+        <label htmlFor="f_fb_sched">Schedule release (publish later automatically)</label>
+      </div>
+      {schedule && (
+        <div className="field">
+          <label>Release date &amp; time <span style={{color:"var(--muted)",fontWeight:300}}>(your local time)</span></label>
+          <input type="datetime-local" value={publishAt}
+            onChange={e=>setPublishAt(e.target.value)}/>
+          <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".3rem"}}>
+            Facebook publishes it at this time. Must be ≥ 10 minutes out{asReel ? " (Reels: at most 29 days ahead)" : ""}.
+          </div>
         </div>
       )}
     </div>

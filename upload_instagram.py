@@ -15,8 +15,37 @@ SETUP (one-time)
        instagram_basic, instagram_content_publish, pages_show_list
    - Copy the short-lived token
 
-3. Enter App ID, App Secret, and token in Step 7 of the pipeline UI.
-   The backend exchanges it for a 60-day long-lived token automatically.
+3. Save the short-lived token on the Connections page (App ID / App Secret are
+   read from FB_APP_ID / FB_APP_SECRET in .env). The backend exchanges it for a
+   60-day long-lived token automatically.
+
+How the connection works (Instagram Graph API)
+----------------------------------------------
+Instagram has no direct publishing API of its own — you publish THROUGH Facebook's
+Graph API. That is why this flow feels indirect, and it's worth understanding the
+chain of objects involved:
+
+  Facebook User  ──owns──▶  Facebook Page  ──linked to──▶  Instagram Business account
+
+Publishing a Reel requires the *Instagram Business account ID*, but you authenticate
+as the *Facebook user*. The steps below bridge that gap:
+
+1. Token exchange (`_exchange_for_long_lived`): the token you paste from the Graph
+   API Explorer is *short-lived* (~1 hour). We trade it — using the app id/secret —
+   for a *long-lived* one (~60 days). `get_valid_token` later auto-refreshes it when
+   under 7 days remain, so uploads keep working without you revisiting the Explorer.
+
+2. Account discovery (`_lookup_ig_user_id`): with the user token we call
+   `/me/accounts` to list the Pages you manage, and read each Page's
+   `instagram_business_account` field to find the linked IG account id. (You can also
+   paste the IG id manually to skip this lookup.)
+
+3. Publishing (create container → upload bytes → poll → publish): Instagram ingests
+   Reels asynchronously, so we create a media "container", upload the file to it,
+   poll until Instagram finishes processing, then publish the container.
+
+This tight coupling to Facebook Pages is exactly what upload_facebook.py deliberately
+avoids — see that file for the standalone Page-publishing path.
 
 USAGE
 -----
@@ -35,11 +64,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -60,7 +93,7 @@ def _load_creds() -> dict:
     if not CREDS_FILE.exists():
         raise FileNotFoundError(
             "instagram_creds.json not found.\n"
-            "Use Step 7 in the pipeline UI to save your credentials."
+            "Configure the Instagram connection on the Connections page."
         )
     with open(CREDS_FILE) as f:
         return json.load(f)
@@ -78,6 +111,9 @@ def _exchange_for_long_lived(app_id: str, app_secret: str, short_token: str) -> 
     If the exchange returns 400 (e.g. token is already long-lived),
     fall back to inspecting it via /debug_token and using it as-is.
     """
+    # grant_type=fb_exchange_token is Facebook's "give me a longer-lived version of
+    # this token" endpoint. Proving app ownership (client_id + client_secret) is what
+    # lets Facebook upgrade the token's lifetime from ~1 hour to ~60 days.
     r = requests.get(
         GRAPH_BASE + "/oauth/access_token",
         params={
@@ -144,6 +180,9 @@ def _lookup_ig_user_id(access_token: str) -> str:
     me.raise_for_status()
     logger.info("Logged in as: %s", me.json().get("name"))
 
+    # /me/accounts lists the Pages this user administers. We ask for each Page's
+    # `instagram_business_account` because THAT id — not the Page id and not the
+    # user id — is what the Reel-publishing endpoints require.
     pages_r = requests.get(
         GRAPH_BASE + "/me/accounts",
         params={"access_token": access_token, "fields": "id,name,instagram_business_account"},
@@ -153,6 +192,8 @@ def _lookup_ig_user_id(access_token: str) -> str:
     pages = pages_r.json().get("data", [])
     logger.info("Found %d Facebook Page(s)", len(pages))
 
+    # Return the first Page that has an IG account linked. (Multiple linked accounts
+    # would need manual selection — pass ig_user_id to setup() to be explicit.)
     for page in pages:
         iga = page.get("instagram_business_account")
         if iga:
@@ -166,8 +207,24 @@ def _lookup_ig_user_id(access_token: str) -> str:
     )
 
 
-def setup(app_id: str, app_secret: str, short_token: str, ig_user_id: str = None) -> None:
-    """One-time setup: exchange token, look up IG User ID, save creds."""
+def setup(app_id: str = None, app_secret: str = None, short_token: str = None,
+          ig_user_id: str = None) -> None:
+    """One-time setup: exchange token, look up IG User ID, save creds.
+
+    app_id / app_secret fall back to the FB_APP_ID / FB_APP_SECRET environment
+    variables (.env) when not passed explicitly (hybrid secret model — the app
+    credentials live in .env, only the runtime token is persisted).
+    """
+    app_id     = (app_id or os.getenv("FB_APP_ID", "")).strip()
+    app_secret = (app_secret or os.getenv("FB_APP_SECRET", "")).strip()
+    short_token = (short_token or "").strip()
+    if not app_id or not app_secret:
+        raise RuntimeError(
+            "FB_APP_ID / FB_APP_SECRET are not set in the environment (.env) and "
+            "were not provided. Add them to .env or pass them explicitly."
+        )
+    if not short_token:
+        raise RuntimeError("A short-lived access token is required.")
     logger.info("Exchanging for long-lived token ...")
     ll = _exchange_for_long_lived(app_id, app_secret, short_token)
     access_token = ll["access_token"]
@@ -219,17 +276,26 @@ def reset_auth() -> None:
 # UPLOAD
 # =============================================================================
 
-def _create_reel_container(ig_user_id: str, token: str, caption: str, share_to_feed: bool) -> tuple:
-    """Step 1: Create a Reel media container. Returns (container_id, upload_uri)."""
+def _create_reel_container(ig_user_id: str, token: str, caption: str, share_to_feed: bool,
+                           thumb_offset: int = None) -> tuple:
+    """Step 1: Create a Reel media container. Returns (container_id, upload_uri).
+
+    thumb_offset (optional): milliseconds into the video for the cover frame.
+    Instagram grabs that frame itself as the Reel thumbnail — no image hosting
+    needed (unlike cover_url, which would require a public image URL).
+    """
+    params = {
+        "access_token":  token,
+        "media_type":    "REELS",
+        "upload_type":   "resumable",
+        "caption":       caption,
+        "share_to_feed": "true" if share_to_feed else "false",
+    }
+    if thumb_offset is not None:
+        params["thumb_offset"] = str(int(thumb_offset))
     r = requests.post(
         GRAPH_BASE + "/" + ig_user_id + "/media",
-        params={
-            "access_token":  token,
-            "media_type":    "REELS",
-            "upload_type":   "resumable",
-            "caption":       caption,
-            "share_to_feed": "true" if share_to_feed else "false",
-        },
+        params=params,
         timeout=30,
     )
     r.raise_for_status()
@@ -298,14 +364,19 @@ def _publish_container(ig_user_id: str, container_id: str, token: str) -> str:
     return data["id"]
 
 
-def upload_instagram(file_path: Path, caption: str = "", share_to_feed: bool = True) -> str:
-    """Full pipeline: create container -> upload -> poll -> publish. Returns media ID."""
+def upload_instagram(file_path: Path, caption: str = "", share_to_feed: bool = True,
+                     thumb_offset: int = None) -> str:
+    """Full pipeline: create container -> upload -> poll -> publish. Returns media ID.
+
+    thumb_offset (optional): cover-frame position in milliseconds.
+    """
     if not file_path.exists():
         raise FileNotFoundError("Video file not found: " + str(file_path))
 
     token, ig_user_id = get_valid_token()
     logger.info("Creating Reel container for user %s ...", ig_user_id)
-    container_id, upload_uri = _create_reel_container(ig_user_id, token, caption, share_to_feed)
+    container_id, upload_uri = _create_reel_container(ig_user_id, token, caption, share_to_feed,
+                                                      thumb_offset=thumb_offset)
     logger.info("Container ID: %s", container_id)
 
     _upload_file(upload_uri, file_path, token)
@@ -390,6 +461,8 @@ def main():
     p.add_argument("--file",       type=Path, help="Explicit video file path")
     p.add_argument("--caption",    help="Override caption text")
     p.add_argument("--no-feed",    action="store_true", help="Do not share to main feed")
+    p.add_argument("--thumb-offset", dest="thumb_offset", type=int,
+                   help="Cover-frame position in milliseconds (Reel thumbnail)")
     p.add_argument("--setup",      action="store_true", help="Run one-time token setup")
     p.add_argument("--app-id",     dest="app_id",     help="Facebook App ID (for --setup)")
     p.add_argument("--app-secret", dest="app_secret", help="Facebook App Secret (for --setup)")
@@ -421,7 +494,8 @@ def main():
     caption   = a.caption or _build_caption(manifest)
 
     try:
-        media_id = upload_instagram(file_path, caption=caption, share_to_feed=not a.no_feed)
+        media_id = upload_instagram(file_path, caption=caption, share_to_feed=not a.no_feed,
+                                    thumb_offset=a.thumb_offset)
         print("\nMedia ID : " + media_id)
     except Exception as e:
         logger.error("Upload failed: %s", e)

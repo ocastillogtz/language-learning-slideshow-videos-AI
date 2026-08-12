@@ -4,14 +4,16 @@ const { useState, useEffect } = React;
 function App() {
   const { loadAssets, refreshSidebar } = useApp();
   const [newProjOpen, setNewProjOpen] = useState(false);
-  const [view,        setView]        = useState("projects"); // "projects" | "assets"
+  const [view,        setView]        = useState("projects"); // "projects" | "assets" | "connections"
 
   useEffect(() => {
     loadAssets();
     refreshSidebar();
   }, []);
 
-  const isAssets = view === "assets";
+  const isAssets      = view === "assets";
+  const isConnections = view === "connections";
+  const isProjects    = view === "projects";
 
   return (
     <>
@@ -22,7 +24,7 @@ function App() {
         {/* Nav toggle */}
         <div style={{display:"flex",gap:".35rem",marginLeft:"auto",marginRight:".75rem"}}>
           <button
-            className={"btn-ghost" + (!isAssets ? " active" : "")}
+            className={"btn-ghost" + (isProjects ? " active" : "")}
             style={{fontSize:".8rem",padding:".3rem .75rem"}}
             onClick={() => setView("projects")}>
             Projects
@@ -33,9 +35,15 @@ function App() {
             onClick={() => setView("assets")}>
             Assets
           </button>
+          <button
+            className={"btn-ghost" + (isConnections ? " active" : "")}
+            style={{fontSize:".8rem",padding:".3rem .75rem"}}
+            onClick={() => setView("connections")}>
+            Connections
+          </button>
         </div>
 
-        {!isAssets && (
+        {isProjects && (
           <button className="btn-primary" onClick={() => setNewProjOpen(true)}>
             <svg width="13" height="13" viewBox="0 0 13 13"
               stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none">
@@ -48,10 +56,10 @@ function App() {
       </header>
 
       {/* Layout */}
-      {isAssets ? (
+      {isAssets || isConnections ? (
         <div className="shell" style={{gridTemplateColumns:"1fr"}}>
           <main className="main">
-            <AssetsTab/>
+            {isAssets ? <AssetsTab/> : <ConnectionsTab/>}
           </main>
         </div>
       ) : (

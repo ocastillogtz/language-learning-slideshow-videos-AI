@@ -274,22 +274,86 @@ The branding file is selectable from a dropdown in the UI (populated live from `
 
 ### 7. Upload
 
+Three upload targets are available, each its own independent integration. Credentials
+are configured once on the **Connections** page (see [Connecting Your Accounts](#connecting-your-accounts-youtube--instagram--facebook)); each pipeline upload step then just shows a connected/not-connected banner and the per-video options.
+
 #### YouTube (`upload_video.py`)
 
 Uploads the final video to YouTube via the YouTube Data API v3. Reads title, description, and tags from the manifest — the UI pre-fills these as **editable fields** so you can preview and tweak them before uploading. Supports privacy, category, made-for-kids, and **scheduled release**: pick a future date/time and the video is uploaded private with `status.publishAt` set, which YouTube auto-flips to public at that time (`--publish-at <RFC3339-UTC>` on the CLI). Supports resumable chunked upload with retry. Caches OAuth credentials in `token.json`.
 
 #### Instagram (`upload_instagram.py`)
 
-Uploads the final video to Instagram as a Reel via the Instagram Graph API v25.0.
-
-**One-time setup:**
-1. Create a Facebook App at https://developers.facebook.com (type: Business, add Instagram Graph API product)
-2. In Graph API Explorer, generate a User Access Token with permissions: `instagram_basic`, `instagram_content_publish`, `pages_show_list`
-3. Enter App ID, App Secret, and short-lived token in Step 7 of the pipeline UI
-
-The backend exchanges the short-lived token for a 60-day long-lived token automatically and stores credentials in `instagram_creds.json`. The token is refreshed automatically when fewer than 7 days remain.
+Uploads the final video to Instagram as a Reel via the Instagram Graph API v25.0. Instagram has no publishing API of its own — it publishes *through* a linked Facebook Page, so this flow discovers the Instagram Business account attached to one of your Pages. Credentials are stored in `instagram_creds.json`; the long-lived token is auto-refreshed when fewer than 7 days remain.
 
 Upload pipeline: create Reel container → chunked resumable upload → poll until FINISHED → publish.
+
+Per-upload options: **caption**, **share-to-feed**, and a **cover frame** (`thumb_offset`, in seconds — Instagram grabs that frame as the Reel thumbnail, no image hosting required). Instagram's Graph API has **no native scheduling** and **no auto-caption** parameter, so those are not offered.
+
+#### Facebook (`upload_facebook.py`)
+
+Uploads the final video **directly to a Facebook Page** — as a feed video or a **Reel** — via the Graph API v25.0. This is a **standalone** integration: it talks to the Page with that Page's own access token and needs no Instagram account or linked-account discovery. It exists precisely so Facebook publishing no longer piggybacks on the Instagram flow. Credentials are stored in `facebook_creds.json`.
+
+Per-upload options: **caption/description**, **publish-as-Reel** toggle, **scheduled release** (`scheduled_publish_time` — feed videos up to 6 months out, Reels up to 29 days; publishes automatically at that time), and, for **feed videos only**, a **cover frame** (a frame is extracted with ffmpeg and sent as the `thumb`). Facebook Reels have no thumbnail parameter in the publish call, so the cover-frame field is hidden when *Publish as a Reel* is ticked.
+
+> **Capability notes (verified against Meta Graph API v25.0):** scheduling is supported for **Facebook** (feed + Reel) and **YouTube**, but **not** for Instagram. **Automatic captions/subtitles are not exposed by the Instagram or Facebook APIs** at all (Facebook only accepts a manually uploaded `.srt` afterward). Thumbnails: Instagram via a frame offset, Facebook feed video via an extracted frame — not available for Facebook Reels.
+
+---
+
+## Connecting Your Accounts (YouTube · Instagram · Facebook)
+
+All three publishing integrations are managed from one place: the **Connections** page, reached from the **Connections** button in the top navigation bar (next to *Projects* and *Assets*).
+
+Each platform gets a card that shows its **live status**, its **non-sensitive parameters**, a **Test Connection** button, and the setup controls. Secret values never appear in this page or in any API response — see [How secrets are handled](#how-secrets-are-handled) below.
+
+<p align="center">
+  <img src="readme_resources/initial_screen.png" width="720" alt="Connections page — three cards">
+</p>
+
+### How secrets are handled
+
+A **hybrid** model keeps the sensitive material off the screen entirely:
+
+- **Static app credentials live in `.env`** — the Facebook App ID/Secret (`FB_APP_ID` / `FB_APP_SECRET`, shared by Instagram and Facebook) and, optionally, the YouTube OAuth client (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`). These identify *the app*, not you.
+- **Runtime user tokens live in local credential files** the backend writes and refreshes: `token.json` (YouTube), `instagram_creds.json`, `facebook_creds.json`. All are git-ignored.
+- The Connections page only ever receives **presence booleans** (e.g. "`FB_APP_ID`: set"), **identifiers** (IG User ID, Page ID/name), and **status/expiry** — never a key, secret, or token.
+
+To learn the mechanics behind each flow in detail, the connection code is written to be read: see the "How the connection works" block at the top of [`upload_video.py`](upload_video.py), [`upload_instagram.py`](upload_instagram.py), and [`upload_facebook.py`](upload_facebook.py).
+
+### YouTube
+
+YouTube uses **OAuth 2.0** (not an API key): you consent once in a browser, and the app then acts on your behalf.
+
+1. In the **Google Cloud Console**, create a project and enable **YouTube Data API v3**.
+2. Create an **OAuth 2.0 Client ID** of type **Desktop app**.
+3. Give the app that client, either way:
+   - put `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env`, **or**
+   - download the client JSON and save it as `client_secret.json` in the project root.
+4. The **first** upload opens a browser for consent; the resulting token is cached in `token.json` and refreshed automatically forever after. (There is no button to pre-authenticate — running one upload completes the sign-in.)
+5. Use **Test Connection** to confirm the cached token is valid. The pipeline's token only carries the `youtube.upload` scope, so the test reports *"token is valid (upload scope)"* rather than your channel name — that's expected and still means you're connected. **Reset YouTube Login** clears `token.json` to force a fresh consent.
+
+### Instagram
+
+Instagram publishes **through** a Facebook Page, so you authenticate as your Facebook user and the backend finds the Instagram Business account linked to your Page.
+
+**Prerequisites:** an Instagram **Business/Creator** account, linked to a **Facebook Page** (*Instagram → Settings → Account → Linked Accounts → Facebook*).
+
+1. Create a Facebook App at [developers.facebook.com](https://developers.facebook.com) (type **Business**, add the **Instagram Graph API** product).
+2. Put the app's **App ID** and **App Secret** into `.env` as `FB_APP_ID` / `FB_APP_SECRET`.
+3. In the [Graph API Explorer](https://developers.facebook.com/tools/explorer/), generate a **User Access Token** (leave *User or Page* as *Get Token* — a user token, **not** a Page token) with the permissions `instagram_basic`, `instagram_content_publish`, `pages_show_list`.
+4. On the Instagram card, paste that **short-lived token** into *Setup* and click **Save Credentials**. (Optionally paste the Instagram User ID to skip auto-detection.) The backend exchanges the short-lived token for a **~60-day long-lived** one and discovers your IG account id automatically.
+5. **Test Connection** should report your account name. The token auto-refreshes when fewer than 7 days remain; **Reset** clears the stored credentials.
+
+### Facebook
+
+Facebook posting is **independent of Instagram** — it targets a Page directly and needs only that Page's id and token.
+
+1. Reuse the same Facebook App (its `FB_APP_ID` / `FB_APP_SECRET` in `.env`), and make sure you're an **admin** of the target Page.
+2. In the [Graph API Explorer](https://developers.facebook.com/tools/explorer/), generate a **User Access Token** with `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`.
+3. On the Facebook card, enter the **Page ID** and paste the **User token**, then click **Connect Page**. The backend exchanges the token, reads your Page's own access token from `/me/accounts`, and stores it (a Page token derived this way does **not** expire).
+   - *Alternative:* if you already have a **Page access token**, tick **"Token is already a Page token"** and it's stored as-is.
+4. **Test Connection** should report the Page name. When you run the **Upload to Facebook** pipeline step, tick **"Publish as a Reel"** for a vertical 9:16 Reel; leave it unticked for a normal feed video. **Reset** clears the stored credentials.
+
+> **Which token for which platform?** Instagram needs a *user* token (it then finds the linked IG account); Facebook needs a *Page* token (the backend can derive it from a user token for you). This is the core difference the two integrations were split around.
 
 ---
 
@@ -419,7 +483,7 @@ A Flask + React (Babel standalone) single-page application.
 
 ### Pipeline tab
 
-Seven collapsible step cards covering the full pipeline:
+Collapsible step cards covering the full pipeline (credential setup for the upload steps lives on the **Connections** page, not here — see [Connecting Your Accounts](#connecting-your-accounts-youtube--instagram--facebook)):
 
 | Step | Controls |
 |---|---|
@@ -429,7 +493,8 @@ Seven collapsible step cards covering the full pipeline:
 | 4 · Video | Annotated subtitles flag, footnote/disclaimer text (optional) + footnote read time (extra seconds the scene is held so the footnote can be read), shadowing repeat overlay (message + font size) |
 | 5 · Assemble | Background audio, speed factor, branding file, branding position (none/intro/outro/both), overwrite flag |
 | 6 · YouTube Upload | **Editable preview of the generated title, description, and tags** (pre-filled from the manifest); privacy; category; made-for-kids toggle; **scheduled release** (date/time picker — uploads private and YouTube auto-publishes at that time via `publishAt`) |
-| 7 · Instagram Upload | Caption override, share-to-feed toggle; credential setup (App ID, App Secret, token, optional IG User ID); token status banner; reset |
+| 7 · Instagram Upload | Caption override, share-to-feed toggle, **cover frame** (seconds → Reel thumbnail); connection status banner (setup on the Connections page) |
+| 8 · Facebook Upload | Caption/description override, **publish-as-Reel** toggle (vertical 9:16 Reel vs. feed video), **cover frame** (feed videos only), **scheduled release** (date/time picker); connection status banner (setup on the Connections page) |
 
 Steps run in background threads — the UI stays responsive during long operations. Live status badges (`idle` / `running` / `done` / `error`) are updated by background polling.
 
@@ -457,6 +522,10 @@ Full CRUD for all asset types:
 | Background Audio | Audio tracks for assembly |
 | SFX | Sound effect assets |
 | Subtitle Preview | Render a still preview of narration/subtitle/footnote text over a sample background, using the live per-orientation config styling (matches the real render). Pick orientation + style (dialogue/narration), type text, optionally add a footnote or the centered "repeat" overlay |
+
+### Connections page
+
+Reached from the **Connections** button in the top nav. One card per publishing platform (YouTube · Instagram · Facebook) showing live status, non-sensitive parameters, a **Test Connection** button, and the setup/reset controls — with secrets kept entirely server-side. This is where all account setup now lives (the pipeline upload steps only show a status banner). Full walkthrough: [Connecting Your Accounts](#connecting-your-accounts-youtube--instagram--facebook).
 
 ---
 
@@ -588,7 +657,19 @@ Skip Claude entirely: hit **+ New Project** in the web UI, fill in the same brie
 | `POST` | `/projects/<name>/run/assemble` | Assemble final video (`bg_audio_name`, `speed_factor`, `branding_file`, `branding_mode`, `overwrite`) |
 | `GET`  | `/projects/<name>/upload_meta` | Preview the generated YouTube `title`, `description`, and `tags` (read from the manifest) so they can be edited before upload |
 | `POST` | `/projects/<name>/run/upload` | Upload to YouTube (`privacy`, `title`, `description`, `tags`, `category_id`, `made_for_kids`, `publish_at` for scheduled release) |
-| `POST` | `/projects/<name>/run/upload_instagram` | Upload to Instagram (`caption`, `share_to_feed`) |
+| `POST` | `/projects/<name>/run/upload_instagram` | Upload to Instagram (`caption`, `share_to_feed`, `thumb_offset_ms` = cover-frame position in ms) |
+| `POST` | `/projects/<name>/run/upload_facebook` | Upload to a Facebook Page (`caption`, `title`, `as_reel` = Reel vs. feed video, `thumb_offset_ms` = cover frame for feed videos, `publish_at` = ISO 8601 scheduled release ≥ 10 min out, Reels ≤ 29 days) |
+
+### Connections
+
+Powering the [Connections](#connecting-your-accounts-youtube--instagram--facebook) page. `GET /connections` and every `*/test` return **non-sensitive data only** — never a key, secret, or token.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET`  | `/connections` | Aggregate status + non-sensitive params for all three platforms (env-secret presence booleans, IG User ID, Page ID/name, token expiry) |
+| `POST` | `/connections/youtube/test` | Verify the cached YouTube token (non-interactive; never opens a browser). Returns `{ok, detail}` |
+| `POST` | `/connections/instagram/test` | Call `/me` with the stored token; returns the account name |
+| `POST` | `/connections/facebook/test` | Read the connected Page; returns the Page name |
 
 ### Auth
 
@@ -596,10 +677,13 @@ Skip Claude entirely: hit **+ New Project** in the web UI, fill in the same brie
 |---|---|---|
 | `GET` | `/auth/youtube/status` | Check if YouTube token exists |
 | `POST` | `/auth/youtube/reset` | Delete YouTube token (forces re-auth on next upload) |
-| `POST` | `/auth/instagram/setup` | Exchange token and save credentials (`app_id`, `app_secret`, `short_token`, optional `ig_user_id`) |
+| `POST` | `/auth/instagram/setup` | Exchange token and save credentials (`short_token`, optional `ig_user_id`; `app_id`/`app_secret` fall back to `FB_APP_ID`/`FB_APP_SECRET` in `.env`) |
 | `GET` | `/auth/instagram/status` | Check credentials and days remaining |
 | `POST` | `/auth/instagram/reset` | Delete Instagram credentials |
 | `POST` | `/auth/instagram/debug` | Call `/me/accounts` and return raw result for diagnostics |
+| `POST` | `/auth/facebook/setup` | Connect a Page: `page_id` + `token` (a user token, or a Page token with `is_page_token: true`). Resolves and stores the Page access token |
+| `GET` | `/auth/facebook/status` | Check whether a Page is connected (returns `page_id`, `page_name`) |
+| `POST` | `/auth/facebook/reset` | Delete Facebook Page credentials |
 
 ### Assets
 
@@ -744,7 +828,7 @@ projects/
 - ElevenLabs API key (audio synthesis)
 - fal.ai API key (image generation)
 - Google Cloud OAuth credentials (YouTube upload only)
-- Facebook App with Instagram Graph API product (Instagram upload only)
+- Facebook App — `FB_APP_ID` / `FB_APP_SECRET` (Instagram and/or Facebook Page upload only; add the Instagram Graph API product for Instagram)
 
 Run `python check_dependencies.py` at any time to verify every item above is present and correctly configured.
 
@@ -784,7 +868,7 @@ python check_dependencies.py
 
 ### 2. API Keys — environment variables
 
-The pipeline uses three external AI services. Create a `.env` file in the project root (copy the provided template):
+The pipeline uses three external AI services for generation, plus optional social-publishing app credentials. Create a `.env` file in the project root (copy the provided template):
 
 ```bash
 cp .env.example .env
@@ -804,9 +888,19 @@ ELEVENLABS_API_KEY=sk_...
 # fal.ai — AI image generation (scene illustrations, character & location art)
 # https://fal.ai → Dashboard → API Keys
 FAL_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Facebook / Instagram app (shared) — only needed to publish to Instagram/Facebook.
+# These identify the app; the per-account tokens are added later on the Connections
+# page and stored in local (git-ignored) credential files. See "Connecting Your Accounts".
+FB_APP_ID=1234567890
+FB_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# YouTube OAuth client (optional) — alternative to a client_secret.json file.
+# GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
+# GOOGLE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-> **Note:** `.env` is listed in `.gitignore` and will never be committed. Never share this file or commit it to version control.
+> **Note:** `.env` is listed in `.gitignore` and will never be committed. Never share this file or commit it to version control. The social keys are optional — leave them out if you don't publish to Instagram/Facebook. Full step-by-step setup for each platform is in [Connecting Your Accounts](#connecting-your-accounts-youtube--instagram--facebook).
 
 ---
 

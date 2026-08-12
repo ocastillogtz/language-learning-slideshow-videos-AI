@@ -8,6 +8,9 @@ token.json
 # Instagram credentials
 instagram_creds.json
 
+# Facebook Page credentials
+facebook_creds.json
+
 # ─── Generated project output ─────────────────────────────────────────────────
 projects/
 reading_source_output/

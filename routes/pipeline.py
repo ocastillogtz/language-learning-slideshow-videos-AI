@@ -636,6 +636,12 @@ def run_upload_instagram(name):
         data             = request.get_json() or {}
         caption_override = data.get("caption", "").strip() or None
         share_to_feed    = bool(data.get("share_to_feed", True))
+        # Cover-frame position in milliseconds (Instagram grabs that frame as the
+        # Reel thumbnail). Blank/None → Instagram's default (first frame).
+        raw_thumb        = data.get("thumb_offset_ms")
+        thumb_offset_ms  = int(raw_thumb) if raw_thumb not in (None, "") else None
+        if thumb_offset_ms is not None and thumb_offset_ms < 0:
+            return jsonify({"error": "thumb_offset_ms must be ≥ 0"}), 400
 
         def _do():
             from upload_instagram import upload_instagram, _read_manifest, _build_caption
@@ -647,10 +653,66 @@ def run_upload_instagram(name):
             file_path = projects_dir / name / ("final_" + name + ".mp4")
             manifest  = _read_manifest(name)
             caption   = caption_override or _build_caption(manifest)
-            upload_instagram(file_path, caption=caption, share_to_feed=share_to_feed)
+            upload_instagram(file_path, caption=caption, share_to_feed=share_to_feed,
+                             thumb_offset=thumb_offset_ms)
 
         run_job(name, "upload_instagram", _do)
         return jsonify({"message": "Instagram upload started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Facebook upload ────────────────────────────────────────────────────────────
+
+@bp.route("/projects/<name>/run/upload_facebook", methods=["POST"])
+def run_upload_facebook(name):
+    try:
+        data          = request.get_json() or {}
+        caption_over  = data.get("caption", "").strip() or None
+        title_over    = data.get("title", "").strip() or None
+        as_reel       = bool(data.get("as_reel", False))
+        # Cover frame (feed videos only; ignored for Reels by the uploader).
+        raw_thumb     = data.get("thumb_offset_ms")
+        thumb_offset_ms = int(raw_thumb) if raw_thumb not in (None, "") else None
+        if thumb_offset_ms is not None and thumb_offset_ms < 0:
+            return jsonify({"error": "thumb_offset_ms must be ≥ 0"}), 400
+
+        # Optional scheduled release (ISO 8601 → unix ts). Facebook requires the
+        # time to be at least ~10 minutes in the future; Reels cap at 29 days out.
+        publish_at = (data.get("publish_at") or "").strip() or None
+        scheduled_ts = None
+        if publish_at:
+            from datetime import datetime, timezone, timedelta
+            try:
+                dt = datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
+            except ValueError:
+                return jsonify({"error": "Invalid publish_at — expected an ISO 8601 timestamp"}), 400
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            if dt <= now + timedelta(minutes=10):
+                return jsonify({"error": "Scheduled time must be at least 10 minutes in the future"}), 400
+            if as_reel and dt > now + timedelta(days=29):
+                return jsonify({"error": "Facebook Reels can be scheduled at most 29 days ahead"}), 400
+            scheduled_ts = int(dt.timestamp())
+
+        def _do():
+            from upload_facebook import upload_facebook, _final_video_path
+            from upload_instagram import _read_manifest, _build_caption
+            file_path = _final_video_path(name)
+            try:
+                manifest = _read_manifest(name)
+            except Exception:
+                manifest = {}
+            vi      = manifest.get("video_info", {}) or {}
+            title   = title_over or vi.get("title") or manifest.get("title") or name
+            caption = caption_over or (_build_caption(manifest) if manifest else "")
+            upload_facebook(file_path, title=title, description=caption, as_reel=as_reel,
+                            thumb_offset_ms=thumb_offset_ms, scheduled_publish_time=scheduled_ts)
+
+        run_job(name, "upload_facebook", _do)
+        msg = "Facebook upload scheduled" if scheduled_ts else "Facebook upload started"
+        return jsonify({"message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -659,12 +721,14 @@ def run_upload_instagram(name):
 def instagram_auth_setup():
     try:
         data        = request.get_json() or {}
-        app_id      = data.get("app_id", "").strip()
-        app_secret  = data.get("app_secret", "").strip()
+        # app_id / app_secret are optional here — setup() falls back to the
+        # FB_APP_ID / FB_APP_SECRET environment variables (.env) when omitted.
+        app_id      = data.get("app_id", "").strip() or None
+        app_secret  = data.get("app_secret", "").strip() or None
         short_token = data.get("short_token", "").strip()
         ig_user_id  = data.get("ig_user_id", "").strip() or None
-        if not app_id or not app_secret or not short_token:
-            return jsonify({"error": "app_id, app_secret, short_token required"}), 400
+        if not short_token:
+            return jsonify({"error": "short_token required"}), 400
         from upload_instagram import setup
         setup(app_id, app_secret, short_token, ig_user_id=ig_user_id)
         return jsonify({"message": "Instagram credentials saved successfully."})

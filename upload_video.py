@@ -10,10 +10,28 @@ Setup (one-time)
 3. Create OAuth 2.0 Client ID → Desktop Application
 4. Download JSON → save as  client_secret.json  next to this script
 
-Authentication flow
--------------------
-First run opens a browser for OAuth consent.
-Credentials are cached in token.json and refreshed automatically.
+How the connection works (OAuth 2.0, "installed app" flow)
+----------------------------------------------------------
+YouTube does NOT use a simple API key. It uses OAuth 2.0, where the app acts
+*on your behalf* after you grant it consent in a browser. Two secrets are involved,
+and it helps to keep them straight:
+
+1. The OAuth *client* (app identity) — a client_id + client_secret that identify
+   THIS application to Google. They are the same for every user of the app and are
+   NOT personal. They come either from GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in
+   .env, or from a downloaded client_secret.json. (see `_build_oauth_flow`)
+
+2. The *user* credentials (token) — proof that YOU personally clicked "Allow".
+   These are obtained by the browser consent flow the first time and then cached in
+   token.json. They contain a short-lived `access_token` plus a long-lived
+   `refresh_token`; the library silently uses the refresh_token to mint new access
+   tokens when the old one expires, so you only consent once. (see `authenticate`)
+
+`SCOPES` lists exactly what the app is allowed to do — here only `youtube.upload`.
+A token is limited to the scopes you consented to: an upload-only token can push a
+video but cannot even read your channel name (that needs `youtube.readonly`). This
+is why the connection test (`get_channel_info`) treats a 403 on channels.list as
+"valid but scope-limited" rather than a failure.
 
 Usage
 -----
@@ -34,6 +52,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -46,6 +65,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -65,6 +87,72 @@ RETRY_EXCEPTIONS   = (Exception,)     # broad — includes network errors
 # =========================
 # AUTHENTICATION
 # =========================
+def _build_oauth_flow() -> InstalledAppFlow:
+    """Build the OAuth consent flow.
+
+    Prefers GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET from the environment (.env,
+    hybrid secret model); falls back to the downloaded client_secret.json file.
+    """
+    client_id     = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    if client_id and client_secret:
+        logger.debug("Building OAuth flow from GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET (.env)")
+        client_config = {
+            "installed": {
+                "client_id":     client_id,
+                "client_secret": client_secret,
+                "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
+                "token_uri":     "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["http://localhost"],
+            }
+        }
+        return InstalledAppFlow.from_client_config(client_config, SCOPES)
+
+    if not CLIENT_SECRET_FILE.exists():
+        raise FileNotFoundError(
+            f"OAuth client not configured: set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET "
+            f"in .env, or place {CLIENT_SECRET_FILE} next to this script.\n"
+            "Download it from Google Cloud Console → APIs & Services → Credentials."
+        )
+    return InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
+
+
+def get_channel_info() -> dict:
+    """Return {title, id} for the authenticated channel — for the connection test.
+
+    Non-interactive: uses only the cached token.json (refreshing it if possible)
+    and NEVER launches the browser consent flow. Raises if not yet authenticated.
+    """
+    if not TOKEN_FILE.exists():
+        raise RuntimeError(
+            "Not authenticated — no token.json yet. Run a YouTube upload once to "
+            "complete the browser consent flow."
+        )
+    creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            TOKEN_FILE.write_text(creds.to_json())
+        else:
+            raise RuntimeError("Stored credentials are invalid — re-authenticate by uploading once.")
+
+    youtube = build("youtube", "v3", credentials=creds)
+    # The upload token only carries the youtube.upload scope, which is NOT allowed
+    # to read channels.list. A 403 there therefore means the token is valid but
+    # scope-limited — still a successful connection, just without the channel name.
+    try:
+        resp  = youtube.channels().list(part="snippet", mine=True).execute()
+        items = resp.get("items", [])
+        if items:
+            snip = items[0].get("snippet", {})
+            return {"title": snip.get("title", ""), "id": items[0].get("id", ""),
+                    "scope_limited": False}
+    except HttpError as e:
+        if e.resp.status != 403:
+            raise
+    return {"title": "", "id": "", "scope_limited": True}
+
+
 def authenticate() -> Credentials:
     """
     Return valid OAuth2 credentials, running the browser flow if needed.
@@ -77,11 +165,15 @@ def authenticate() -> Credentials:
     """
     creds: Optional[Credentials] = None
 
+    # Step 1 — reuse the cached user token if we have one. token.json holds the
+    # access_token + refresh_token from a previous consent, so we don't prompt again.
     if TOKEN_FILE.exists():
         logger.debug("Loading cached credentials from %s", TOKEN_FILE)
         creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
 
     if not creds or not creds.valid:
+        # Step 2 — the access_token expired but we still hold a refresh_token:
+        # exchange it for a fresh access_token silently (no browser, no user action).
         if creds and creds.expired and creds.refresh_token:
             try:
                 logger.info("Refreshing expired credentials …")
@@ -96,15 +188,16 @@ def authenticate() -> Credentials:
                 creds = None   # fall through to browser flow below
 
         if not creds or not creds.valid:
-            if not CLIENT_SECRET_FILE.exists():
-                raise FileNotFoundError(
-                    f"OAuth client secret not found: {CLIENT_SECRET_FILE}\n"
-                    "Download it from Google Cloud Console → APIs & Services → Credentials."
-                )
+            # Step 3 — no usable token at all: run the interactive consent flow.
+            # run_local_server spins up a temporary localhost web server, opens the
+            # browser to Google's consent screen, and captures the redirect that
+            # carries the authorization code — which the library swaps for tokens.
             logger.info("Opening browser for OAuth consent …")
-            flow  = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
+            flow  = _build_oauth_flow()
             creds = flow.run_local_server(port=0)
 
+        # Persist whatever we ended up with (refreshed or freshly consented) so the
+        # next run skips straight back to Step 1.
         TOKEN_FILE.write_text(creds.to_json())
         logger.debug("Credentials saved to %s", TOKEN_FILE)
 
