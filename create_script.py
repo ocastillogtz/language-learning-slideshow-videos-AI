@@ -74,6 +74,32 @@ _FRAMING_TOKENS: str = ""
 MAX_SCENE_CHARACTERS = 2
 
 
+# A wardrobe-override project type (e.g. song_quiz) re-costumes the character every scene.
+# Clothing lives entirely in a character's variable_description; fixed_description holds only
+# identity (build, skin, hair, face). So override types build descriptions from
+# fixed_description alone and drop variable_description — see _identity_only().
+
+# The stock "match reference clothing" instruction emitted by the image-prompt builders.
+# Under wardrobe override it is swapped for one that keeps the face/hair but takes the
+# outfit from the scene's Action text instead of the reference image.
+_MATCH_CLOTHING_LINE = "Match exact clothing, hair, and facial features from reference."
+_RELAXED_CLOTHING_LINE = (
+    "Keep the same face, hair and body as the reference, but DRESS the character in the "
+    "clothing and accessories described in the Action above — do NOT copy the reference outfit."
+)
+
+
+def _identity_only(char_data: dict) -> str:
+    """Identity description (fixed_description) with the default outfit dropped — used by
+    wardrobe-override types so the model re-dresses the character per scene."""
+    return (char_data.get("fixed_description", "") or "").strip()
+
+
+def _relax_clothing(prompt: str) -> str:
+    """Swap the 'match reference clothing' instruction for the wardrobe-override variant."""
+    return prompt.replace(_MATCH_CLOTHING_LINE, _RELAXED_CLOTHING_LINE)
+
+
 class ScriptTruncatedError(RuntimeError):
     """Raised when the model stopped because it hit the output-token ceiling
     (finish_reason == 'length'), so the returned JSON is incomplete."""
@@ -159,6 +185,14 @@ def _build_prompt(
     char_a_desc = _full_desc(char_a_data)
     char_b_desc = _full_desc(char_b_data)
 
+    # Wardrobe-override types (e.g. song_quiz) re-costume the character every scene, so feed
+    # the model identity only (no default outfit) — otherwise it parrots the outfit into
+    # each scene_visual. Clothing lives in variable_description, which _identity_only drops.
+    override_wardrobe = bool(project_type.get("override_wardrobe"))
+    if override_wardrobe:
+        char_a_desc = _identity_only(char_a_data)
+        char_b_desc = _identity_only(char_b_data)
+
     words_list = ", ".join(gen.get("words", []) or [])
 
     # Dialog count: use provided value, or fall back to project_type default (or "4-6")
@@ -189,6 +223,8 @@ def _build_prompt(
     if project_type.get("supports_multi_character") and len(cast) > 2:
         def _cast_desc(nm):
             cd = chars_data.get(nm, {})
+            if override_wardrobe:
+                return _identity_only(cd)
             return f"{cd.get('fixed_description','') or ''}, {cd.get('variable_description','') or ''}".strip(", ")
         extra_lines = "\n".join(f"  {nm} — {_cast_desc(nm)}" for nm in cast[2:])
         roster = ", ".join(cast)
@@ -578,6 +614,10 @@ def build_scene_list(
     cast       = list(char_names)
     multi      = bool(project_type.get("supports_multi_character")) and len(cast) > 2
     char_a, char_b = char_names[0], char_names[1]
+    # Wardrobe-override types dress the character per scene. The image-prompt builders already
+    # use only fixed_description (identity, no outfit), so nothing to strip here; we just relax
+    # the "match reference clothing" instruction below so the scene's costume wins at render time.
+    override_wardrobe = bool(project_type.get("override_wardrobe"))
     char_a_data    = chars_data[char_a]
     char_b_data    = chars_data[char_b]
     if loc_key and loc_key in all_locs:
@@ -687,6 +727,9 @@ def build_scene_list(
                 spk_data       = char_a_data if speaker == char_a else char_b_data
                 img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual, framing_tokens)
                 reference_type = "single_speaker"
+
+            if override_wardrobe:
+                img_prompt = _relax_clothing(img_prompt)
 
             image_obj = {
                 "file_path": None,

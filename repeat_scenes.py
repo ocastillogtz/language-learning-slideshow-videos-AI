@@ -39,7 +39,7 @@ import logging
 import argparse
 from pathlib import Path
 
-from utils_config import load_config
+from utils_config import load_config, load_project_types
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -81,6 +81,22 @@ def _repeat_duration_ms(dialog: dict, cfg: dict, factor: float = None) -> int:
     return int((dialog.get("duration_ms") or 2500) * factor)
 
 
+def _type_hold_factor(manifest: dict, cfg: dict) -> float | None:
+    """Per-type default hold factor (project_types.json `repeat_hold_factor`), resolving
+    base_type inheritance. Returns None when the project's type doesn't define one."""
+    key = (manifest.get("project_metadata") or {}).get("project_type_key")
+    if not key:
+        return None
+    types = load_project_types(cfg["assets_dir"])
+    pt = types.get(key)
+    if not pt:
+        return None
+    base = pt.get("base_type")
+    merged = {**types.get(base, {}), **pt} if base and base in types else pt
+    val = merged.get("repeat_hold_factor")
+    return float(val) if val is not None else None
+
+
 def add_repeat_scenes(project_name: str, factor: float = None) -> dict:
     """Insert a repeat scene after every dialog line that doesn't already have one.
 
@@ -99,6 +115,11 @@ def add_repeat_scenes(project_name: str, factor: float = None) -> dict:
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
+
+    # No explicit factor → use the project type's default (e.g. song_quiz = 0.7) before
+    # the config-wide fallback in _repeat_duration_ms.
+    if factor is None:
+        factor = _type_hold_factor(manifest, cfg)
 
     scenes = manifest.get("scenes", [])
     out: list[dict] = []

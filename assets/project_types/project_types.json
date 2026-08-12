@@ -162,6 +162,90 @@
     "default_dialog_count": "4-6",
     "format": "vertical"
   },
+  "song_quiz": {
+    "name": "song_quiz",
+    "supports_multi_character": false,
+    "override_wardrobe": true,
+    "self_description": "A guessing-game video: a narrator challenges the viewer to name 3-5 world-famous songs from a grammatically correct German translation of just the hook (max ~30 words each). Each round has a silent 'Lied N' label and visuals of the characters enjoying the music in outfits and with audio gear matching that song's vibe; a character closes by asking viewers to guess in the comments. No repetition section.",
+    "description_for_prompt": "You are generating content for a German language learning QUIZ video.\nLevel: {LEVEL}\n\nCONCEPT\n-------\nThis is a fun guessing game. Each round presents a world-famous song by translating a\nrecognizable part of it (usually the chorus or its most iconic line) from English into\nGERMAN. The viewer must guess which song it is from the German translation alone and\nwrite their answer in the comments.\n\nCHARACTERS\n  Character A: {CHAR_A} — {CHAR_A_DESC}\n  Character B: {CHAR_B} — {CHAR_B_DESC}\n\nWARDROBE OVERRIDE (read carefully): keep each character's face, hair, body and identity\nEXACTLY as described above, but their DEFAULT CLOTHING listed above DOES NOT APPLY in this\nvideo. This is a costume quiz: in every song round you MUST dress the character in a NEW\nthemed outfit that matches that song, and it must be DIFFERENT in each round. Never write\n\"the same outfit\", never keep them in their everyday clothes, and never reuse a previous\nround's costume.\n\nUser context (optional theme/era/genre to steer the song selection): {PROVIDED_CONTEXT}\nSong hints / constraints: {PROVIDED_LEARNING_POINTS}\n\nTRANSLATION RULES — THE MOST IMPORTANT PART\n-------------------------------------------\n- Do NOT translate the whole song. Translate ONLY the HOOK — the chorus or the single most\n  memorable, instantly recognizable line of the song.\n- Keep each round SHORT: MAXIMUM 40 words of German per round (fewer is better). Pick the\n  most iconic snippet and stop there.\n- Translate the MEANING of that hook into natural, GRAMMATICALLY CORRECT German.\n  It does NOT have to be word-for-word — always prioritize correct German grammar and\n  natural phrasing over a literal, clumsy word-by-word rendering.\n- Choose a hook whose German translation does NOT spell out the song's title or the answer\n  outright — keep it a real challenge.\n- NEVER write the song title, the artist name, or the answer anywhere the viewer can see\n  it: not in the dialog text, not in a silent label, not in scene_visual.\n\nSTRUCTURE — generate exactly this sequence\n------------------------------------------\n1. narration: a short, catchy, high-energy intro spoken by the narrator that challenges\n   the viewer — the German equivalent of \"Do you know this popular song from its German\n   translation? Guess in the comments!\" Keep it punchy.\n2. Exactly {DIALOG_COUNT} SONG rounds — one dialog item each, alternating {CHAR_A} and\n   {CHAR_B} as the speaker:\n     - Begin the line with a SILENT numbered label so viewers can reference it in the\n       comments: \"-Lied 1:-\", \"-Lied 2:-\", and so on (the -dash- form is shown in the\n       subtitle but NOT spoken by the voice).\n     - Then the grammatically correct German translation of the chosen lyric.\n3. ONE final CTA dialog item spoken by {CHAR_A} or {CHAR_B}: the character warmly asks the\n   viewer to write their guesses in the comments, e.g. \"Schreib deine Antworten in die\n   *Kommentare*!\"\n\nSo the dialog array holds {DIALOG_COUNT} song items FOLLOWED BY exactly 1 CTA item.\n\nVISUAL DIRECTION\n----------------\nEach dialog line needs a \"scene_visual\" field — a detailed English description (2-4\nsentences) of the illustrated scene. The image is generated entirely from this text.\n\nRules for scene_visual:\n- For SONG rounds: show the character(s) ENJOYING the music — dancing, singing along,\n  nodding, lost in the beat. Crucially, MATCH THE VIBE OF THAT SPECIFIC SONG, and MAKE IT\n  VISIBLY CHANGE from round to round. Every song round's scene_visual MUST explicitly and\n  concretely describe ALL THREE of these (a round that reuses the previous outfit or omits\n  the audio device is INVALID):\n    * OUTFIT (mandatory, name it): describe a specific costume that fits the song's genre,\n      era and mood — colours, garments, accessories. It MUST differ from the other rounds.\n      Do NOT leave the character in their default everyday clothes. Examples: sequined\n      disco jumpsuit; hip-hop hoodie, snapback and gold chain; flowy summer sundress;\n      80s rocker leather jacket with studs.\n    * AUDIO SYSTEM (mandatory, name a specific device): put a concrete piece of sound gear\n      in the scene that matches the vibe — a glowing nightclub DJ booth with turntables, a\n      retro boombox on the shoulder, big over-ear studio headphones, a vintage hi-fi with a\n      spinning vinyl record, a car with subwoofers, a wall of festival speaker stacks. Use\n      a DIFFERENT device each round. A microphone alone does NOT count as the audio system.\n    * ENVIRONMENT & LIGHTING: match the setting and colour palette to the song's feeling\n      (neon dancefloor, moody rap studio, sunny rooftop, 80s arena).\n  Do NOT depict the song title, album cover, the real artist, or any recognizable logo or\n  written text — capture only the feeling.\n  REQUIRED FORMAT — every SONG round's scene_visual MUST END with these two literal labelled\n  sentences (this is how the outfit and audio system are enforced; never omit them and never\n  reuse the same costume or device across rounds):\n      \"Outfit: <specific themed costume for this song — garments, colours, accessories; NOT\n      the character's everyday clothes>. Audio gear: <one specific sound device visible in\n      the scene, e.g. DJ booth with turntables / boombox / studio headphones / vintage hi-fi\n      with vinyl / subwoofers / festival speaker stacks>.\"\n\n  WORKED EXAMPLES of correct song-round scene_visuals (copy this level of specificity —\n  note the NAMED costume that is NOT the character's default clothes, and the NAMED audio\n  device, different in each):\n    ✓ \"Sani dances on a neon disco dancefloor, pink and blue strobes flashing as he throws\n       one arm up with a huge grin. Outfit: a shiny silver sequined jacket, black fitted\n       trousers and mirrored sunglasses. Audio gear: a glowing DJ booth with two spinning\n       turntables beside him.\"\n    ✓ \"Wiebke leans into a moody rap studio, wearing an oversized black hoodie, a gold chain\n       and a backwards snapback cap. She has huge over-ear studio headphones around her neck\n       and one hand on a mixing desk, low blue light on the dark walls.\"\n    ✓ \"Sani stands on a sunlit rooftop in a breezy yellow floral summer shirt and round\n       sunglasses, a vintage boombox resting on his shoulder, eyes closed with a blissful\n       smile as warm light washes over the city skyline behind him.\"\n    ✗ \"Wiebke smiles on a stage holding a microphone, wearing her burgundy blouse and beige\n       cardigan.\" (WRONG: default clothing, only a microphone, no themed costume or audio\n       device.)\n- For the CTA item: show the character pointing toward the comments / giving a friendly\n  \"write it below\" gesture, encouraging and warm.\n- Always describe the character's posture, expression and gesture, plus the surrounding\n  environment and lighting.\n\nSet \"scene_characters\" on each dialog item:\n  \"speaker_only\" — only the speaking character appears\n  \"both\"         — both characters appear together (fine for the intro round or the CTA)\n\nAdditional rules:\n- All German text must match level {LEVEL}\n- main_background: environment only, no characters (a stage / music-quiz set works well)\n- Use \"...\" to add natural pauses.\n\nINLINE MARKUP in the dialog \"text\" field:\n    IMPERATIVE: every dialog line MUST highlight at least one useful German word or\n    expression the viewer should notice. A line with no highlight is INVALID.\n    If the line highlights exactly ONE word or expression, wrap that one in *asterisks*\n    (renders bold). Example: \"Ich sehe ein *Feuerzeichen* am Himmel.\"\n    If the line highlights TWO OR MORE words or expressions, wrap EACH of them in\n    _underscores_ (each renders in its own highlight colour).\n    Never mix the two styles in one line, and only ever wrap the specific word or short\n    phrase — never a whole sentence, and never the \"-Lied N:-\" label.\n    Use -text- (dashes) for silent labels: visible in the subtitle but NOT spoken by TTS.\n    This is exactly how the \"-Lied 1:-\" round numbers must be written.\n\nVIDEO METADATA — required fields, must be filled thoughtfully:\n\n- \"title\": The full video title string exactly as it will appear on YouTube/Instagram.\n    Format: [Short catchy topic] ({LEVEL}) 🥨 #tag1 #tag2 #tag3...\n    Rules — ALL must be satisfied:\n      1. TOTAL length must be UNDER 100 characters (count every character, incl. spaces,\n         emoji and hashtags).\n      2. Topic part: short and catchy, in German or mixed German/English — make it feel\n         worth clicking (e.g. \"Errätst du diese Songs auf Deutsch?\").\n      3. Level in parentheses right after the topic: ({LEVEL})\n      4. Pretzel emoji immediately after the level: 🥨\n      5. Finish with 3-5 hashtags. Always include #germanlearning and #deutschlernen.\n         Add 1-3 topic-specific tags (e.g. #songquiz #musik).\n    IMPORTANT: count the characters before finalizing; if over 100, shorten the topic —\n    do NOT drop the level, emoji, or core hashtags.\n\n- \"tags\": Space-separated hashtags for search metadata (not shown in title).\n    Format: \"#germanlearning #deutschlernen #learnGerman #deutsch #songquiz #musik #[level]\"\n\n- \"insights\": The YouTube/Instagram description. It must stand alone and drive engagement.\n    Required content (in this order, as flowing plain text — no headers, no bullet symbols):\n      1. One sentence explaining the game: these are famous songs translated into German,\n         and the viewer should guess each one in the comments.\n      2. The German translated line of EACH round, numbered to match the on-screen labels\n         (Lied 1, Lied 2, ...), so viewers can quote them when guessing.\n      3. GLOSSARY (mandatory): the most advanced words and expressions actually used in the\n         translations — the ones most challenging for a {LEVEL} learner — each with the\n         article for nouns and a brief English gloss, inline.\n      4. A clear call to action inviting guesses and comments.\n      5. At the VERY END, on its own, an answer key introduced by \"Auflösung:\" listing each\n         round number and the real song title + artist, so the creator has a record. (The\n         creator can delete this line before publishing if they want to preserve the\n         mystery — but always include it.)\n    Rules:\n      - Plain text only — no markdown, no bullet points, no headers, no asterisks\n      - Aim for 5-9 sentences total\n      - Must be immediately copy-pasteable into a YouTube description as-is\n\nOUTPUT JSON STRUCTURE (follow exactly):\n{{\n  \"title\": \"short engaging title string\",\n  \"tags\": \"#tag1 #tag2 #tag3 ...\",\n  \"insights\": \"plain text description following the insights rules above, incl. the glossary and the Auflösung answer key\",\n  \"main_background\": \"environment description, no characters\",\n  \"narration\": {{\"text\": \"catchy German intro challenging the viewer to guess the songs\"}},\n  \"dialog\": [\n    {{\n      \"text\": \"-Lied 1:- German translation of the lyric with at least one *highlight*\",\n      \"speaker\": \"CharacterName\",\n      \"scene_visual\": \"detailed English scene description evoking the song's mood, no title/artist/text\",\n      \"scene_characters\": \"speaker_only\"\n    }}\n  ]\n}}\n\n- Output ONLY the JSON object, no markdown, no backticks",
+    "output_json_schema": {
+      "type": "object",
+      "required": [
+        "title",
+        "tags",
+        "insights",
+        "main_background",
+        "narration",
+        "dialog"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "string"
+        },
+        "insights": {
+          "type": "string"
+        },
+        "main_background": {
+          "type": "string"
+        },
+        "narration": {
+          "type": "object",
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        },
+        "dialog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "text",
+              "speaker",
+              "scene_visual",
+              "scene_characters"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "speaker": {
+                "type": "string"
+              },
+              "scene_visual": {
+                "type": "string"
+              },
+              "scene_characters": {
+                "type": "string",
+                "enum": [
+                  "speaker_only",
+                  "both"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "scene_builder_rules": {
+      "include_narration": true,
+      "include_dialog": true,
+      "include_repetition_section": false,
+      "repetition_count": 0,
+      "inter_pause_between_scenes": true,
+      "bell_before_repetition": false
+    },
+    "default_dialog_count": "3-5",
+    "format": "vertical",
+    "repeat_hold_factor": 0.7
+  },
   "word_learning": {
     "name": "word_learning",
     "supports_multi_character": true,
