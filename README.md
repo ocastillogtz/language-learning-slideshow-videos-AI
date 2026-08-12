@@ -347,13 +347,28 @@ Instagram publishes **through** a Facebook Page, so you authenticate as your Fac
 
 Facebook posting is **independent of Instagram** — it targets a Page directly and needs only that Page's id and token.
 
-1. Reuse the same Facebook App (its `FB_APP_ID` / `FB_APP_SECRET` in `.env`), and make sure you're an **admin** of the target Page.
-2. In the [Graph API Explorer](https://developers.facebook.com/tools/explorer/), generate a **User Access Token** with `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`.
-3. On the Facebook card, enter the **Page ID** and paste the **User token**, then click **Connect Page**. The backend exchanges the token, reads your Page's own access token from `/me/accounts`, and stores it (a Page token derived this way does **not** expire).
-   - *Alternative:* if you already have a **Page access token**, tick **"Token is already a Page token"** and it's stored as-is.
-4. **Test Connection** should report the Page name. When you run the **Upload to Facebook** pipeline step, tick **"Publish as a Reel"** for a vertical 9:16 Reel; leave it unticked for a normal feed video. **Reset** clears the stored credentials.
+There are two setup paths. Try the simple one first; if your Page is managed by a **Business Portfolio** (Meta Business Suite), use the business path below.
 
-> **Which token for which platform?** Instagram needs a *user* token (it then finds the linked IG account); Facebook needs a *Page* token (the backend can derive it from a user token for you). This is the core difference the two integrations were split around.
+**Simple path — a Page directly on your profile**
+1. Reuse the same Facebook App (its `FB_APP_ID` / `FB_APP_SECRET` in `.env`), and make sure you're an **admin** of the target Page.
+2. In the [Graph API Explorer](https://developers.facebook.com/tools/explorer/), generate a **User Access Token** with `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`. In the login dialog, **explicitly select your Page** (granting the permission is *not* enough — you also opt the app in to the specific Page).
+3. Run `me/accounts?fields=name,id` to read your **Page ID**.
+4. On the Facebook card, enter the **Page ID**, paste the **User token**, click **Connect Page**. The backend exchanges the token, reads your Page's own access token from `/me/accounts`, and stores it (a Page token derived this way does **not** expire).
+5. **Test Connection** should report the Page name.
+
+**Business-owned Page (New Pages Experience / Business Portfolio)** — such Pages do **not** appear in `/me/accounts`, so the simple path returns an empty list even with all permissions `granted`. Go through the business graph instead and paste a **Page token** directly:
+1. Regenerate the token adding **`business_management`** to the three page permissions; select your **Business** and **Page** in the dialog.
+2. `me/businesses?fields=name,id` → copy the business `id`.
+3. `{business-id}/owned_pages?fields=name,id` → copy the Page `id` *(try `client_pages` if `owned_pages` is empty — that covers Pages shared with, not owned by, the business)*.
+4. `{page-id}?fields=name,access_token` → the returned `access_token` **is a Page access token**. Copy it.
+5. On the Facebook card, enter the **Page ID**, paste that **Page token**, and **tick "Token is already a Page token"** (this skips the `/me/accounts` lookup that fails for business Pages) → **Connect Page** → **Test Connection**.
+   - *Most robust alternative — a System User token (never expires):* **business.facebook.com → Business settings → Users → System users → Add** (Admin) → **Add assets → Pages →** your Page (Full control) → **Generate new token** for your app with `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`. Use it as the Page token in step 5.
+
+Once connected, running the **Upload to Facebook** pipeline step publishes to the Page; tick **"Publish as a Reel"** for a vertical 9:16 Reel, or leave it off for a feed video. **Reset** clears the stored credentials.
+
+> **Which token for which platform?** Instagram needs a *user* token (it then finds the linked IG account); Facebook needs a *Page* token. For a Page directly on your profile the backend derives the Page token from a user token; for a **business-owned** Page, fetch the Page token yourself (steps above) and paste it with "Token is already a Page token". This user-token-vs-Page-token difference is the core reason the two integrations were split apart.
+>
+> **Gotcha:** a permission showing `granted` in `me/permissions` does **not** mean a Page is accessible — Page access is authorized separately (per-Page in the login dialog, or via `business_management` for business-owned Pages). An empty `me/accounts` with all permissions granted almost always means the Page lives in a Business Portfolio.
 
 ---
 
