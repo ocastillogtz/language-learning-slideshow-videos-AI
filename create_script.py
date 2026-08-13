@@ -137,6 +137,74 @@ def _load_style_tokens() -> None:
 # PROMPT BUILDER
 # =============================================================================
 
+def _wants_narration_hook(project_type: dict) -> bool:
+    """The opening narration gets the 'catchy hook + friends-doing-an-activity' treatment
+    for the standard narrative/teaching types AND the preposition quiz. Only song_quiz opts
+    out — it re-costumes the cast every scene (override_wardrobe) and stages its own narration
+    visuals per song, so a generic shared-activity shot would fight its art direction."""
+    rules = project_type.get("scene_builder_rules", {})
+    return bool(
+        rules.get("include_narration")
+        and not project_type.get("override_wardrobe")
+    )
+
+
+def _narration_hook_block(level: str, cast: list[str], redefine_text: bool = True) -> str:
+    """Appended to the per-type template for hook-eligible types: puts the opening narration
+    over the characters doing a fun shared activity together (instead of standing around doing
+    nothing). When redefine_text is True the narration text is (re)written as an attention hook;
+    when False (quiz types that already script their own challenge line) the existing text is
+    kept and only the shared-activity 'scene_visual' is added."""
+    if len(cast) >= 2:
+        who = ", ".join(cast[:-1]) + f" and {cast[-1]}"
+    elif cast:
+        who = cast[0]
+    else:
+        who = "the characters"
+
+    activity_rule = (
+        f'a vivid English description (2-3 sentences) of {who} doing a FUN activity '
+        "TOGETHER as friends — e.g. playing video games on a couch, walking and chatting through a "
+        "park, playing a sport, doing a craft, painting or making art, cooking together. Show them "
+        "mid-action, candid and relaxed, clearly enjoying each other's company — NEVER just standing, "
+        "posing, or looking at the camera. Prefer an activity that loosely fits this video's topic or "
+        'mood, but the priority is "friends genuinely hanging out and having fun". Describe posture, '
+        "gestures, expressions and the surrounding environment so an illustrator can draw it."
+    )
+
+    if redefine_text:
+        return f"""
+
+=== OPENING NARRATION — HOOK + SHARED-ACTIVITY SCENE (MANDATORY, OVERRIDES the plain narration above) ===
+The video opens on the narrator's line over an establishing shot. Build the "narration"
+object with BOTH fields below (not just "text"):
+
+1) "text": a short, catchy, PROVOKING hook in German at level {level} — 1 sentence (2 at
+   the very most). It must make the viewer stop scrolling and get curious about THIS video's
+   topic, WITHOUT explaining it yet. Reach for a rhetorical question or a surprising claim,
+   e.g. "Wusstest du, dass ...?", "So benutzt man dieses Wort WIRKLICH ...", "Fast alle sagen
+   das falsch ...". Keep it natural at level {level} and comfortable to read aloud.
+
+2) "scene_visual": {activity_rule}
+
+So the narration object becomes:
+  "narration": {{ "text": "German hook sentence", "scene_visual": "English shared-activity scene" }}
+"""
+
+    return f"""
+
+=== OPENING NARRATION — ADD A SHARED-ACTIVITY SCENE (MANDATORY) ===
+Keep the narration "text" exactly as instructed above (the catchy challenge intro). ADDITIONALLY,
+add a "scene_visual" field to the "narration" object so the intro line plays over the characters
+having fun together instead of standing around:
+
+- "scene_visual": {activity_rule}
+
+So the narration object becomes:
+  "narration": {{ "text": "<the challenge intro as specified above>", "scene_visual": "English shared-activity scene" }}
+"""
+
+
 def _build_prompt(
     project_type: dict,
     manifest: dict,
@@ -262,6 +330,16 @@ def _build_prompt(
             "setting and wardrobe rather than switching to a generic environment or the "
             "characters' default clothing.\n"
         )
+
+    # Opening-narration hook: replace the "characters standing doing nothing" intro with a
+    # catchy hook line over the cast doing a fun activity together. Appended last so it wins.
+    # Quiz types that already script their own challenge narration keep that text and only
+    # gain the shared-activity visual (redefine_text=False).
+    if _wants_narration_hook(project_type):
+        rules = project_type.get("scene_builder_rules", {})
+        scripts_own_narration = bool(rules.get("expand_preposition_quiz"))
+        prompt += _narration_hook_block(level, cast, redefine_text=not scripts_own_narration)
+
     return prompt
 
 
@@ -492,9 +570,28 @@ def _select_repetitions(
 # IMAGE PROMPT BUILDERS
 # =============================================================================
 
-def _narrator_image_prompt(loc_desc: str, framing_tokens: str = None) -> str:
+def _narrator_image_prompt(loc_desc: str, framing_tokens: str = None,
+                           scene_visual: str = None, roster: str = None) -> str:
     _load_style_tokens()
     framing = framing_tokens or _FRAMING_TOKENS
+    if scene_visual:
+        # Opening "hook" narration: the characters are mid-activity together, not posing.
+        # Uses the same "Action: ...\n\n" marker as the dialog prompts so a later
+        # scene_visual swap (update_prompt_scene_visual) replaces just that segment.
+        roster_block = (roster.rstrip() + "\n\n") if roster else ""
+        return (
+            f"{_STYLE_TOKENS}\n"
+            f"FRAMING: {framing}\n\n"
+            f"Scene at: {loc_desc}\n"
+            f"{roster_block}"
+            f"Action: {scene_visual}\n\n"
+            "Opening establishing shot: show the characters together, genuinely engaged in the "
+            "shared activity described — relaxed friends hanging out, mid-action and candid. "
+            "Never just standing, posing, or staring at the camera. "
+            "Match exact clothing, hair, and facial features from reference. "
+            "Integrate them naturally into the environment. "
+            "No text, no subtitles, no speech bubbles, no anime eyes, no watermarks."
+        )
     return (
         f"{_STYLE_TOKENS}\n"
         f"FRAMING: {framing}\n\n"
@@ -573,10 +670,11 @@ def update_prompt_scene_visual(prompt: str, scene_visual: str) -> str:
     """Swap the visual/action portion of a stored image prompt for a new one,
     keeping the style/framing header and closing instructions intact.
 
-    Dialog prompts embed the visual as an "Action: ...\\n\\n" paragraph — that
-    segment is replaced. Narration prompts have no Action marker; there the whole
-    body after the style/FRAMING header is replaced by the new visual (plus the
-    standard no-text safety tokens). Unrecognized shapes are returned unchanged.
+    Dialog prompts (and hook-narration prompts that carry a shared-activity scene)
+    embed the visual as an "Action: ...\\n\\n" paragraph — that segment is replaced.
+    Legacy narration prompts have no Action marker; there the whole body after the
+    style/FRAMING header is replaced by the new visual (plus the standard no-text
+    safety tokens). Unrecognized shapes are returned unchanged.
     """
     if not prompt or not scene_visual:
         return prompt
@@ -670,9 +768,23 @@ def build_scene_list(
             nar_text = ""
         if not nar_text:
             logger.warning("Narration text is empty — GPT may have omitted or misformatted it")
+        # Optional shared-activity scene for the opening hook (narrative types only). When
+        # present, the narrator image shows the cast mid-activity instead of standing around.
+        nar_scene_visual = ""
+        if isinstance(nar_raw, dict):
+            nar_scene_visual = (nar_raw.get("scene_visual") or "").strip()
+        present_nar = list(cast)[:max_scene_chars] if multi else [char_a, char_b]
+        nar_roster = "\n".join(
+            f"{nm}: {chars_data.get(nm, {}).get('fixed_description', '') or ''}"
+            for nm in present_nar
+        )
         nar_img = {
             "file_path": None,
-            "prompt_to_create": _narrator_image_prompt(loc_desc, framing_tokens),
+            "prompt_to_create": _narrator_image_prompt(
+                loc_desc, framing_tokens,
+                scene_visual=nar_scene_visual or None,
+                roster=nar_roster,
+            ),
             "reference_type": "multi" if multi else "both",
         }
         if multi:
