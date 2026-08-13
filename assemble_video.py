@@ -142,7 +142,57 @@ def assemble_video(
             out_path.unlink()
         moviepy_target.rename(out_path)
 
+    # Auto-thumbnail: record where in the FINAL video the first "clean" pause sits
+    # (a silent pause freezes the previous scene's image WITHOUT a subtitle — an
+    # ideal cover frame). Stored as video_info.thumb_offset_ms so the Instagram
+    # upload can default its cover frame to it. Computed here because only the
+    # assembler knows the true clip durations plus the branding/speed offsets.
+    intro_dur_s = 0.0
+    if apply_branding and branding_mode in ("intro", "both"):
+        bp = cfg["branding_dir"] / branding_file
+        if bp.exists():
+            intro_dur_s = _probe_duration(bp)
+    try:
+        thumb_ms = _compute_thumb_offset_ms(manifest, videos_dir, intro_dur_s, speed_factor)
+        if thumb_ms is not None:
+            manifest.setdefault("video_info", {})["thumb_offset_ms"] = thumb_ms
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+            logger.info("Thumbnail offset (first clean pause): %d ms", thumb_ms)
+    except Exception as e:
+        logger.warning("Could not compute thumbnail offset: %s", e)
+
     logger.info("Done: %s", out_path)
+
+
+def _compute_thumb_offset_ms(manifest, videos_dir, intro_dur_s, speed_factor):
+    """Return the millisecond offset of the first clean cover frame in the FINAL
+    video, or None if there is no suitable pause.
+
+    Walks the scenes in the exact order they are concatenated (only those with a
+    rendered clip), summing real clip durations. The target is the midpoint of the
+    first silent pause (audio == null, description == "pause") that follows an
+    image-bearing scene — during that pause the scene image is on screen with no
+    subtitle. The pre-speed content offset is divided by the speed factor and the
+    (un-sped) intro branding duration is added, matching how the final file is built:
+    [intro] + speed(content).
+    """
+    speed = float(speed_factor) or 1.0
+    running = 0.0          # cumulative pre-speed seconds of content
+    prev_had_image = False
+    for scene in manifest.get("scenes", []):
+        clip = videos_dir / (scene["id"] + ".mp4")
+        if not clip.exists():
+            continue
+        dur = _probe_duration(clip)
+        is_pause = scene.get("audio") is None and scene.get("description") == "pause"
+        if is_pause and prev_had_image and dur > 0:
+            content_offset = running + dur / 2.0
+            final_offset_s = intro_dur_s + content_offset / speed
+            return int(round(final_offset_s * 1000))
+        running += dur
+        prev_had_image = bool((scene.get("image") or {}).get("file_path"))
+    return None
 
 
 def _probe_video_dims(path):

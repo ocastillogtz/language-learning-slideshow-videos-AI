@@ -1,7 +1,29 @@
+import json
 from flask import Blueprint, request, jsonify
 from core import run_job, get_job, PROJECTS_DIR
 
 bp = Blueprint("pipeline", __name__, url_prefix="")
+
+
+def _save_render_settings(name, section, settings):
+    """Persist the chosen parameters for a pipeline step into the manifest under
+    render_settings.<section>, so the UI can pre-fill them next time instead of
+    making the user re-pick (e.g. background audio, branding). Only "preference"
+    values are stored — never one-shot action flags like overwrite/regenerate.
+    Drops None values so a blank field doesn't wipe a previously saved choice.
+    Best-effort: never raises into the request path."""
+    try:
+        mp = PROJECTS_DIR / name / "project_manifest.json"
+        if not mp.exists():
+            return
+        with open(mp, encoding="utf-8") as f:
+            m = json.load(f)
+        clean = {k: v for k, v in settings.items() if v is not None}
+        m.setdefault("render_settings", {})[section] = clean
+        with open(mp, "w", encoding="utf-8") as f:
+            json.dump(m, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 @bp.route("/projects/<name>/status/<step>")
@@ -193,6 +215,17 @@ def run_video(name):
         # Extra hold (ms) after a footnote scene so it can be read. None → config default.
         raw_fh            = data.get("footnote_hold_ms")
         footnote_hold_ms  = int(raw_fh) if raw_fh not in (None, "") else None
+        # Remember the chosen render preferences so the UI can pre-fill them next
+        # time (action flags like overwrite/regen are intentionally excluded).
+        _save_render_settings(name, "video", {
+            "annotated_subtitles": annotated_subtitles,
+            "footnote": footnote or None,
+            "annot_font_scale": annot_font_scale,
+            "repeat_message": repeat_message,
+            "repeat_fontsize": repeat_fontsize,
+            "footnote_hold_ms": footnote_hold_ms,
+            "inter_pause_ms": inter_pause_ms,
+        })
         from create_video import create_videos
         run_job(name, step, create_videos, name, overwrite, annotated_subtitles, footnote,
                 inter_pause_ms, fmt, subdir, annot_font_scale, regen_annotations,
@@ -536,6 +569,15 @@ def run_assemble(name):
             branding_mode = "none"
         raw_gain      = data.get("bg_audio_gain_db")
         bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else 0.0
+        # Remember the chosen assembly preferences so the UI pre-fills them next
+        # time — no re-picking background audio / branding on every re-assemble.
+        _save_render_settings(name, "assemble", {
+            "bg_audio_name": bg_audio_name,
+            "bg_audio_gain_db": bg_gain_db,
+            "speed_factor": speed_factor,
+            "branding_file": branding_file,
+            "branding_mode": branding_mode,
+        })
         from assemble_video import assemble_video
         run_job(name, "assemble", assemble_video, name, bg_audio_name, overwrite,
                 speed_factor, branding_file, branding_mode, bg_gain_db)
@@ -653,8 +695,14 @@ def run_upload_instagram(name):
             file_path = projects_dir / name / ("final_" + name + ".mp4")
             manifest  = _read_manifest(name)
             caption   = caption_override or _build_caption(manifest)
+            # Default the cover frame to the auto-computed "first clean pause"
+            # offset (video_info.thumb_offset_ms, set by the assemble step) when the
+            # user left the field blank.
+            offset = thumb_offset_ms
+            if offset is None:
+                offset = (manifest.get("video_info", {}) or {}).get("thumb_offset_ms")
             upload_instagram(file_path, caption=caption, share_to_feed=share_to_feed,
-                             thumb_offset=thumb_offset_ms)
+                             thumb_offset=offset)
 
         run_job(name, "upload_instagram", _do)
         return jsonify({"message": "Instagram upload started"})
@@ -663,6 +711,19 @@ def run_upload_instagram(name):
 
 
 # ── Facebook upload ────────────────────────────────────────────────────────────
+
+def _first_scene_image_path(name, manifest):
+    """Absolute path to the first scene illustration that exists on disk (used as a
+    Facebook feed-video thumbnail), or None if none is found."""
+    proj = PROJECTS_DIR / name
+    for scene in manifest.get("scenes", []):
+        rel = (scene.get("image") or {}).get("file_path")
+        if rel:
+            p = proj / rel
+            if p.exists():
+                return p
+    return None
+
 
 @bp.route("/projects/<name>/run/upload_facebook", methods=["POST"])
 def run_upload_facebook(name):
@@ -707,8 +768,15 @@ def run_upload_facebook(name):
             vi      = manifest.get("video_info", {}) or {}
             title   = title_over or vi.get("title") or manifest.get("title") or name
             caption = caption_over or (_build_caption(manifest) if manifest else "")
+            # Feed-video thumbnail: an explicit cover frame wins; otherwise default
+            # to the first scene's illustration file (uploaded directly as `thumb`),
+            # so the cover matches the video's opening image with no frame math.
+            thumb_image = None
+            if not as_reel and thumb_offset_ms is None:
+                thumb_image = _first_scene_image_path(name, manifest)
             upload_facebook(file_path, title=title, description=caption, as_reel=as_reel,
-                            thumb_offset_ms=thumb_offset_ms, scheduled_publish_time=scheduled_ts)
+                            thumb_offset_ms=thumb_offset_ms, thumb_image_path=thumb_image,
+                            scheduled_publish_time=scheduled_ts)
 
         run_job(name, "upload_facebook", _do)
         msg = "Facebook upload scheduled" if scheduled_ts else "Facebook upload started"

@@ -405,12 +405,15 @@ def _upload_reel(page_id: str, token: str, file_path: Path, description: str,
 
 def upload_facebook(file_path: Path, title: str = "", description: str = "",
                     as_reel: bool = False, thumb_offset_ms: int = None,
+                    thumb_image_path: Path = None,
                     scheduled_publish_time: int = None) -> str:
     """Upload *file_path* to the configured Page. Returns the video/reel id.
 
-    thumb_offset_ms (optional): cover-frame position for FEED videos (a frame is
-        extracted with ffmpeg). Ignored for Reels — the Reels publish call has no
-        thumbnail parameter.
+    Thumbnail for FEED videos (ignored for Reels — the Reels publish call has no
+    thumbnail parameter), whichever is given, in priority order:
+        thumb_offset_ms  — extract a frame at this position with ffmpeg, or
+        thumb_image_path — use this existing image file directly (e.g. the first
+                           scene's illustration).
     scheduled_publish_time (optional): unix timestamp; schedules the post for later.
     """
     if not file_path.exists():
@@ -418,22 +421,27 @@ def upload_facebook(file_path: Path, title: str = "", description: str = "",
     token, page_id = get_valid_token()
 
     if as_reel:
-        if thumb_offset_ms is not None:
-            logger.warning("Cover frame is not supported for Facebook Reels — ignoring it.")
+        if thumb_offset_ms is not None or thumb_image_path is not None:
+            logger.warning("Cover image is not supported for Facebook Reels — ignoring it.")
         vid = _upload_reel(page_id, token, file_path, description,
                            scheduled_publish_time=scheduled_publish_time)
         logger.info("Reel %s! Video ID: %s",
                     "scheduled" if scheduled_publish_time else "published", vid)
     else:
         thumb_path = None
+        extracted  = False
         try:
             if thumb_offset_ms is not None:
                 thumb_path = _extract_cover_frame(file_path, thumb_offset_ms)
+                extracted  = True
+            elif thumb_image_path is not None and Path(thumb_image_path).exists():
+                thumb_path = Path(thumb_image_path)
             vid = _upload_feed_video(page_id, token, file_path, title, description,
                                      thumb_path=thumb_path,
                                      scheduled_publish_time=scheduled_publish_time)
         finally:
-            if thumb_path is not None:
+            # Only delete the frame WE extracted — never the caller's scene image.
+            if extracted and thumb_path is not None:
                 thumb_path.unlink(missing_ok=True)
         logger.info("Feed video %s! Video ID: %s",
                     "scheduled" if scheduled_publish_time else "published", vid)

@@ -497,6 +497,7 @@ function AnnotRegenToggle({ id, checked, onChange }) {
 }
 
 function VideoFields() {
+  const { manifest, currentProject } = useApp();
   const [overwrite, setOverwrite] = useState(false);
   const [annotated, setAnnotated] = useState(false);
   const [regen,     setRegen]     = useState(false);
@@ -505,6 +506,23 @@ function VideoFields() {
   const [fontScale, setFontScale] = useState("1.0");
   const [repeatMsg, setRepeatMsg] = useState("");
   const [repeatFs,  setRepeatFs]  = useState("");
+
+  // Pre-fill from the settings saved on the last render (manifest.render_settings.video),
+  // once per project — so re-rendering keeps your annotation/footnote/repeat choices.
+  const appliedFor = React.useRef(null);
+  useEffect(() => {
+    if (!manifest || currentProject == null || appliedFor.current === currentProject) return;
+    appliedFor.current = currentProject;
+    const s = manifest.render_settings && manifest.render_settings.video;
+    if (!s) return;
+    if (s.annotated_subtitles != null) setAnnotated(!!s.annotated_subtitles);
+    if (s.footnote != null)            setFootnote(s.footnote);
+    if (s.annot_font_scale != null)    setFontScale(String(s.annot_font_scale));
+    if (s.repeat_message != null)      setRepeatMsg(s.repeat_message);
+    if (s.repeat_fontsize != null)     setRepeatFs(String(s.repeat_fontsize));
+    if (s.footnote_hold_ms != null)    setFootHold(String(s.footnote_hold_ms / 1000));
+  }, [manifest, currentProject]);
+
   VideoFields._getPayload = () => ({
     overwrite, annotated_subtitles: annotated, footnote,
     annot_font_scale: parseFloat(fontScale) || 1.0, regen_annotations: regen,
@@ -581,6 +599,7 @@ function VideoFields() {
 }
 
 function AssembleFields() {
+  const { manifest, currentProject } = useApp();
   const [bgAudio,       setBgAudio]       = useState("office");
   const [bgAudioTracks, setBgAudioTracks] = useState([]);
   const [bgGainDb,      setBgGainDb]      = useState("0");
@@ -589,6 +608,21 @@ function AssembleFields() {
   const [brandingFile,  setBrandingFile]  = useState("");
   const [brandingMode,  setBrandingMode]  = useState("none");
   const [brandingFiles, setBrandingFiles] = useState([]);
+
+  // Pre-fill from the settings saved on the last assemble (manifest.render_settings.assemble)
+  // — once per project, so re-assembling doesn't make you re-pick background audio/branding.
+  const appliedFor = React.useRef(null);
+  useEffect(() => {
+    if (!manifest || currentProject == null || appliedFor.current === currentProject) return;
+    appliedFor.current = currentProject;
+    const s = manifest.render_settings && manifest.render_settings.assemble;
+    if (!s) return;
+    if (s.bg_audio_name)          setBgAudio(s.bg_audio_name);
+    if (s.bg_audio_gain_db != null) setBgGainDb(String(s.bg_audio_gain_db));
+    if (s.speed_factor != null)   setSpeedFactor(String(s.speed_factor));
+    if (s.branding_file)          setBrandingFile(s.branding_file);
+    if (s.branding_mode)          setBrandingMode(s.branding_mode);
+  }, [manifest, currentProject]);
 
   AssembleFields._getPayload = () => ({
     bg_audio_name: bgAudio,
@@ -1555,9 +1589,11 @@ function InstagramUploadFields() {
         <label>Cover frame <span style={{color:"var(--muted)",fontWeight:300}}>(seconds into the video — optional)</span></label>
         <input type="number" min="0" step="0.1" value={coverSec}
           onChange={e=>setCoverSec(e.target.value)}
-          placeholder="Blank = first frame"/>
+          placeholder="Blank = auto (first clean frame)"/>
         <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".3rem"}}>
-          Instagram grabs the frame at this time as the Reel thumbnail.
+          Instagram grabs the frame at this time as the Reel thumbnail. Left blank, it
+          defaults to the cover frame auto-detected during assembly (the first scene
+          image shown without a subtitle).
         </div>
       </div>
     </div>
@@ -1611,9 +1647,10 @@ function FacebookUploadFields() {
           <label>Cover frame <span style={{color:"var(--muted)",fontWeight:300}}>(seconds into the video — optional)</span></label>
           <input type="number" min="0" step="0.1" value={coverSec}
             onChange={e=>setCoverSec(e.target.value)}
-            placeholder="Blank = Facebook default"/>
+            placeholder="Blank = first scene image"/>
           <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".3rem"}}>
-            A frame at this time is extracted and used as the video thumbnail.
+            A frame at this time is extracted as the thumbnail. Left blank, the first
+            scene's image is used directly.
           </div>
         </div>
       )}
