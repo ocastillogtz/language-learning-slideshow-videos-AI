@@ -4,7 +4,7 @@ const { useState, useEffect } = React;
 function App() {
   const { loadAssets, refreshSidebar } = useApp();
   const [newProjOpen, setNewProjOpen] = useState(false);
-  const [view,        setView]        = useState("projects"); // "projects" | "assets" | "connections"
+  const [view,        setView]        = useState("projects"); // "projects" | "assets" | "subtitles" | "connections"
 
   useEffect(() => {
     loadAssets();
@@ -12,8 +12,10 @@ function App() {
   }, []);
 
   const isAssets      = view === "assets";
+  const isSubtitles   = view === "subtitles";
   const isConnections = view === "connections";
   const isProjects    = view === "projects";
+  const isFullWidth   = isAssets || isSubtitles || isConnections;
 
   return (
     <>
@@ -36,6 +38,12 @@ function App() {
             Assets
           </button>
           <button
+            className={"btn-ghost" + (isSubtitles ? " active" : "")}
+            style={{fontSize:".8rem",padding:".3rem .75rem"}}
+            onClick={() => setView("subtitles")}>
+            Subtitles
+          </button>
+          <button
             className={"btn-ghost" + (isConnections ? " active" : "")}
             style={{fontSize:".8rem",padding:".3rem .75rem"}}
             onClick={() => setView("connections")}>
@@ -56,10 +64,10 @@ function App() {
       </header>
 
       {/* Layout */}
-      {isAssets || isConnections ? (
+      {isFullWidth ? (
         <div className="shell" style={{gridTemplateColumns:"1fr"}}>
           <main className="main">
-            {isAssets ? <AssetsTab/> : <ConnectionsTab/>}
+            {isAssets ? <AssetsTab onNavigate={setView}/> : isSubtitles ? <SubtitlesTab/> : <ConnectionsTab/>}
           </main>
         </div>
       ) : (

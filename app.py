@@ -31,6 +31,7 @@ from routes.images import bp as images_bp
 from routes.prompts import bp as prompts_bp
 from routes.preview import bp as preview_bp
 from routes.connections import bp as connections_bp
+from routes.styling import bp as styling_bp
 
 app.register_blueprint(projects_bp)
 app.register_blueprint(assets_bp)
@@ -39,6 +40,7 @@ app.register_blueprint(images_bp)
 app.register_blueprint(prompts_bp)
 app.register_blueprint(preview_bp)
 app.register_blueprint(connections_bp)
+app.register_blueprint(styling_bp)
 
 if __name__ == "__main__":
     app.run(debug=True)
