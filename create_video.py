@@ -597,6 +597,12 @@ def _subtitle(text: str, duration: float, is_narrator: bool, cfg: dict) -> TextC
 
     # --- Try Pango markup rendering when markers are present ---
     if not is_narrator and has_markup(clean):
+        # Pango (markup) and caption (plain) size the SAME fontsize differently, so a
+        # markup line and a plain line rendered at cfg["sub_fontsize"] don't match on
+        # screen. sub_markup_fontsize is the dedicated size for the markup/pango path;
+        # 0 (the default) means "match the plain size" so unconfigured setups are
+        # unchanged.
+        markup_sz = cfg.get("sub_markup_fontsize") or sz
         try:
             pango_text = to_pango(
                 clean,
@@ -605,7 +611,7 @@ def _subtitle(text: str, duration: float, is_narrator: bool, cfg: dict) -> TextC
                 italic_colors=cfg.get("markup_italic_colors", []),
             )
             return TextClip(
-                pango_text, font=font, fontsize=sz, color=col,
+                pango_text, font=font, fontsize=markup_sz, color=col,
                 stroke_color=scol, stroke_width=sw,
                 method="pango", size=(w, None), align="center",
             ).set_duration(duration)

@@ -96,6 +96,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         # Subtitles
         "sub_font":          _p("subtitles", "font",          "Arial-Bold"),
         "sub_fontsize":      _i("subtitles", "fontsize",       76),
+        # Separate size for the markup (Pango) path — bold/coloured lines. Pango and
+        # the plain "caption" method size the same fontsize differently, so this lets
+        # markup lines match plain ones on screen. 0 = fall back to sub_fontsize.
+        "sub_markup_fontsize": _i("subtitles", "markup_fontsize", 0),
         "sub_color":         _p("subtitles", "color",          "white"),
         "sub_stroke_color":  _p("subtitles", "stroke_color",  "black"),
         "sub_stroke_width":  _i("subtitles", "stroke_width",   4),
