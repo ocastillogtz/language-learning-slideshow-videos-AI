@@ -396,6 +396,45 @@ def _build_clip(
         return clip, new_last
 
     # ------------------------------------------------------------------
+    # preposition-quiz countdown → held situation frame + silent 3-2-1
+    # ------------------------------------------------------------------
+    # Silent scene held between the partial sentence and its reveal: the clean situation
+    # image with the partial subtitle (bottom) and option chips (top) still visible, plus
+    # a big 3 → 2 → 1 counting down in the centre. No audio. The per-digit hold comes from
+    # cfg so it stays in sync with the digit layers regardless of the manifest duration.
+    if scene.get("_is_countdown"):
+        per_s = (cfg.get("countdown_per_number_ms", 800) or 800) / 1000.0
+        dur_s = per_s * 3
+
+        if last_frame_np is not None:
+            bg = ImageClip(last_frame_np).set_duration(dur_s)
+        else:
+            bg = ColorClip((W, H), (0, 0, 0)).set_duration(dur_s)
+        layers = [bg]
+
+        # Partial sentence stays readable at the bottom (plain dialog style).
+        text = (scene.get("subtitle_text") or "").strip()
+        if text:
+            sub   = _subtitle(text, dur_s, False, cfg)
+            sub_y = H - cfg["sub_margin_bottom"] - sub.h
+            layers += _sub_layers(sub, cfg["sub_margin_left"], sub_y, dur_s, cfg)
+
+        # Option chips stay at the top, still neutral (answer not yet revealed).
+        options = scene.get("_quiz_options") or []
+        if options:
+            layers += _quiz_options_layers(options, scene.get("_quiz_answer", ""),
+                                           False, dur_s, cfg, W, H)
+
+        # Centred 3 → 2 → 1.
+        layers += _countdown_number_layers(cfg, per_s)
+
+        clip = (CompositeVideoClip(layers, size=(W, H))
+                .set_duration(dur_s)
+                .set_audio(_silent(dur_s)))
+        # Hand the CLEAN situation image forward so the reveal scene paints over it fresh.
+        return clip, last_frame_np
+
+    # ------------------------------------------------------------------
     # null → silent pause
     # ------------------------------------------------------------------
     if atype is None:
@@ -505,6 +544,13 @@ def _build_clip(
                 # No subtitle text — anchor footnote to vertical center as fallback
                 sub_bg_bottom = H // 2 + cfg["sub_bg_padding_y"]
             layers += _footnote_layers(footnote, sub_bg_bottom, dur_s, cfg, W)
+
+        # Preposition-quiz option chips at the top. Neutral on the partial scene; on the
+        # reveal scene (_quiz_reveal) the correct chip turns green and the rest dim.
+        options = scene.get("_quiz_options") or []
+        if options:
+            layers += _quiz_options_layers(options, scene.get("_quiz_answer", ""),
+                                           scene.get("_quiz_reveal", False), dur_s, cfg, W, H)
 
         clip = CompositeVideoClip(layers, size=(W, H)).set_duration(dur_s)
 
@@ -653,6 +699,80 @@ def _repeat_message_layers(text: str, duration: float, cfg: dict, W: int, H: int
         .set_opacity(opacity)
     )
     return [bg.set_position(("center", "center")), msg.set_position(("center", "center"))]
+
+
+def _quiz_options_layers(options: list, answer: str, reveal: bool,
+                         duration: float, cfg: dict, W: int, H: int) -> list:
+    """
+    Row of preposition option chips near the TOP of the frame (preposition_quiz).
+
+    Each option is a stroked label over its own semi-transparent dark box; the whole row
+    is centred horizontally at cfg["quiz_opt_margin_top"]. Before the answer is revealed
+    every chip uses the neutral colour; on the full-sentence reveal the chip whose text
+    matches `answer` turns green (color_correct) and the others dim (color_dim).
+    """
+    if not options:
+        return []
+    font = cfg.get("quiz_opt_font") or cfg["nar_font"]
+    sz   = cfg.get("quiz_opt_fontsize", 66)
+    scol = cfg.get("quiz_opt_stroke_color", "black")
+    sw   = cfg.get("quiz_opt_stroke_width", 4)
+    px   = cfg.get("quiz_opt_bg_padding_x", 26)
+    py   = cfg.get("quiz_opt_bg_padding_y", 14)
+    gap  = cfg.get("quiz_opt_gap", 34)
+    top  = cfg.get("quiz_opt_margin_top", 120)
+    opacity = cfg.get("quiz_opt_bg_opacity", 0.55)
+
+    def _norm(s: str) -> str:
+        return (s or "").strip().lower()
+
+    # Build the label clips first so we know the total row width, then centre the row.
+    chips = []
+    for opt in options:
+        if reveal and _norm(opt) == _norm(answer):
+            col = cfg.get("quiz_opt_color_correct", "#2ecc40")
+        elif reveal:
+            col = cfg.get("quiz_opt_color_dim", "#9aa0a6")
+        else:
+            col = cfg.get("quiz_opt_color", "white")
+        txt = TextClip(opt, font=font, fontsize=sz, color=col,
+                       stroke_color=scol, stroke_width=sw, method="label").set_duration(duration)
+        chips.append(txt)
+
+    box_ws    = [c.w + px * 2 for c in chips]
+    total_w   = sum(box_ws) + gap * (len(chips) - 1)
+    x         = (W - total_w) // 2
+    layers    = []
+    for txt, box_w in zip(chips, box_ws):
+        bg = (ColorClip(size=(box_w, txt.h + py * 2), color=(0, 0, 0))
+              .set_duration(duration).set_opacity(opacity))
+        layers.append(bg.set_position((x, top)))
+        layers.append(txt.set_position((x + px, top + py)))
+        x += box_w + gap
+    return layers
+
+
+def _countdown_number_layers(cfg: dict, per_s: float) -> list:
+    """
+    Three centred, silently-timed digits (3 → 2 → 1) for a preposition_quiz countdown,
+    each held for per_s seconds. Big stroked text with no backing box so the partial
+    sentence and option chips underneath stay visible. No audio is involved here.
+    """
+    font = cfg.get("countdown_font") or cfg["nar_font"]
+    sz   = cfg.get("countdown_fontsize", 220)
+    col  = cfg.get("countdown_color", "white")
+    scol = cfg.get("countdown_stroke_color", "black")
+    sw   = cfg.get("countdown_stroke_width", 6)
+
+    layers = []
+    for n, digit in enumerate(("3", "2", "1")):
+        num = (TextClip(digit, font=font, fontsize=sz, color=col,
+                        stroke_color=scol, stroke_width=sw, method="label")
+               .set_start(n * per_s)
+               .set_duration(per_s)
+               .set_position(("center", "center")))
+        layers.append(num)
+    return layers
 
 
 def _annotated_sub_layers(png_path: str, duration: float, cfg: dict, W: int, H: int):

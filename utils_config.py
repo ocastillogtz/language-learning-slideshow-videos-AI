@@ -151,6 +151,30 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "repeat_duration_ms":  _i("repeat_prompt", "duration_ms",  0),    # 0 = mirror dialog
         "repeat_duration_factor": _f("repeat_prompt", "duration_factor", 1.0),  # × mirrored length
 
+        # Silent 3-2-1 countdown (preposition_quiz): centred digit over the held situation
+        # frame; no audio. per_number_ms drives each digit's hold time.
+        "countdown_font":          _p("countdown", "font",          ""),   # empty → nar_font
+        "countdown_fontsize":      _i("countdown", "fontsize",       220),
+        "countdown_color":         _p("countdown", "color",         "white"),
+        "countdown_stroke_color":  _p("countdown", "stroke_color",  "black"),
+        "countdown_stroke_width":  _i("countdown", "stroke_width",   6),
+        "countdown_per_number_ms": _i("countdown", "per_number_ms", 800),
+
+        # Preposition_quiz option chips (row of 3 near the top). Neutral before reveal;
+        # the correct chip turns green (color_correct) and the rest dim on the full reveal.
+        "quiz_opt_font":          _p("quiz_options", "font",          ""),   # empty → nar_font
+        "quiz_opt_fontsize":      _i("quiz_options", "fontsize",       66),
+        "quiz_opt_color":         _p("quiz_options", "color_neutral", "white"),
+        "quiz_opt_color_correct": _p("quiz_options", "color_correct", "#2ecc40"),
+        "quiz_opt_color_dim":     _p("quiz_options", "color_dim",     "#9aa0a6"),
+        "quiz_opt_stroke_color":  _p("quiz_options", "stroke_color",  "black"),
+        "quiz_opt_stroke_width":  _i("quiz_options", "stroke_width",   4),
+        "quiz_opt_margin_top":    _i("quiz_options", "margin_top",     120),
+        "quiz_opt_gap":           _i("quiz_options", "gap",            34),
+        "quiz_opt_bg_opacity":    _f("quiz_options", "bg_opacity",     0.55),
+        "quiz_opt_bg_padding_x":  _i("quiz_options", "bg_padding_x",   26),
+        "quiz_opt_bg_padding_y":  _i("quiz_options", "bg_padding_y",   14),
+
         # Assembly
         "bg_audio_volume":    _f("assembly", "bg_audio_volume",    0.18),
         "crossfade_s":        _f("assembly", "crossfade_s",        0.35),

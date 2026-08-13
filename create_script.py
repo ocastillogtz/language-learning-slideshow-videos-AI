@@ -43,6 +43,7 @@ import json
 import logging
 import argparse
 import os
+import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -689,9 +690,77 @@ def build_scene_list(
 
     # --- Dialog ---
     if rules.get("include_dialog"):
+        # Preposition-quiz expansion: each GPT dialog item is one quiz "round" that becomes
+        # three scenes sharing ONE generated situation image — a partial-sentence scene (with
+        # audio + option chips), a SILENT 3-2-1 countdown, then a full-sentence reveal (audio +
+        # the correct option highlighted). See scene_builder_rules.expand_preposition_quiz and
+        # create_video._build_clip (_is_countdown / _quiz_options).
+        expand_quiz = bool(rules.get("expand_preposition_quiz"))
+
         for i, item in enumerate(gpt_output.get("dialog", [])):
             # GPT models sometimes use "character" instead of "speaker" — handle both
             speaker = item.get("speaker") or item.get("character") or char_a
+
+            if expand_quiz:
+                spk = speaker if speaker in chars_data else char_a
+                spk_data     = chars_data.get(spk, char_a_data)
+                scene_visual = item.get("scene_visual", "")
+                partial_text = (item.get("sentence_partial") or "").strip()
+                full_text    = (item.get("sentence_full") or "").strip()
+                answer       = (item.get("answer") or "").strip()
+                distractors  = [str(d).strip() for d in (item.get("distractors") or []) if str(d).strip()]
+
+                # 3 option chips = answer + distractors, shuffled deterministically per round
+                # so re-runs of the same script keep a stable layout.
+                options = [answer] + distractors
+                random.Random(i).shuffle(options)
+
+                img_prompt = _action_single_prompt(spk, spk_data, loc_desc, scene_visual, framing_tokens)
+                round_image = {
+                    "file_path": None,
+                    "prompt_to_create": img_prompt,
+                    "reference_type": "single_speaker",
+                    "speaker": spk,
+                }
+
+                # 1) partial sentence — image owner, audio, option chips (neutral)
+                scenes.append({
+                    "id": _sid(),
+                    "description": f"quiz_{i:03d} partial [{spk}]",
+                    "characters": [spk],
+                    "scene_visual": scene_visual,
+                    "image": round_image,
+                    "audio": {"type": "tts", "file_path": None, "tts_text": partial_text,
+                              "voice_id": _voice(spk), "duration_ms": None},
+                    "subtitle_text": partial_text, "duration_ms": None,
+                    "_quiz_options": options, "_quiz_answer": answer,
+                })
+                # 2) silent 3-2-1 countdown — partial text + options stay visible, no audio.
+                # duration_ms here is a fallback; create_video's _is_countdown branch recomputes
+                # the real hold from cfg[countdown_per_number_ms] * 3 at render time.
+                scenes.append({
+                    "id": _sid(),
+                    "description": f"quiz_{i:03d} countdown",
+                    "characters": [], "image": None, "audio": None,
+                    "subtitle_text": partial_text, "duration_ms": 2400,
+                    "_is_countdown": True,
+                    "_quiz_options": options, "_quiz_answer": answer,
+                })
+                # 3) full reveal — audio + correct option highlighted; reuses the situation image
+                scenes.append({
+                    "id": _sid(),
+                    "description": f"quiz_{i:03d} reveal [{spk}]",
+                    "characters": [spk],
+                    "image": None,
+                    "audio": {"type": "tts", "file_path": None, "tts_text": full_text,
+                              "voice_id": _voice(spk), "duration_ms": None},
+                    "subtitle_text": full_text, "duration_ms": None,
+                    "_quiz_options": options, "_quiz_answer": answer, "_quiz_reveal": True,
+                })
+                if rules.get("inter_pause_between_scenes"):
+                    scenes.append(_pause(inter_ms))
+                continue
+
             if not item.get("speaker") and not item.get("character"):
                 logger.warning(f"Dialog item {i} missing 'speaker'/'character' field — defaulting to {char_a}")
             elif not item.get("speaker") and item.get("character"):

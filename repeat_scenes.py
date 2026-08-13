@@ -63,6 +63,10 @@ def _is_dialog(scene: dict) -> bool:
         and not scene.get("_is_repetition")
         and not scene.get("_reading")
         and not scene.get("_is_custom")
+        # preposition_quiz scenes manage their own partial→countdown→reveal structure;
+        # a shadowing repeat inserted mid-round would corrupt it.
+        and not scene.get("_quiz_options")
+        and not scene.get("_is_countdown")
     )
 
 

@@ -651,5 +651,103 @@
     "format": "vertical",
     "promotional": true,
     "supports_multi_character": false
+  },
+  "preposition_quiz": {
+    "name": "preposition_quiz",
+    "supports_multi_character": false,
+    "self_description": "A guess-the-preposition quiz. A narrator asks which preposition completes each sentence. Per round: a character acts out the situation while the partial sentence and three preposition options (top of screen) appear with the partial audio, then a SILENT 3-2-1 countdown runs in the centre, then the full sentence is revealed with the missing preposition highlighted, its audio plays, and the correct option turns green. No repetition section.",
+    "description_for_prompt": "You are generating content for a German PREPOSITION QUIZ video.\nLevel: {LEVEL}\n\nCONCEPT\n-------\nEach round shows a situation and a German sentence with its preposition MISSING. The viewer\nsees three candidate prepositions at the top of the screen and must guess which one correctly\ncompletes the sentence during a silent 3-2-1 countdown, before the full sentence is revealed.\n\nCHARACTERS (they ACT OUT each situation)\n  Character A: {CHAR_A} — {CHAR_A_DESC}\n  Character B: {CHAR_B} — {CHAR_B_DESC}\n\nUser context (topic / which prepositions or verbs to feature): {PROVIDED_CONTEXT}\nLearning points / constraints: {PROVIDED_LEARNING_POINTS}\n\nImportant: if the user context contains something that does not work in German, fix it so every\nsentence is natural and grammatically correct.\n\nWHAT TO GENERATE PER ROUND (one dialog item = one round)\n--------------------------------------------------------\nEach round targets ONE sentence whose meaning REQUIRES a specific preposition — ideally a\nverb/adjective/noun that governs a fixed preposition (e.g. Angst haben VOR, sich freuen AUF,\ndenken AN, warten AUF, sich interessieren FÜR, abhängen VON). Produce these fields:\n\n- \"answer\": the correct preposition ALONE, lowercase, no article and no contraction unless the\n  contraction is the natural form (e.g. \"vor\", \"auf\", \"an\", \"über\", \"mit\", \"nach\").\n- \"sentence_full\": the COMPLETE, grammatically correct sentence, with the missing preposition —\n  and ONLY that preposition — wrapped in *asterisks*. This is the one and only highlight in the\n  line. Example: \"Ich habe Angst *vor* großen Spinnen.\" Keep it short (max ~9 words).\n- \"sentence_partial\": the sentence up to but NOT including the preposition, ending with \"...\".\n  It must be the literal prefix of sentence_full (minus markup), so the reveal feels like a\n  completion. Example: \"Ich habe Angst...\". Do not include the preposition or anything after it.\n- \"distractors\": an array of EXACTLY 2 other real German prepositions that are plausible but\n  WRONG for this sentence (e.g. for \"vor\": [\"auf\", \"über\"]). They must differ from the answer and\n  from each other, and should be tempting (same rough category) so the quiz is a real challenge.\n- \"speaker\": alternate between {CHAR_A} and {CHAR_B} across rounds.\n- \"scene_visual\": see below.\n- \"scene_characters\": \"speaker_only\" (almost always) or \"both\".\n\nSTRUCTURE — generate exactly this sequence\n------------------------------------------\n1. narration: a short, punchy intro that challenges the viewer — the German equivalent of\n   \"Do you know which preposition completes these sentences? Get ready!\".\n2. Exactly {DIALOG_COUNT} quiz rounds as dialog items, each with the fields above.\n\nVISUAL DIRECTION\n----------------\n\"scene_visual\" is a detailed English description (2-4 sentences); the image is generated entirely\nfrom this text. Show the SPEAKING character physically ACTING OUT the situation of the sentence so\nthe meaning is clear even before the words are read. If the sentence is abstract, pick a concrete\nphysical action that embodies it.\n  ✓ \"Sani presses himself back against the wall with wide, frightened eyes, both hands raised, as\n     a large black spider dangles from a web in the foreground of a dim living room.\"\n  ✓ \"Wiebke beams at a wall calendar, one finger on a circled beach date, a packed suitcase and\n     sun hat beside her by the front door, warm morning light.\"\n  ✗ \"Sani talks about being scared.\" (too vague — no environment, no action)\nDescribe the character's posture, expression and gesture, plus the environment and lighting. Do\nNOT write any German text, letters, or the preposition options into the image.\n\nSet \"scene_characters\": \"speaker_only\" (only the speaker) or \"both\" (both characters together).\n\nINLINE MARKUP in \"sentence_full\":\n    Wrap EXACTLY the missing preposition in *asterisks* (renders bold) — nothing else. Never use\n    underscores here, never wrap more than the single preposition, and never highlight a whole\n    phrase. \"sentence_partial\" carries NO markup.\n\nAdditional rules:\n- All German must match level {LEVEL}.\n- main_background: environment only, no characters (a clean quiz-set backdrop works well).\n\nVIDEO METADATA — required fields, must be filled thoughtfully:\n\n- \"title\": The full video title exactly as it will appear on YouTube/Instagram.\n    Format: [Short catchy topic] ({LEVEL}) 🥨 #tag1 #tag2 #tag3...\n    Rules — ALL must be satisfied:\n      1. TOTAL length UNDER 100 characters (count everything, incl. spaces, emoji, hashtags).\n      2. Topic part short and catchy, German or mixed (e.g. \"Welche Präposition passt?\").\n      3. Level in parentheses right after the topic: ({LEVEL})\n      4. Pretzel emoji immediately after the level: 🥨\n      5. Finish with 3-5 hashtags. Always include #germanlearning and #deutschlernen; add topic\n         tags such as #präpositionen #grammatik.\n    Count the characters before finalizing; if over 100, shorten the topic — do NOT drop the\n    level, emoji, or core hashtags.\n\n- \"tags\": Space-separated hashtags for search metadata (not shown in title).\n    Format: \"#germanlearning #deutschlernen #learnGerman #deutsch #präpositionen #grammatik #[level]\"\n\n- \"insights\": The YouTube/Instagram description — it must stand alone as a mini grammar card.\n    Required content (in this order, flowing plain text — no headers, no bullet symbols):\n      1. One sentence explaining the game: guess the missing preposition, answer in the comments.\n      2. Each round's full sentence, numbered, with the correct preposition and the word that\n         governs it and its case, e.g.: \"1. Ich habe Angst vor großen Spinnen — Angst haben vor +\n         Dativ.\"\n      3. GLOSSARY (mandatory): the most advanced words/expressions actually used, each with the\n         article for nouns and a brief English gloss, inline.\n      4. A short tip on learning verb/adjective + preposition combinations as fixed chunks.\n      5. A call to action inviting guesses in the comments.\n    Rules: plain text only, no markdown/bullets/headers/asterisks; 5-9 sentences; immediately\n    copy-pasteable.\n\nOUTPUT JSON STRUCTURE (follow exactly):\n{{\n  \"title\": \"short engaging title string\",\n  \"tags\": \"#tag1 #tag2 #tag3 ...\",\n  \"insights\": \"plain text description following the insights rules above, incl. the glossary\",\n  \"main_background\": \"environment description, no characters\",\n  \"narration\": {{\"text\": \"catchy German intro challenging the viewer to guess the preposition\"}},\n  \"dialog\": [\n    {{\n      \"answer\": \"vor\",\n      \"sentence_partial\": \"Ich habe Angst...\",\n      \"sentence_full\": \"Ich habe Angst *vor* großen Spinnen.\",\n      \"distractors\": [\"auf\", \"über\"],\n      \"speaker\": \"CharacterName\",\n      \"scene_visual\": \"detailed English scene of the character acting out the situation, no text\",\n      \"scene_characters\": \"speaker_only\"\n    }}\n  ]\n}}\n\n- Output ONLY the JSON object, no markdown, no backticks",
+    "output_json_schema": {
+      "type": "object",
+      "required": [
+        "title",
+        "tags",
+        "insights",
+        "main_background",
+        "narration",
+        "dialog"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "string"
+        },
+        "insights": {
+          "type": "string"
+        },
+        "main_background": {
+          "type": "string"
+        },
+        "narration": {
+          "type": "object",
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        },
+        "dialog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "answer",
+              "sentence_partial",
+              "sentence_full",
+              "distractors",
+              "speaker",
+              "scene_visual",
+              "scene_characters"
+            ],
+            "properties": {
+              "answer": {
+                "type": "string"
+              },
+              "sentence_partial": {
+                "type": "string"
+              },
+              "sentence_full": {
+                "type": "string"
+              },
+              "distractors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "speaker": {
+                "type": "string"
+              },
+              "scene_visual": {
+                "type": "string"
+              },
+              "scene_characters": {
+                "type": "string",
+                "enum": [
+                  "speaker_only",
+                  "both"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "scene_builder_rules": {
+      "include_narration": true,
+      "include_dialog": true,
+      "include_repetition_section": false,
+      "repetition_count": 0,
+      "inter_pause_between_scenes": true,
+      "bell_before_repetition": false,
+      "expand_preposition_quiz": true
+    },
+    "default_dialog_count": "5-6",
+    "format": "vertical"
   }
 }
