@@ -164,6 +164,46 @@ def strip_for_tts(text: str) -> str:
     return text
 
 
+# =============================================================================
+# FILL-IN-THE-BLANK HELPERS  (blank_quiz / preposition_quiz)
+# =============================================================================
+
+def blank_the_answer(sentence_full: str, blank: str = "____") -> str:
+    """
+    Turn a completed quiz sentence into its "gap" form for the subtitle by replacing
+    the *bold* answer span with a blank, KEEPING it bold so the gap sits in the same
+    highlighted slot the answer will later fill on the reveal.
+
+    The blank stays wrapped in *asterisks*; underscores inside a *bold* span are safe
+    (to_pango matches the bold span first and never re-parses its contents as italic).
+
+        "Ich habe Angst *vor* großen Spinnen."  ->  "Ich habe Angst *____* großen Spinnen."
+
+    If no *bold* span is present (malformed input) the sentence is returned unchanged
+    so the caller can fall back to another source (e.g. sentence_partial).
+    """
+    if _BOLD_RE.search(sentence_full):
+        return _BOLD_RE.sub(lambda _m: f"*{blank}*", sentence_full, count=1)
+    return sentence_full
+
+
+def gap_reading_for_tts(sentence_full: str, gap: str = "…") -> str:
+    """
+    Spoken form of a quiz sentence for the PARTIAL scene: the *bold* answer is replaced
+    by a short pause (an ellipsis, which TTS renders as a natural gap) and all remaining
+    markup is stripped.
+
+        "Ich habe Angst *vor* großen Spinnen."  ->  "Ich habe Angst … großen Spinnen."
+
+    If no *bold* span is present, the whole sentence is returned (markup stripped).
+    """
+    if _BOLD_RE.search(sentence_full):
+        text = _BOLD_RE.sub(gap, sentence_full, count=1)
+    else:
+        text = sentence_full
+    return strip_for_tts(text)
+
+
 def _xml_escape(text: str) -> str:
     """Escape characters that are special in XML/Pango markup."""
     text = text.replace('&', '&amp;')

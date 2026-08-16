@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ImageMagick / MoviePy Font Preview</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #191c23;
+    --card-border: #2a2f3a;
+    --text: #e8eaed;
+    --muted: #9aa3b2;
+    --accent: #7aa2ff;
+    --chip-bg: #232833;
+    --sample: #ffffff;
+  }
+  body.light {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --card-border: #e0e3e9;
+    --text: #1a1d23;
+    --muted: #6b7280;
+    --accent: #2b5fff;
+    --chip-bg: #eef1f6;
+    --sample: #111111;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  header {
+    max-width: 1100px;
+    margin: 0 auto 20px;
+  }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 18px; }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    position: sticky;
+    top: 12px;
+    z-index: 10;
+  }
+  .controls label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+  .controls input[type=text] {
+    width: 340px; max-width: 60vw;
+    padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--chip-bg); color: var(--text); font-size: 14px;
+  }
+  .controls input[type=range] { width: 160px; }
+  .controls .row { display: flex; align-items: center; gap: 8px; }
+  button.toggle {
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--card-border); background: var(--chip-bg); color: var(--text); font-size: 13px;
+  }
+  button.toggle.active { border-color: var(--accent); color: var(--accent); }
+  .grid {
+    max-width: 1100px; margin: 20px auto 60px;
+    display: grid; grid-template-columns: 1fr; gap: 14px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .fname { font-weight: 600; font-size: 15px; }
+  .token {
+    font-family: Consolas, monospace; font-size: 12px;
+    background: var(--chip-bg); color: var(--accent);
+    padding: 3px 8px; border-radius: 6px; cursor: copy;
+    border: 1px solid var(--card-border);
+  }
+  .token::before { content: "MoviePy: "; color: var(--muted); }
+  .sample {
+    color: var(--sample);
+    line-height: 1.25;
+    word-break: break-word;
+  }
+  .copied { color: #4ade80 !important; border-color: #4ade80 !important; }
+  footer { max-width: 1100px; margin: 0 auto; color: var(--muted); font-size: 13px; }
+  code { font-family: Consolas, monospace; background: var(--chip-bg); padding: 2px 6px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ImageMagick / MoviePy Font Preview</h1>
+  <div class="sub">Every font ImageMagick found on this machine, rendered with German umlauts and eszett. Click the <span class="token" style="cursor:default">MoviePy: token</span> chip to copy the name for <code>TextClip(font=...)</code>.</div>
+  <div class="controls">
+    <label>Sample text
+      <input id="text" type="text" value="Zwölf Boxkämpfer über die süße Straße – Äpfel, Öl, weiß, groß, ß, ẞ">
+    </label>
+    <label>Size <span id="sizeVal">48px</span>
+      <input id="size" type="range" min="18" max="110" value="48">
+    </label>
+    <div class="row">
+      <button id="boldBtn" class="toggle">Bold</button>
+      <button id="themeBtn" class="toggle">Light mode</button>
+    </div>
+  </div>
+</header>
+
+<div class="grid" id="grid"></div>
+
+<footer>
+  Tip: regenerate the underlying list anytime with <code>magick -list font</code>. Bold/italic variants use tokens like <code>Arial-Bold</code>, <code>Segoe-UI-Bold-Italic</code>.
+</footer>
+
+<script>
+// [CSS font-family name, ImageMagick / MoviePy token]
+const FONTS = [
+  ["Arial", "Arial"],
+  ["Arial Black", "Arial-Black"],
+  ["Bahnschrift", "Bahnschrift"],
+  ["Calibri", "Calibri"],
+  ["Calibri Light", "Calibri-Light"],
+  ["Cambria", "Cambria-Bold"],
+  ["Candara", "Candara"],
+  ["Comic Sans MS", "Comic-Sans-MS"],
+  ["Consolas", "Consolas"],
+  ["Constantia", "Constantia"],
+  ["Corbel", "Corbel"],
+  ["Courier New", "Courier-New"],
+  ["Ebrima", "Ebrima"],
+  ["Franklin Gothic Medium", "Franklin-Gothic-Medium"],
+  ["Gabriola", "Gabriola"],
+  ["Gadugi", "Gadugi"],
+  ["Georgia", "Georgia"],
+  ["Impact", "Impact"],
+  ["Ink Free", "Ink-Free"],
+  ["Leelawadee UI", "Leelawadee-UI"],
+  ["Lucida Console", "Lucida-Console"],
+  ["Lucida Sans Unicode", "Lucida-Sans-Unicode"],
+  ["Microsoft Sans Serif", "Microsoft-Sans-Serif"],
+  ["MV Boli", "MV-Boli"],
+  ["Palatino Linotype", "Palatino-Linotype"],
+  ["Segoe Print", "Segoe-Print"],
+  ["Segoe Script", "Segoe-Script"],
+  ["Segoe UI", "Segoe-UI"],
+  ["Segoe UI Black", "Segoe-UI-Black"],
+  ["Segoe UI Light", "Segoe-UI-Light"],
+  ["Segoe UI Semibold", "Segoe-UI-Semibold"],
+  ["Sitka Text", "Sitka-Text"],
+  ["Sylfaen", "Sylfaen"],
+  ["Tahoma", "Tahoma"],
+  ["Times New Roman", "Times-New-Roman"],
+  ["Trebuchet MS", "Trebuchet-MS"],
+  ["Verdana", "Verdana"]
+];
+
+const grid = document.getElementById("grid");
+const textEl = document.getElementById("text");
+const sizeEl = document.getElementById("size");
+const sizeVal = document.getElementById("sizeVal");
+const boldBtn = document.getElementById("boldBtn");
+const themeBtn = document.getElementById("themeBtn");
+
+function build() {
+  grid.innerHTML = "";
+  FONTS.forEach(([css, token]) => {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const fname = document.createElement("span");
+    fname.className = "fname";
+    fname.textContent = css;
+    const chip = document.createElement("span");
+    chip.className = "token";
+    chip.textContent = token;
+    chip.title = "Click to copy";
+    chip.addEventListener("click", () => {
+      navigator.clipboard.writeText(token).then(() => {
+        chip.classList.add("copied");
+        setTimeout(() => chip.classList.remove("copied"), 900);
+      });
+    });
+    meta.appendChild(fname);
+    meta.appendChild(chip);
+
+    const sample = document.createElement("div");
+    sample.className = "sample";
+    sample.style.fontFamily = '"' + css + '", sans-serif';
+    card.dataset.role = "sample";
+    card._sample = sample;
+
+    card.appendChild(meta);
+    card.appendChild(sample);
+    grid.appendChild(card);
+  });
+  render();
+}
+
+function render() {
+  const t = textEl.value || " ";
+  const s = sizeEl.value + "px";
+  const w = boldBtn.classList.contains("active") ? "700" : "400";
+  document.querySelectorAll(".card").forEach(c => {
+    const el = c._sample;
+    el.textContent = t;
+    el.style.fontSize = s;
+    el.style.fontWeight = w;
+  });
+  sizeVal.textContent = s;
+}
+
+textEl.addEventListener("input", render);
+sizeEl.addEventListener("input", render);
+boldBtn.addEventListener("click", () => { boldBtn.classList.toggle("active"); render(); });
+themeBtn.addEventListener("click", () => {
+  document.body.classList.toggle("light");
+  themeBtn.textContent = document.body.classList.contains("light") ? "Dark mode" : "Light mode";
+});
+
+build();
+</script>
+</body>
+</html>

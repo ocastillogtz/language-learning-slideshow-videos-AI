@@ -61,7 +61,23 @@ mcp = MCPServer(
         "characters' attire come from the scene description and the visual_guidelines "
         "field. list_locations + generate_script's location_key remain available only "
         "as an opt-in override to reuse a hand-made location. generate_script calls "
-        "GPT and may take a while."
+        "GPT and may take a while.\n"
+        "\n"
+        "AUTHORING CONVENTIONS (bake these into context + visual_guidelines):\n"
+        "- Natural, native German: the example sentences must sound like a real speaker in "
+        "that situation, not a textbook or a literal translation. Natural word order, real "
+        "politeness ('Könnten Sie bitte ...?'), factually correct (German school grades are "
+        "1–6, real prices/units/procedures), and phrased from the point of view of whichever "
+        "character is speaking (a customer must not utter the provider's line).\n"
+        "- Visuals must depict the SENTENCE, not just the word, so the image reinforces meaning. "
+        "The speaker is the one performing the action.\n"
+        "- Dress the actor for the job: when a word/scene needs role clothing or equipment "
+        "(hairdresser's apron, mechanic's overall, builder's hard hat + hi-vis vest, courier "
+        "uniform, chef's jacket...), the visual_guidelines / scene description must say the "
+        "SPEAKING character is wearing that gear and holding the trade's tools — even as a "
+        "costume outside their usual role. The render honours a costume only when the text "
+        "names it. Avoid relying on readable text/labels on props (the illustrator can't draw "
+        "words)."
     ),
 )
 
@@ -184,6 +200,11 @@ def create_project(
                         generate_script, the images are driven entirely by this
                         field plus the scene description, so you no longer need a
                         pre-made location for a custom environment or outfit.
+                        For job/role videos, name the professional's uniform and
+                        tools here (e.g. mechanic's overall + wrench, courier
+                        uniform + scanner) so the speaker is dressed for the job;
+                        the render only wears a costume the text explicitly names.
+                        Don't rely on readable text/labels on props.
 
     Returns the project name and manifest path on success.
     """

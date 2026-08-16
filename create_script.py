@@ -57,6 +57,7 @@ from utils_config import (
     load_project_types,
     get_new_locations_flat,
 )
+from utils_markup import blank_the_answer, gap_reading_for_tts
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -99,6 +100,26 @@ def _identity_only(char_data: dict) -> str:
 def _relax_clothing(prompt: str) -> str:
     """Swap the 'match reference clothing' instruction for the wardrobe-override variant."""
     return prompt.replace(_MATCH_CLOTHING_LINE, _RELAXED_CLOTHING_LINE)
+
+
+# Costume cues: even when a project type keeps reference clothing, a scene_visual that
+# deliberately dresses the speaker for a role — a courier uniform, a mechanic's overall,
+# a hard hat, a chef's jacket — must win over the reference outfit at render time.
+# Otherwise the job costume the dialog-generator was told to write never renders and the
+# viewer sees the character in their default clothes doing a job that needs the gear.
+_COSTUME_CUES = (
+    "dressed as", "costume", "uniform", "apron", "hard hat", "hardhat",
+    "helmet", "hi-vis", "high-visibility", "high visibility", "safety vest",
+    "chef's jacket", "chef jacket", "lab coat", "scrubs", "tool belt",
+    "courier", "mechanic's overall", "overalls", "onesie",
+)
+
+
+def _scene_overrides_wardrobe(scene_visual: str) -> bool:
+    """True when the scene_visual explicitly puts the character in role/job attire that
+    should take precedence over their reference outfit at render time."""
+    s = (scene_visual or "").lower()
+    return any(cue in s for cue in _COSTUME_CUES)
 
 
 class ScriptTruncatedError(RuntimeError):
@@ -337,7 +358,9 @@ def _build_prompt(
     # gain the shared-activity visual (redefine_text=False).
     if _wants_narration_hook(project_type):
         rules = project_type.get("scene_builder_rules", {})
-        scripts_own_narration = bool(rules.get("expand_preposition_quiz"))
+        scripts_own_narration = bool(
+            rules.get("expand_preposition_quiz") or rules.get("expand_blank_quiz")
+        )
         prompt += _narration_hook_block(level, cast, redefine_text=not scripts_own_narration)
 
     return prompt
@@ -802,12 +825,14 @@ def build_scene_list(
 
     # --- Dialog ---
     if rules.get("include_dialog"):
-        # Preposition-quiz expansion: each GPT dialog item is one quiz "round" that becomes
-        # three scenes sharing ONE generated situation image — a partial-sentence scene (with
-        # audio + option chips), a SILENT 3-2-1 countdown, then a full-sentence reveal (audio +
-        # the correct option highlighted). See scene_builder_rules.expand_preposition_quiz and
-        # create_video._build_clip (_is_countdown / _quiz_options).
-        expand_quiz = bool(rules.get("expand_preposition_quiz"))
+        # Fill-in-the-blank quiz expansion (blank_quiz, and legacy preposition_quiz): each GPT
+        # dialog item is one quiz "round" that becomes three scenes sharing ONE generated
+        # situation image — a gap scene (the sentence with the missing word shown as a blank,
+        # read aloud with a pause at the gap, + option chips), a SILENT 3-2-1 countdown, then a
+        # full-sentence reveal (full audio + the correct option highlighted). See
+        # scene_builder_rules.expand_blank_quiz and create_video._build_clip
+        # (_is_countdown / _quiz_options).
+        expand_quiz = bool(rules.get("expand_blank_quiz") or rules.get("expand_preposition_quiz"))
 
         for i, item in enumerate(gpt_output.get("dialog", [])):
             # GPT models sometimes use "character" instead of "speaker" — handle both
@@ -817,10 +842,20 @@ def build_scene_list(
                 spk = speaker if speaker in chars_data else char_a
                 spk_data     = chars_data.get(spk, char_a_data)
                 scene_visual = item.get("scene_visual", "")
-                partial_text = (item.get("sentence_partial") or "").strip()
                 full_text    = (item.get("sentence_full") or "").strip()
                 answer       = (item.get("answer") or "").strip()
                 distractors  = [str(d).strip() for d in (item.get("distractors") or []) if str(d).strip()]
+
+                # The gap subtitle shows the whole sentence with the missing word replaced by a
+                # blank IN PLACE (works for a gap anywhere in the sentence, not just a trailing
+                # one). Derived from the *bold* answer span in sentence_full; if that markup is
+                # missing we fall back to the legacy sentence_partial prefix.
+                legacy_partial = (item.get("sentence_partial") or "").strip()
+                blank_text = blank_the_answer(full_text) if full_text else ""
+                if not blank_text or blank_text == full_text:
+                    blank_text = legacy_partial or full_text
+                # The gap scene reads the sentence aloud with a pause where the word is missing.
+                gap_tts = gap_reading_for_tts(full_text) if full_text else legacy_partial
 
                 # 3 option chips = answer + distractors, shuffled deterministically per round
                 # so re-runs of the same script keep a stable layout.
@@ -835,26 +870,26 @@ def build_scene_list(
                     "speaker": spk,
                 }
 
-                # 1) partial sentence — image owner, audio, option chips (neutral)
+                # 1) gap sentence — image owner, gapped audio, option chips (neutral)
                 scenes.append({
                     "id": _sid(),
-                    "description": f"quiz_{i:03d} partial [{spk}]",
+                    "description": f"quiz_{i:03d} gap [{spk}]",
                     "characters": [spk],
                     "scene_visual": scene_visual,
                     "image": round_image,
-                    "audio": {"type": "tts", "file_path": None, "tts_text": partial_text,
+                    "audio": {"type": "tts", "file_path": None, "tts_text": gap_tts,
                               "voice_id": _voice(spk), "duration_ms": None},
-                    "subtitle_text": partial_text, "duration_ms": None,
+                    "subtitle_text": blank_text, "duration_ms": None,
                     "_quiz_options": options, "_quiz_answer": answer,
                 })
-                # 2) silent 3-2-1 countdown — partial text + options stay visible, no audio.
+                # 2) silent 3-2-1 countdown — blank sentence + options stay visible, no audio.
                 # duration_ms here is a fallback; create_video's _is_countdown branch recomputes
                 # the real hold from cfg[countdown_per_number_ms] * 3 at render time.
                 scenes.append({
                     "id": _sid(),
                     "description": f"quiz_{i:03d} countdown",
                     "characters": [], "image": None, "audio": None,
-                    "subtitle_text": partial_text, "duration_ms": 2400,
+                    "subtitle_text": blank_text, "duration_ms": 2400,
                     "_is_countdown": True,
                     "_quiz_options": options, "_quiz_answer": answer,
                 })
@@ -909,7 +944,7 @@ def build_scene_list(
                 img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual, framing_tokens)
                 reference_type = "single_speaker"
 
-            if override_wardrobe:
+            if override_wardrobe or _scene_overrides_wardrobe(scene_visual):
                 img_prompt = _relax_clothing(img_prompt)
 
             image_obj = {
