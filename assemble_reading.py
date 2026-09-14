@@ -85,9 +85,22 @@ def _continuation_tail(content, cfg):
         fontsize=cfg["continuation_fontsize"], color=cfg["continuation_color"],
         stroke_color=cfg["continuation_stroke_color"],
         stroke_width=cfg["continuation_stroke_width"],
-        method="caption", size=(int(w * 0.85), None), align="center",
-    ).set_duration(secs).set_position(("center", "center"))
-    tail = CompositeVideoClip([base, legend], size=(w, h)).set_duration(secs)
+        method="label",
+    ).set_duration(secs)
+    layers = [base]
+    # Soft dark backing box behind the legend (like the subtitles), centered.
+    bg_opacity = float(cfg.get("continuation_bg_opacity", 0) or 0)
+    if bg_opacity > 0:
+        px = cfg["continuation_bg_padding_x"]
+        py = cfg["continuation_bg_padding_y"]
+        bw, bh = legend.w + px * 2, legend.h + py * 2
+        bg = (ColorClip(size=(bw, bh), color=(0, 0, 0))
+              .set_duration(secs)
+              .set_opacity(bg_opacity)
+              .set_position(((w - bw) // 2, (h - bh) // 2)))
+        layers.append(bg)
+    layers.append(legend.set_position(("center", "center")))
+    tail = CompositeVideoClip(layers, size=(w, h)).set_duration(secs)
     return tail.set_audio(_silent_audio(secs))
 
 
@@ -271,13 +284,19 @@ def _finalize(clip_paths, out_path, cfg, assets_dir, project_path,
     return out_path
 
 
-def assemble_reading(project_name, bg_audio_name="office", overwrite=False,
+def assemble_reading(project_name, bg_audio_name=None, overwrite=False,
                      speed_factor=None, branding_file=None, branding_mode="none",
                      make_parts=True, make_long=True, per_part=None,
-                     bg_audio_gain_db=0.0):
+                     bg_audio_gain_db=None):
     cfg = load_config()
     assets_dir = cfg["assets_dir"]
     project_path = cfg["projects_dir"] / project_name
+    # reading_together background music defaults come from [reading] in config.ini
+    # (bg_audio_name / bg_audio_gain_db); an explicit arg from the UI/CLI overrides them.
+    if bg_audio_name in (None, ""):
+        bg_audio_name = cfg.get("reading_bg_audio_name", "office")
+    if bg_audio_gain_db is None:
+        bg_audio_gain_db = cfg.get("reading_bg_audio_gain_db", 0.0)
     if speed_factor is None:
         speed_factor = cfg.get("speed_factor", 1.0)
     speed_factor = float(speed_factor)
@@ -338,10 +357,13 @@ def assemble_reading(project_name, bg_audio_name="office", overwrite=False,
 def main():
     p = argparse.ArgumentParser(description="Assemble reading_together parts + long video")
     p.add_argument("project_name")
-    p.add_argument("--bg-audio", default="office", dest="bg_audio_name")
-    p.add_argument("--bg-audio-gain-db", type=float, default=0.0, dest="bg_audio_gain_db",
+    p.add_argument("--bg-audio", default=None, dest="bg_audio_name",
+                   help="Background music (file in assets/background_audio, no extension). "
+                        "Default: [reading] bg_audio_name in config.ini")
+    p.add_argument("--bg-audio-gain-db", type=float, default=None, dest="bg_audio_gain_db",
                    help="Adjust background audio volume in dB relative to config "
-                        "(positive = louder, negative = quieter, 0 = unchanged)")
+                        "(positive = louder, negative = quieter). "
+                        "Default: [reading] bg_audio_gain_db in config.ini")
     p.add_argument("--speed-factor", type=float, default=None, dest="speed_factor")
     p.add_argument("--branding-file", dest="branding_file", default=None)
     p.add_argument("--branding-mode", dest="branding_mode", default="none",

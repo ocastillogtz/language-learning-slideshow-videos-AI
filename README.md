@@ -165,6 +165,10 @@ The raw GPT JSON response is saved to `generation_config.raw_gpt_script` before 
 
 Selecting a pre-made location is now an **opt-in override**: tick "Use specific location" (or pass `location_key` to `generate_script`) to reuse a library location's description and reference artwork instead of the guidelines-driven environment.
 
+**Visual consistency across scenes:** the visual-guidelines block also injects a hard consistency contract into the GPT prompt so a multi-scene video reads as one continuous set rather than a new room per line — **fixed roles** (a character assigned a role, e.g. baker/customer/doctor, keeps it in every scene), a **fixed screen position** and **wardrobe** (the baker stays behind the counter in the baker's apron throughout), **action follows the speaker** (the character speaking a line is the one shown performing it), and a **stable environment** (same layout, furniture, background objects and lighting; only the pose and camera framing change between scenes).
+
+**Opening narration:** for narrative and vocabulary types (`story`, `word_learning`, `register_phrases`, `grammar_pairs` and their `_long` variants), the opening narration is written as a **direct spoken topic label** — a plain "chapter title" that names the subject (e.g. *„Wörter aus der Logistik"*), not a click-baity hook — over an establishing shot of the whole cast in a **topic-matching shared activity** (a logistics video opens in a warehouse handling parcels; a topic too abstract to picture, like a verb prefix or a case, falls back to a generic fun activity such as walking through a park). Quiz types keep their own scripted challenge line and only gain the shared-activity visual.
+
 **Dialogue count override:** you can specify exactly how many dialogue lines (or pairs, for `register_phrases`/`grammar_pairs`) to generate. Leave blank to use the project type's default range. The count is injected into the GPT prompt via the `{DIALOG_COUNT}` placeholder.
 
 ---
@@ -235,6 +239,8 @@ Italic and bold styling attributes are configurable in `config.ini` under `marku
 Subtitle style: narration/repetition scenes → centred; dialogue scenes → bottom-aligned.
 
 **Grammar-annotated subtitles:** when `annotated_subtitles` is enabled, dialogue and reading subtitles are rendered by `html_annotation_renderer.py` instead of the plain text renderer. Each sentence is first analysed by `generate_annotations.py` (GPT) into a token + span schema, then drawn as styled HTML/CSS and rasterised to a transparent PNG — with a rounded semi-transparent dark backing baked in — via headless Chromium (Playwright). It colours the two halves of a *trennbares Verb* the same, and for verbs shows the conjugation **tense** above and the **infinitive** below the word; it labels case/gender above the other words. Each word reserves equal space above and below so the main words stay on one centred line. The only clause box drawn is the **Nebensatz** (subordinate clause), and only when the clause actually moves the conjugated verb to the end (the verb-position contrast) — it carries a "↳ Verb" marker; the old TEKAMOLO fields are no longer boxed. A long Nebensatz wraps inside its box. All annotation PNGs for a video are pre-rendered in a single Chromium session for speed. Requires `pip install playwright` and `python -m playwright install chromium`. If Chromium is missing when annotated subtitles are requested, the render tries to install it automatically (one-time); if that fails it stops with a clear error telling you to run the install commands, rather than silently downgrading to plain subtitles. Schema details: [`ANNOTATION_SCHEMA.md`](ANNOTATION_SCHEMA.md).
+
+**Long-sentence compaction:** a long sentence wraps onto more rows and can grow tall enough to collide with the top overlays (the "Teil N" part label and reading icon). Past `[annotated_subtitles] annotated_long_text_threshold` characters (default 60) the renderer automatically shrinks the whole annotation block by `annotated_long_text_scale` (default 0.8) and switches from `annotated_row_gap` to the tighter `annotated_row_gap_compact` between wrapped rows, keeping the block clear of the overlays. All four knobs are tunable in `config.ini`.
 
 **Annotation caching (saves OpenAI calls):** every successful annotation is cached per scene at `videos/_annot/<scene_id>.json` (and `videos/h/_annot/...` for the horizontal pass), keyed by the exact sentence text plus a schema version (`generate_annotations.CACHE_VERSION`). On every later render the cached JSON is reused, so **re-rendering does not re-prompt OpenAI** — only sentences whose text changed, or whose cache was explicitly reset, hit the API. Fallback results (from an API failure) are never cached, so a transient error won't get stuck. The PNG itself is still redrawn each render, so it always reflects the current size/orientation settings.
 
@@ -440,6 +446,17 @@ on disk but missing from the manifest.
 - `default_sentences_per_part` (6) and `default_max_words` (16) are on the
   `reading_together` entry in `project_types.json`; both are overridable per run
   (max_words on Build, sentences-per-part on Assemble).
+- **Background music** for the assembled parts + long video defaults to the
+  `[reading]` section of `config.ini` — `bg_audio_name` (a file in
+  `assets/background_audio`, default `dustymagic`) and `bg_audio_gain_db`
+  (default `20`, applied on top of `[assembly] bg_audio_volume`). Leave the
+  Assemble step's audio field / the `--bg-audio` CLI flag blank to use these,
+  or set them to override per run.
+- When a sentence is split across parts, the earlier part ends on a frozen
+  **continuation end-card** (`continuation_text`, default `Fortsetzung folgt...`).
+  Its centered legend now sits on a soft dark backing box like the subtitles —
+  configurable via `continuation_bg_opacity` / `continuation_bg_padding_x` /
+  `continuation_bg_padding_y` in `[reading]` (opacity `0` = no box).
 - The grammar overlay is the same renderer used by annotated subtitles — see the
   Grammar-annotated subtitles note in [Video Rendering](#5-video-rendering-create_videopy)
   and [`ANNOTATION_SCHEMA.md`](ANNOTATION_SCHEMA.md). It requires Chromium via Playwright.
@@ -668,7 +685,7 @@ Skip Claude entirely: hit **+ New Project** in the web UI, fill in the same brie
 | `POST` | `/projects/<name>/annotations/reset` | Clear cached grammar annotation(s) so they re-prompt on the next render. Body `scene_id` resets one scene (and deletes its rendered clip so a normal re-render rebuilds it); omit `scene_id` to reset all |
 | `POST` | `/projects/<name>/run/reading_build` | Reading Together: modernize + split the story, cast characters, plan detailed illustrations (`max_words`) |
 | `POST` | `/projects/<name>/run/reading_cast` | Reading Together: create single-image character assets and wire them into the scenes. Params: `regenerate` (redo reference images), `reanalyze` (re-detect + merge missing characters; default true). Non-destructive. |
-| `POST` | `/projects/<name>/run/reading_assemble` | Reading Together: build vertical parts + long horizontal video (`bg_audio_name`, `make_parts`, `make_long`, `overwrite`, `per_part` = sentences per vertical part) |
+| `POST` | `/projects/<name>/run/reading_assemble` | Reading Together: build vertical parts + long horizontal video (`bg_audio_name` + `bg_audio_gain_db` — blank/omitted falls back to the `[reading]` config defaults `dustymagic` / `+20 dB`; `make_parts`, `make_long`, `overwrite`, `per_part` = sentences per vertical part) |
 | `POST` | `/projects/<name>/run/assemble` | Assemble final video (`bg_audio_name`, `speed_factor`, `branding_file`, `branding_mode`, `overwrite`) |
 | `GET`  | `/projects/<name>/upload_meta` | Preview the generated YouTube `title`, `description`, and `tags` (read from the manifest) so they can be edited before upload |
 | `POST` | `/projects/<name>/run/upload` | Upload to YouTube (`privacy`, `title`, `description`, `tags`, `category_id`, `made_for_kids`, `publish_at` for scheduled release) |
@@ -1008,6 +1025,8 @@ python app.py
 # Open http://localhost:5000
 ```
 
+> **Note:** the dev server runs with Flask's auto-reloader **disabled** (`use_reloader=False`) so it won't restart mid-render — the reloader watches `*.py`/`*.pyc` and would otherwise bounce the server (surfacing as a browser "Failed to fetch") when a background render writes fresh `.pyc` files or you edit a pipeline module during a job. The debugger and error pages are still on; **restart the server manually** to pick up code changes.
+
 ---
 
 ## Configuration (`config.ini`)
@@ -1157,7 +1176,8 @@ python create_images.py grimm_fox
 python create_video.py  grimm_fox --annotated-subtitles                       # vertical 9:16 clips
 python create_video.py  grimm_fox --annotated-subtitles \
   --format-override horizontal --out-subdir h                                 # 16:9 clips for the long video
-python assemble_reading.py grimm_fox --bg-audio office --per-part 6           # final_*_part1..N.mp4 + final_*_long.mp4
+python assemble_reading.py grimm_fox --per-part 6                             # final_*_part1..N.mp4 + final_*_long.mp4
+#   --bg-audio / --bg-audio-gain-db omitted → [reading] config defaults (dustymagic, +20 dB)
 python reconcile.py grimm_fox                                                 # self-heal manifest from files on disk
 
 # Assemble final video

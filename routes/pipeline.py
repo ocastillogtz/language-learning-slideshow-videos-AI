@@ -530,7 +530,9 @@ def run_reading_assemble(name):
         data          = request.get_json() or {}
         # Use (x or "") so an explicit JSON null (e.g. branding_file when mode is
         # "none") doesn't blow up on .strip().
-        bg_audio_name = (data.get("bg_audio_name") or "office").strip() or "office"
+        # None => assemble_reading falls back to the [reading] config defaults
+        # (bg_audio_name = dustymagic, bg_audio_gain_db = 20).
+        bg_audio_name = (data.get("bg_audio_name") or "").strip() or None
         overwrite     = bool(data.get("overwrite", False))
         raw_speed     = data.get("speed_factor")
         speed_factor  = float(raw_speed) if raw_speed not in (None, "") else None
@@ -543,7 +545,7 @@ def run_reading_assemble(name):
         raw_pp        = data.get("per_part")
         per_part      = int(raw_pp) if raw_pp not in (None, "") else None
         raw_gain      = data.get("bg_audio_gain_db")
-        bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else 0.0
+        bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else None
         from assemble_reading import assemble_reading
         run_job(name, "reading_assemble", assemble_reading, name, bg_audio_name, overwrite,
                 speed_factor, branding_file, branding_mode, make_parts, make_long, per_part,

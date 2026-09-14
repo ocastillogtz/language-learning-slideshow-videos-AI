@@ -485,7 +485,12 @@ def _build_clip(
     if atype == "tts":
         dur_ms = scene.get("duration_ms") or (audio.get("duration_ms") if audio else None) or 3000
         dur_s  = dur_ms / 1000.0
-        text   = (audio.get("tts_text") or "").strip()
+        # Subtitle text prefers the scene's own subtitle_text over the spoken tts_text.
+        # They match for normal dialog, but a blank_quiz gap scene deliberately differs:
+        # subtitle_text shows the sentence with the answer as a "____" blank, while
+        # tts_text speaks it with a "…" pause. Fall back to tts_text for older scripts
+        # (or any scene) that carry no subtitle_text.
+        text   = (scene.get("subtitle_text") or audio.get("tts_text") or "").strip()
 
         # Background image
         if img and img.get("file_path"):
@@ -831,6 +836,12 @@ def _prerender_annotations(manifest: dict, videos_dir: Path, cfg: dict,
 
     # CSS max width is the final (1x) usable width; the renderer supersamples at 2x.
     style = {"max_width_px": sub_w, "word_size_px": word_size, "note_size_px": note_size}
+    # Long-sentence row spacing (keeps tall wrapped subtitles clear of the top
+    # overlays). Tunable via [annotated_subtitles] in config.ini.
+    style["row_gap_px"]           = cfg.get("annotated_row_gap", 30)
+    style["row_gap_compact_px"]   = cfg.get("annotated_row_gap_compact", 12)
+    style["long_text_threshold"]  = cfg.get("annotated_long_text_threshold", 60)
+    style["long_text_scale"]      = cfg.get("annotated_long_text_scale", 0.8)
 
     targets = []
     for scene in manifest.get("scenes", []):
@@ -839,7 +850,8 @@ def _prerender_annotations(manifest: dict, videos_dir: Path, cfg: dict,
         audio = scene.get("audio") or {}
         if audio.get("type") != "tts":
             continue
-        text = (audio.get("tts_text") or "").strip()
+        # Match the on-screen subtitle (prefer subtitle_text; see the tts render branch).
+        text = (scene.get("subtitle_text") or audio.get("tts_text") or "").strip()
         if not text:
             continue
         targets.append((scene["id"], _strip_markup_for_annot(text)))

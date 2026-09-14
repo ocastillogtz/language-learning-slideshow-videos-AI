@@ -43,4 +43,11 @@ app.register_blueprint(connections_bp)
 app.register_blueprint(styling_bp)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # use_reloader=False: the auto-reloader watches *.py/*.pyc recursively and
+    # restarts the server whenever one changes. During a long render/assemble job
+    # the worker thread imports pipeline modules (writing fresh *.pyc files) and
+    # you often edit pipeline .py files between runs — either one bounces the
+    # server mid-request, which the browser surfaces as "Failed to fetch" and can
+    # abort a running job. Keep the debugger/error pages, drop the reloader.
+    # Restart the server manually to pick up code changes.
+    app.run(debug=True, use_reloader=False)

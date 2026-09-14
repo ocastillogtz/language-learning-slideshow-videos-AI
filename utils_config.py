@@ -187,6 +187,9 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "speed_factor":       _f("assembly", "speed_factor",       1.0),
 
         # Reading_together part overlays (vertical part shorts)
+        # Default background music for reading_together assembly (parts + long).
+        "reading_bg_audio_name":    _p("reading", "bg_audio_name",    "office"),
+        "reading_bg_audio_gain_db": _f("reading", "bg_audio_gain_db", 0.0),
         "part_label_word":         _p("reading", "part_label_word",         "Teil"),
         "part_label_fontsize":     _i("reading", "part_label_fontsize",     64),
         "part_label_color":        _p("reading", "part_label_color",        "BlanchedAlmond"),
@@ -203,6 +206,11 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "continuation_color":        _p("reading", "continuation_color",        "PeachPuff"),
         "continuation_stroke_color": _p("reading", "continuation_stroke_color", "sienna4"),
         "continuation_stroke_width": _i("reading", "continuation_stroke_width", 4),
+        # Soft dark backing box behind the centered continuation legend (like the
+        # subtitles / part label). Opacity 0 => no box.
+        "continuation_bg_opacity":   _f("reading", "continuation_bg_opacity",   0.67),
+        "continuation_bg_padding_x": _i("reading", "continuation_bg_padding_x", 20),
+        "continuation_bg_padding_y": _i("reading", "continuation_bg_padding_y", 12),
         # Reading "pre-pause": hold the silent frame (image + sentence) before the
         # narration of each reading scene (except the first), so the learner can read
         # first. The book icon (relative to assets_dir) is shown top-left meanwhile.
@@ -233,6 +241,14 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "fal_model":      fal_models.get(raw_fal_model, raw_fal_model),
         "fal_t2i_model":  _p("fal", "t2i_model",  "fal-ai/bytedance/seedream/v5/lite/text-to-image"),
         "fal_image_size": _p("fal", "image_size", "portrait_16_9"),
+
+        # Grammar-annotated subtitle spacing: past `long_text_threshold` characters
+        # the renderer uses the tighter `row_gap_compact` between wrapped rows so a
+        # long sentence stays short enough to clear the top overlays (Teil / icon).
+        "annotated_row_gap":            _i("annotated_subtitles", "annotated_row_gap",            30),
+        "annotated_row_gap_compact":    _i("annotated_subtitles", "annotated_row_gap_compact",    12),
+        "annotated_long_text_threshold": _i("annotated_subtitles", "annotated_long_text_threshold", 60),
+        "annotated_long_text_scale":    _f("annotated_subtitles", "annotated_long_text_scale",    0.8),
 
         # Image prompt style tokens
         "image_style_tokens": _p(

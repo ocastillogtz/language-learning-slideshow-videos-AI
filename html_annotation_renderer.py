@@ -86,6 +86,13 @@ DEFAULT_STYLE: dict[str, Any] = {
     "pad_px":          26,
     "word_gap_px":     14,      # horizontal gap between word columns
     "row_gap_px":      30,      # vertical gap between wrapped rows (room for notes/boxes)
+    # When a sentence is long it wraps onto more rows and grows tall enough to
+    # collide with the top overlays (the "Teil" label / reading icon). Past
+    # `long_text_threshold` characters, the tighter `row_gap_compact_px` is used
+    # instead of `row_gap_px` to keep the block shorter.
+    "row_gap_compact_px": 12,   # vertical gap between wrapped rows for long sentences
+    "long_text_threshold": 60,  # character count above which the compact treatment kicks in
+    "long_text_scale":    0.8,  # shrink the whole annotated block by this factor when long
 
     # case -> colour (note label above the word)
     "case_colors": {
@@ -351,7 +358,7 @@ def _render_forest(nodes, tokens, lo, hi, group_colors, verb_final_set, style) -
 #: style keys scaled together by `font_scale` (everything except the canvas width)
 _SCALABLE_KEYS = (
     "word_size_px", "note_size_px", "infinitive_px", "tense_px", "box_label_px",
-    "word_gap_px", "row_gap_px", "pad_px", "stroke_px",
+    "word_gap_px", "row_gap_px", "row_gap_compact_px", "pad_px", "stroke_px",
 )
 
 
@@ -389,6 +396,21 @@ def render_annotation_html(annotation: dict, style: dict | None = None,
     if style:
         st.update(style)
     _apply_font_scale(st, font_scale)
+
+    # Long sentences wrap onto more rows and grow tall enough to collide with the
+    # top overlays (the "Teil" label / reading icon). Past `long_text_threshold`
+    # characters we (a) shrink the WHOLE block by `long_text_scale` — smaller words
+    # means fewer wrapped rows and shorter rows, so the biggest height contributors
+    # (word height + the reserved case/tense/infinitive label slots) come down too —
+    # and (b) use the tighter `row_gap_compact_px` between rows. All knobs live in
+    # DEFAULT_STYLE / config.
+    raw_text = (annotation.get("text")
+                or " ".join(str(t.get("text", "")) for t in annotation.get("tokens", []))).strip()
+    threshold = int(st.get("long_text_threshold", 0) or 0)
+    is_long = bool(threshold and len(raw_text) > threshold)
+    if is_long:
+        _apply_font_scale(st, float(st.get("long_text_scale", 1.0) or 1.0))
+    row_gap = st["row_gap_compact_px"] if is_long else st["row_gap_px"]
 
     tokens, remap = _normalized_tokens(annotation)
     spans = _normalized_spans(annotation, remap)
@@ -438,7 +460,7 @@ def render_annotation_html(annotation: dict, style: dict | None = None,
   }}
   .sentence {{
     display:flex; flex-wrap:wrap; align-items:flex-end;
-    column-gap:{st['word_gap_px']}px; row-gap:{st['row_gap_px']}px;
+    column-gap:{st['word_gap_px']}px; row-gap:{row_gap}px;
     font-family:{st['font_family']};
   }}
   /* each word is: reserved [above] slot, the word, reserved [below] slot.
@@ -473,7 +495,7 @@ def render_annotation_html(annotation: dict, style: dict | None = None,
   .box {{
     display:inline-flex; flex-wrap:wrap; align-items:flex-end; align-content:flex-end;
     position:relative; border-radius:10px; padding:14px 12px 10px 12px;
-    column-gap:{st['word_gap_px']}px; row-gap:{st['row_gap_px']}px;
+    column-gap:{st['word_gap_px']}px; row-gap:{row_gap}px;
     max-width:100%;             /* long clauses wrap inside the box instead of overflowing */
     margin-top:14px;            /* room for the label tab */
   }}

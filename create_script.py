@@ -173,9 +173,10 @@ def _wants_narration_hook(project_type: dict) -> bool:
 def _narration_hook_block(level: str, cast: list[str], redefine_text: bool = True) -> str:
     """Appended to the per-type template for hook-eligible types: puts the opening narration
     over the characters doing a fun shared activity together (instead of standing around doing
-    nothing). When redefine_text is True the narration text is (re)written as an attention hook;
-    when False (quiz types that already script their own challenge line) the existing text is
-    kept and only the shared-activity 'scene_visual' is added."""
+    nothing). When redefine_text is True the narration text is (re)written as a direct, to-the-point
+    topic label (a spoken "chapter title", not a provocative hook); when False (quiz types that
+    already script their own challenge line) the existing text is kept and only the shared-activity
+    'scene_visual' is added."""
     if len(cast) >= 2:
         who = ", ".join(cast[:-1]) + f" and {cast[-1]}"
     elif cast:
@@ -184,32 +185,37 @@ def _narration_hook_block(level: str, cast: list[str], redefine_text: bool = Tru
         who = "the characters"
 
     activity_rule = (
-        f'a vivid English description (2-3 sentences) of {who} doing a FUN activity '
-        "TOGETHER as friends — e.g. playing video games on a couch, walking and chatting through a "
-        "park, playing a sport, doing a craft, painting or making art, cooking together. Show them "
-        "mid-action, candid and relaxed, clearly enjoying each other's company — NEVER just standing, "
-        "posing, or looking at the camera. Prefer an activity that loosely fits this video's topic or "
-        'mood, but the priority is "friends genuinely hanging out and having fun". Describe posture, '
-        "gestures, expressions and the surrounding environment so an illustrator can draw it."
+        f'a vivid English description (2-3 sentences) of {who} TOGETHER in a scene that '
+        "matches THIS video's topic. FIRST CHOICE: show them actively engaged with the topic "
+        "itself — if the video is about logistics, put them in a warehouse handling parcels; "
+        "about cooking, cooking together; about a sport, playing it; about shopping, in a shop. "
+        "The scene should visually announce the subject at a glance. ONLY IF the topic is too "
+        "abstract or grammatical to picture (e.g. a verb prefix, a case, a tense) fall back to a "
+        "generic FUN social activity — walking and chatting through a park, playing football, "
+        "painting or making art, flying kites, doing a craft or cooking together. Either way, "
+        "show them mid-action, candid and relaxed, clearly enjoying each other's company — NEVER "
+        "just standing, posing, or looking at the camera. Describe posture, gestures, expressions "
+        "and the surrounding environment so an illustrator can draw it."
     )
 
     if redefine_text:
         return f"""
 
-=== OPENING NARRATION — HOOK + SHARED-ACTIVITY SCENE (MANDATORY, OVERRIDES the plain narration above) ===
+=== OPENING NARRATION — DIRECT TOPIC LABEL + SHARED-ACTIVITY SCENE (MANDATORY, OVERRIDES the plain narration above) ===
 The video opens on the narrator's line over an establishing shot. Build the "narration"
 object with BOTH fields below (not just "text"):
 
-1) "text": a short, catchy, PROVOKING hook in German at level {level} — 1 sentence (2 at
-   the very most). It must make the viewer stop scrolling and get curious about THIS video's
-   topic, WITHOUT explaining it yet. Reach for a rhetorical question or a surprising claim,
-   e.g. "Wusstest du, dass ...?", "So benutzt man dieses Wort WIRKLICH ...", "Fast alle sagen
-   das falsch ...". Keep it natural at level {level} and comfortable to read aloud.
+1) "text": a short, DIRECT statement of exactly what this video covers, in German at level
+   {level} — a bare topic label, NOT a hook. Just name the subject plainly, no rhetorical
+   question, no "Wusstest du ...?", no surprising-claim teaser, no promise or hype. Think of
+   it as a chapter title read aloud, e.g. "Wörter aus der Logistik", "Verben mit der Vorsilbe
+   'an'", "Die wichtigsten Wörter beim Einkaufen". 1 short line, natural at level {level} and
+   comfortable to read aloud.
 
 2) "scene_visual": {activity_rule}
 
 So the narration object becomes:
-  "narration": {{ "text": "German hook sentence", "scene_visual": "English shared-activity scene" }}
+  "narration": {{ "text": "German topic label", "scene_visual": "English shared-activity scene" }}
 """
 
     return f"""
@@ -349,11 +355,24 @@ def _build_prompt(
             "the described outfits/props and the mood consistent across all scenes. When "
             "a word or line calls for a specific action, stage that action WITHIN this "
             "setting and wardrobe rather than switching to a generic environment or the "
-            "characters' default clothing.\n"
+            "characters' default clothing.\n\n"
+            "VISUAL CONSISTENCY (critical — the images must look like one continuous scene):\n"
+            "- FIXED ROLES: if the guidelines assign a character a role (e.g. baker, "
+            "customer, doctor, teacher), that character keeps the SAME role, the SAME "
+            "physical position (e.g. behind vs. in front of a counter/desk) and the SAME "
+            "wardrobe in EVERY scene. Never swap which character plays which role, and "
+            "never let a character perform an action that belongs to the other role.\n"
+            "- ACTION FOLLOWS THE SPEAKER: the character speaking a line is the one shown "
+            "performing that line's action, always in their fixed role and position.\n"
+            "- STABLE ENVIRONMENT: treat the setting as one physical place. Keep the same "
+            "layout, furniture, background objects and lighting from scene to scene so the "
+            "backgrounds match; change only the characters' pose/action and the camera "
+            "framing, not the room itself. If the guidelines under-specify the environment, "
+            "invent concrete, consistent details once and reuse them in every scene_visual.\n"
         )
 
-    # Opening-narration hook: replace the "characters standing doing nothing" intro with a
-    # catchy hook line over the cast doing a fun activity together. Appended last so it wins.
+    # Opening narration: replace the "characters standing doing nothing" intro with a direct,
+    # to-the-point topic label over the cast doing a fun activity together. Appended last so it wins.
     # Quiz types that already script their own challenge narration keep that text and only
     # gain the shared-activity visual (redefine_text=False).
     if _wants_narration_hook(project_type):
