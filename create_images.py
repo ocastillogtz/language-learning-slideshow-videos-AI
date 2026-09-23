@@ -6,15 +6,24 @@ image object with file_path == null.
 
 The prompt is already fully built and stored in scene.image.prompt_to_create
 by create_script.py. This module only needs to:
-  1. Build the reference composite image for fal.ai (character art + location)
-  2. Upload the composite
-  3. Call fal.ai with the stored prompt
+  1. Collect the scene's reference images (character art + location)
+  2. Upload each reference separately
+  3. Call fal.ai with the stored prompt and the list of reference URLs
   4. Save the result and fill scene.image.file_path
 
-Reference composite types (scene.image.reference_type)
--------------------------------------------------------
-  "both"          → char_a art + char_b art + location background
-  "single_speaker"→ speaker art + location background
+Reference images are passed to the edit model as SEPARATE entries in image_urls
+(the Seedream edit models accept several), NOT stitched into one composite — a
+side-by-side composite makes a two-character scene lose one character's identity.
+Mosaic mode is the one exception: its panels are a single generated grid, so it
+still maps one stitched reference to that grid.
+
+Reference types (scene.image.reference_type) — refs sent, in order
+------------------------------------------------------------------
+  "both"          → char_a art, char_b art, [location]
+  "single_speaker"→ speaker art, [location]
+  "multi"         → each present cast member's art, [location]
+  "reading_cast"  → each reading-scene cast member's art
+  "none"          → text-only (no references)
 
 Flags
 -----
@@ -113,10 +122,14 @@ def _upload(image_bytes: bytes) -> str:
     return url
 
 
-def _call_fal(prompt: str, image_url: str, model: str, image_size: str) -> bytes:
+def _call_fal(prompt: str, image_urls: list[str], model: str, image_size: str) -> bytes:
+    """Run the edit model with one or more reference images. `image_urls` is the
+    ordered list of reference URLs — the edit models we use (Seedream edit) accept
+    several, so a two-character scene sends BOTH character references as separate
+    entries here rather than one stitched composite."""
     result = fal_client.subscribe(
         model,
-        arguments={"prompt": prompt, "image_size": image_size, "image_urls": [image_url]},
+        arguments={"prompt": prompt, "image_size": image_size, "image_urls": list(image_urls)},
         with_logs=True,
         on_queue_update=_log_progress,
     )
@@ -125,6 +138,31 @@ def _call_fal(prompt: str, image_url: str, model: str, image_size: str) -> bytes
         data: bytes = resp.read()
     logger.info(f"  Downloaded {len(data)//1024} KB")
     return data
+
+
+def _upload_each(paths: list) -> list[str]:
+    """Upload each reference image on its own and return the URLs in order, so the
+    edit model receives every character (and the location) as a DISTINCT reference
+    image. Passing separate references — not one side-by-side composite — is what
+    keeps two characters in a scene on-model, since the model can attend to each
+    reference independently. Each image is scaled to a common height to bound the
+    upload size."""
+    urls: list[str] = []
+    for p in paths:
+        panel = _scale_to_height(Image.open(p).convert("RGB"), COMPOSITE_HEIGHT)
+        urls.append(_upload(_to_bytes(panel)))
+    return urls
+
+
+def _edit_with_refs(prompt: str, ref_paths, model: str, t2i_model: str, image_size: str) -> bytes:
+    """Edit-generate from a list of reference images, each sent separately. Falls
+    back to text-only generation when there are no references. A missing reference
+    file raises (same as the old composite path) rather than being silently dropped,
+    so a lost character can't slip through unnoticed."""
+    paths = [p for p in ref_paths if p]
+    if not paths:
+        return _call_fal_text_only(prompt, t2i_model, image_size)
+    return _call_fal(prompt, _upload_each(paths), model, image_size)
 
 
 def _call_fal_text_only(prompt: str, model: str, image_size: str) -> bytes:
@@ -204,41 +242,27 @@ def _generate_scene_bytes(
     if reference_type == "none":
         return _call_fal_text_only(prompt, t2i_model, image_size)
     elif reference_type == "reading_cast":
-        ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
-        if ref_paths:
-            url = _upload(_to_bytes(build_composite(*ref_paths)))
-            return _call_fal(prompt, url, model, image_size)
-        return _call_fal_text_only(prompt, t2i_model, image_size)
+        refs = _reading_cast_paths(img, chars_data, assets_dir)
+        return _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     elif reference_type == "multi":
-        ref_paths   = _reading_cast_paths(img, chars_data, assets_dir)
-        comp_inputs = list(ref_paths)
+        refs = list(_reading_cast_paths(img, chars_data, assets_dir))
         if use_location_ref and loc_file:
-            comp_inputs.append(loc_file)
-        if comp_inputs:
-            url = _upload(_to_bytes(build_composite(*comp_inputs)))
-            return _call_fal(prompt, url, model, image_size)
-        return _call_fal_text_only(prompt, t2i_model, image_size)
+            refs.append(loc_file)
+        return _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     elif reference_type == "single_speaker":
         speaker = img.get("speaker") or (scene.get("characters") or [char_a])[0]
         art_spk = _char_ref_path(chars_data[speaker], assets_dir) if speaker in chars_data else None
+        refs = [art_spk] if art_spk else []
         if art_spk and use_location_ref and loc_file:
-            comp = build_composite(art_spk, loc_file)
-        elif art_spk:
-            comp = build_composite(art_spk)
-        else:
-            comp = None
-        if comp is not None:
-            url = _upload(_to_bytes(comp))
-            return _call_fal(prompt, url, model, image_size)
-        return _call_fal_text_only(prompt, t2i_model, image_size)
+            refs.append(loc_file)
+        return _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     elif art_a and art_b:
-        # "both" — use both characters + optional location
+        # "both" — send BOTH character references (+ optional location) as SEPARATE
+        # reference images so each character stays on-model.
+        refs = [art_a, art_b]
         if use_location_ref and loc_file:
-            comp = build_composite(art_a, art_b, loc_file)
-        else:
-            comp = build_composite(art_a, art_b)
-        url = _upload(_to_bytes(comp))
-        return _call_fal(prompt, url, model, image_size)
+            refs.append(loc_file)
+        return _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     else:
         # no usable references — fall back to text-only
         return _call_fal_text_only(prompt, t2i_model, image_size)
@@ -506,8 +530,11 @@ def _generate_mosaics(
 
         try:
             if ref_paths:
+                # Mosaic (2x2 image-saving) mode keeps a single stitched reference:
+                # the panels are one generated grid, so one composite reference maps
+                # to it cleanly. Wrapped in a list for the multi-URL _call_fal API.
                 url  = _upload(_to_bytes(build_composite(*ref_paths)))
-                data = _call_fal(prompt, url, model, image_size)
+                data = _call_fal(prompt, [url], model, image_size)
             else:
                 data = _call_fal_text_only(prompt, t2i_model, image_size)
             _save(data, dest)
@@ -604,48 +631,31 @@ def create_image_single(
     logger.info(f"Re-generating [{scene_id}] reference_type={reference_type} model={model}")
 
     if reference_type == "none":
-        # Text-only generation — no reference composite
+        # Text-only generation — no reference images
         data = _call_fal_text_only(prompt, t2i_model, image_size)
     elif reference_type == "reading_cast":
-        ref_paths = _reading_cast_paths(img, chars_data, assets_dir)
-        if ref_paths:
-            url  = _upload(_to_bytes(build_composite(*ref_paths)))
-            data = _call_fal(prompt, url, model, image_size)
-        else:
-            data = _call_fal_text_only(prompt, t2i_model, image_size)
+        refs = _reading_cast_paths(img, chars_data, assets_dir)
+        data = _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     elif reference_type == "multi":
         # multi-character dialog scene: present cast (img["_cast"]) + optional location
-        ref_paths   = _reading_cast_paths(img, chars_data, assets_dir)
-        comp_inputs = list(ref_paths)
+        refs = list(_reading_cast_paths(img, chars_data, assets_dir))
         if use_location_ref and loc_file:
-            comp_inputs.append(loc_file)
-        if comp_inputs:
-            url  = _upload(_to_bytes(build_composite(*comp_inputs)))
-            data = _call_fal(prompt, url, model, image_size)
-        else:
-            data = _call_fal_text_only(prompt, t2i_model, image_size)
+            refs.append(loc_file)
+        data = _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     elif reference_type == "single_speaker":
         speaker = img.get("speaker") or (target.get("characters") or [char_a])[0]
         art_spk = _char_ref_path(chars_data[speaker], assets_dir) if speaker in chars_data else None
+        refs = [art_spk] if art_spk else []
         if art_spk and use_location_ref and loc_file:
-            comp = build_composite(art_spk, loc_file)
-        elif art_spk:
-            comp = build_composite(art_spk)
-        else:
-            comp = None
-        if comp is not None:
-            url  = _upload(_to_bytes(comp))
-            data = _call_fal(prompt, url, model, image_size)
-        else:
-            data = _call_fal_text_only(prompt, t2i_model, image_size)
+            refs.append(loc_file)
+        data = _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     elif art_a and art_b:
-        # "both" — use both characters + optional location
+        # "both" — send BOTH character references (+ optional location) as SEPARATE
+        # reference images so each character stays on-model.
+        refs = [art_a, art_b]
         if use_location_ref and loc_file:
-            comp = build_composite(art_a, art_b, loc_file)
-        else:
-            comp = build_composite(art_a, art_b)
-        url  = _upload(_to_bytes(comp))
-        data = _call_fal(prompt, url, model, image_size)
+            refs.append(loc_file)
+        data = _edit_with_refs(prompt, refs, model, t2i_model, image_size)
     else:
         data = _call_fal_text_only(prompt, t2i_model, image_size)
 
