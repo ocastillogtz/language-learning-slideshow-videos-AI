@@ -26,6 +26,9 @@ Naturalness / coherence
 Visuals
   visual_detail  scene_visual is present and detailed (setting/characters/action).
   visual_match   The described image fits the line; no on-image text/bubbles.
+  visual_cast    Every character named/depicted in scene_visual is one this scene
+                 actually provides reference art for — a mentioned-but-absent
+                 character would be drawn off-model (wrong face/clothes).
 Meta
   narration      The intro narration frames the topic and learning points.
   length         A subtitle isn't too long to read on one screen.
@@ -164,6 +167,12 @@ _RULES_BLOCK = """Check every scene against these rules and report each violatio
 - visual_match: the scene's `visual` must match what the line says and stay
   consistent with its characters/location; it must contain no on-image text,
   subtitles or speech bubbles.
+- visual_cast: every person named or described in the scene's `visual` must be
+  one of that scene's own `characters` (listed in each line record). The image is
+  generated ONLY from those characters' reference art, so a visual that names or
+  depicts anyone else — most often the other speaker merely reacting/listening —
+  makes that person render off-model (wrong face and clothes). Flag it; the fix is
+  to rewrite the visual so it only involves the scene's listed characters.
 - narration: the intro narration must correctly frame the topic and the stated
   learning points."""
 
@@ -174,7 +183,7 @@ _OUTPUT_SHAPE = r"""Return a single JSON object with exactly this shape:
     {
       "scene_id": "id of the affected scene, or \"general\" for a script-wide remark",
       "field": "subtitle_text | scene_visual | general (which manifest field the fix applies to)",
-      "rule": "one of: grammar, spelling, highlight_qual, level, coherence, register, speaker_flow, visual_match, narration",
+      "rule": "one of: grammar, spelling, highlight_qual, level, coherence, register, speaker_flow, visual_match, visual_cast, narration",
       "severity": "error | warning | suggestion",
       "quote": "the exact problematic fragment",
       "issue": "what is wrong, briefly (English)",
@@ -225,20 +234,53 @@ def _scene_role(scene: dict) -> str:
     return desc or "other"
 
 
+def _name_in_text(name: str, text: str) -> bool:
+    """True if `name` occurs as a whole word in `text` (case-insensitive)."""
+    if not name or not text:
+        return False
+    return re.search(rf"\b{re.escape(name)}\b", text, re.IGNORECASE) is not None
+
+
+def _scene_present_cast(scene: dict, cast: list) -> list:
+    """Characters whose reference art this scene's image is actually built from —
+    i.e. who may legitimately appear in its visual. Mirrors the reference logic in
+    create_images so the review judges the visual against what will really be drawn,
+    not just the scene's bookkeeping `characters` list (which stores only the
+    speaker even for a "both" scene)."""
+    if scene.get("_is_narration"):
+        return list(cast)
+    img = scene.get("image") or {}
+    if img.get("_cast"):
+        return list(img["_cast"])
+    rt = img.get("reference_type", "both")
+    if rt == "single_speaker":
+        spk = img.get("speaker") or (scene.get("characters") or [None])[0]
+        return [spk] if spk else []
+    if rt == "both":
+        return list(cast[:2])
+    if rt == "none":
+        return []
+    return list(scene.get("characters") or [])
+
+
 def _collect_lines(manifest: dict) -> list[dict]:
     """Every scene that carries German text, as compact review records including
-    the visual prompt so the model can check visual_match."""
+    the visual prompt so the model can check visual_match/visual_cast."""
+    cast  = (manifest.get("generation_config") or {}).get("characters") or []
     lines = []
     for scene in manifest.get("scenes", []):
         text = _scene_text(scene)
         if not text:
             continue
-        chars = scene.get("characters") or []
+        present = _scene_present_cast(scene, cast)
         rec = {
-            "scene_id": scene.get("id"),
-            "role":     _scene_role(scene),
-            "speaker":  (chars[0] if len(chars) == 1 else None),
-            "text":     text,
+            "scene_id":   scene.get("id"),
+            "role":       _scene_role(scene),
+            "speaker":    (present[0] if len(present) == 1 else None),
+            # Who this scene actually draws — the only characters its visual may
+            # name or depict (used by the visual_cast rule).
+            "characters": present,
+            "text":       text,
         }
         visual = (scene.get("scene_visual") or "").strip()
         if visual:
@@ -251,7 +293,8 @@ def _deterministic_findings(manifest: dict) -> list[dict]:
     """Exact rule checks done in code (no LLM): highlight present (R3), visual
     detail (R9), readable length (R12). These are guaranteed catches; the LLM
     pass supplies the actual corrected wording for the scenes it also flags."""
-    out = []
+    out  = []
+    cast = (manifest.get("generation_config") or {}).get("characters") or []
     for scene in manifest.get("scenes", []):
         sid  = scene.get("id")
         role = _scene_role(scene)
@@ -282,6 +325,28 @@ def _deterministic_findings(manifest: dict) -> list[dict]:
                              "reliably (needs setting, characters, action, mood).",
                     "fixed": "",
                 })
+
+        # R13 — character consistency: a scene's visual must not name/depict a
+        # cast member this scene doesn't provide reference art for. build_scene_list
+        # now auto-upgrades a solo line to "both" when the other speaker is named,
+        # so this mainly catches a visual that references a character omitted from a
+        # capped multi-scene — a flag-only warning (resolution needs a human or a
+        # regen, so no auto-fix).
+        if role in ("dialog", "narration"):
+            visual = (scene.get("scene_visual") or "").strip()
+            if visual:
+                present = set(_scene_present_cast(scene, cast))
+                stray = [nm for nm in cast if nm not in present and _name_in_text(nm, visual)]
+                if stray:
+                    out.append({
+                        "scene_id": sid, "field": "scene_visual", "rule": "visual_cast",
+                        "severity": "warning", "quote": visual,
+                        "issue": "Visual names character(s) this scene has no reference "
+                                 "art for (" + ", ".join(stray) + "); they would render "
+                                 "off-model. Include them in the scene or drop them from "
+                                 "the visual.",
+                        "fixed": "",
+                    })
 
         # R12 — a subtitle that is too long to read comfortably on one screen.
         if role in ("dialog", "narration") and len(text) > _SUBTITLE_MAX_CHARS:

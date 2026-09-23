@@ -102,6 +102,18 @@ def _relax_clothing(prompt: str) -> str:
     return prompt.replace(_MATCH_CLOTHING_LINE, _RELAXED_CLOTHING_LINE)
 
 
+def _name_in_text(name: str, text: str) -> bool:
+    """True if `name` occurs as a whole word in `text` (case-insensitive).
+
+    Used to catch the case where a scene_visual names a character who was not
+    flagged as present — that character would otherwise be drawn without a
+    reference image or description and come out off-model.
+    """
+    if not name or not text:
+        return False
+    return re.search(rf"\b{re.escape(name)}\b", text, re.IGNORECASE) is not None
+
+
 # Costume cues: even when a project type keeps reference clothing, a scene_visual that
 # deliberately dresses the speaker for a role — a courier uniform, a mechanic's overall,
 # a hard hat, a chef's jacket — must win over the reference outfit at render time.
@@ -339,6 +351,29 @@ def _build_prompt(
             f"plus up to {max(0, max_scene_chars - 1)} other). The conversation as a whole still "
             "involves the full cast — just don't crowd a single image. Use this instead of "
             "\"scene_characters\".\n"
+        )
+    elif "scene_characters" in template:
+        # Two-speaker dialog types: make the scene_characters contract strict so the
+        # image step is always handed every character it will draw. build_scene_list
+        # also enforces this deterministically (a scene_visual that names the other
+        # character is upgraded to "both"), but stating it here keeps the model's
+        # flag and its visual consistent and avoids needless "both" scenes.
+        prompt += (
+            "\n\n=== WHO APPEARS IN EACH IMAGE (STRICT — read carefully) ===\n"
+            f"The cast is exactly two people: {char_a} and {char_b}. For EVERY dialog "
+            "line, \"scene_characters\" must be either \"speaker_only\" or \"both\", and "
+            "it must AGREE with your scene_visual:\n"
+            f"- Set \"both\" whenever BOTH {char_a} and {char_b} are visible in that "
+            "line's image — including when the non-speaking one merely listens, reacts, "
+            "watches, nods, smiles, stands beside the speaker, or is handed something. "
+            "If your scene_visual names, describes or even implies the other character "
+            "in ANY way, you MUST set \"both\".\n"
+            "- Set \"speaker_only\" ONLY when the non-speaking character is genuinely NOT "
+            "in the frame — and then do not mention them in the scene_visual at all.\n"
+            "- NEVER write a scene_visual that names or describes a character you did not "
+            "list in scene_characters. The illustration is generated only from the listed "
+            "characters' reference art, so a mentioned-but-unlisted character is drawn with "
+            "the wrong face and clothes. When in doubt, prefer \"both\".\n"
         )
 
     # Visual guidelines: an art-direction brief that must shape EVERY illustration,
@@ -948,6 +983,12 @@ def build_scene_list(
                             names.append(nm)
                 if speaker in chars_data and speaker not in names:
                     names.insert(0, speaker)
+                # SAFETY NET: also include any cast member the scene_visual names
+                # but that "present_characters" forgot. A character described in the
+                # visual must get a reference image, or the model invents their look.
+                for nm in cast:
+                    if nm in chars_data and nm not in names and _name_in_text(nm, scene_visual):
+                        names.append(nm)
                 if not names:
                     names = [speaker] if speaker in chars_data else cast[:1]
                 # Cap how many characters share a single illustration (speaker kept first).
@@ -955,13 +996,24 @@ def build_scene_list(
                 img_prompt     = _action_multi_prompt(names, chars_data, loc_desc, scene_visual, framing_tokens)
                 reference_type = "multi"
                 img_extra      = {"_cast": names}
-            elif scene_chars == "both":
-                img_prompt     = _action_both_prompt(char_a, char_a_data, char_b, char_b_data, loc_desc, scene_visual, framing_tokens)
-                reference_type = "both"
             else:
-                spk_data       = char_a_data if speaker == char_a else char_b_data
-                img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual, framing_tokens)
-                reference_type = "single_speaker"
+                # Two-person cast. SAFETY NET: GPT sometimes writes the other
+                # character into the scene_visual (e.g. "while Zahra listens",
+                # "Wiebke nods") but still marks the line "speaker_only". Rendered
+                # as single_speaker, only the speaker's reference + description are
+                # sent, so the second character is drawn with no reference and comes
+                # out off-model. If the non-speaker is named in the visual, force a
+                # "both" scene so BOTH references and descriptions reach the image.
+                other = char_b if speaker == char_a else char_a
+                other_in_visual = _name_in_text(other, scene_visual)
+                if scene_chars == "both" or other_in_visual:
+                    img_prompt     = _action_both_prompt(char_a, char_a_data, char_b, char_b_data, loc_desc, scene_visual, framing_tokens)
+                    reference_type = "both"
+                    scene_chars    = "both"   # keep the stored flag consistent with what we rendered
+                else:
+                    spk_data       = char_a_data if speaker == char_a else char_b_data
+                    img_prompt     = _action_single_prompt(speaker, spk_data, loc_desc, scene_visual, framing_tokens)
+                    reference_type = "single_speaker"
 
             if override_wardrobe or _scene_overrides_wardrobe(scene_visual):
                 img_prompt = _relax_clothing(img_prompt)
