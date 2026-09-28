@@ -80,13 +80,25 @@ def _continuation_tail(content, cfg):
     t    = max(0.0, content.duration - max(1.0 / fps, 0.05))
     base = ImageClip(content.get_frame(t)).set_duration(secs)
     w, h = base.w, base.h
-    legend = TextClip(
-        cfg["continuation_text"], font=cfg["nar_font"],
-        fontsize=cfg["continuation_fontsize"], color=cfg["continuation_color"],
-        stroke_color=cfg["continuation_stroke_color"],
-        stroke_width=cfg["continuation_stroke_width"],
-        method="label",
-    ).set_duration(secs)
+    # A literal "\n" in the config text breaks the legend into lines.
+    text = str(cfg["continuation_text"]).replace("\\n", "\n")
+
+    def _legend(size):
+        return TextClip(
+            text, font=cfg["nar_font"],
+            fontsize=size, color=cfg["continuation_color"],
+            stroke_color=cfg["continuation_stroke_color"],
+            stroke_width=cfg["continuation_stroke_width"],
+            method="label", align="center",
+        ).set_duration(secs)
+
+    # Shrink to fit the canvas width (a long legend on a 1080px-wide Short overflows).
+    size   = int(cfg["continuation_fontsize"])
+    legend = _legend(size)
+    max_w  = int(w * 0.9)
+    if legend.w > max_w:
+        size   = max(24, int(size * max_w / legend.w))
+        legend = _legend(size)
     layers = [base]
     # Soft dark backing box behind the legend (like the subtitles), centered.
     bg_opacity = float(cfg.get("continuation_bg_opacity", 0) or 0)

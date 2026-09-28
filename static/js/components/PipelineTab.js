@@ -16,6 +16,7 @@ const PROJECT_TYPES = {
     { value: "word_learning_long",    label: "Word Learning — Long (vocabulary)"              },
     { value: "register_phrases_long", label: "Register Phrases — Long (formal / slang / ...)" },
     { value: "grammar_pairs_long",    label: "Grammar Pairs — Long (base → transformed)"      },
+    { value: "podcast",               label: "Podcast — Brezel Podcast (+ vertical Shorts)"   },
   ],
 };
 
@@ -1206,6 +1207,52 @@ function PromoBuildFields() {
   );
 }
 
+function SongBuildFields() {
+  const { manifest, characters } = useApp();
+  const gen = manifest?.generation_config || {};
+  const [audio,     setAudio]     = React.useState("");
+  const [character, setCharacter] = React.useState((gen.characters || [])[0] || "Amir");
+  const [vguide,    setVguide]    = React.useState(gen.visual_guidelines || "");
+  const [overStt,   setOverStt]   = React.useState(false);
+
+  SongBuildFields._getPayload = () => ({
+    audio, character, visual_guidelines: vguide, overwrite_stt: overStt,
+  });
+
+  return (
+    <div className="fields">
+      <div className="field">
+        <label>Song audio file
+          <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(path to the finished mp3)</span>
+        </label>
+        <input type="text" value={audio} onChange={e=>setAudio(e.target.value)}
+          placeholder="e.g. assets/audio_cache/Starke_Verben_Trap_....mp3"/>
+      </div>
+      <div className="field">
+        <label>Performer</label>
+        <select value={character} onChange={e=>setCharacter(e.target.value)}>
+          {characters.filter(c => c !== "Narrator").map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="field">
+        <label>Costume / setting brief
+          <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(kept consistent across every image; blank = default rapper look)</span>
+        </label>
+        <textarea rows={3} value={vguide} onChange={e=>setVguide(e.target.value)}
+          placeholder="e.g. baggy hoodie, backwards snapback, gold chains, sunglasses; neon-lit studio backdrop"/>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_song_stt" checked={overStt} onChange={e=>setOverStt(e.target.checked)}/>
+        <label htmlFor="f_song_stt">Re-transcribe (ignore cached stt.json)</label>
+      </div>
+      <div style={{fontSize:".78rem",color:"var(--muted)"}}>
+        Transcribes the song (ElevenLabs Scribe) for line-by-line lyric subtitles and slices it into
+        image slots (interval in config.ini [song]). The song is the only audio — no music, no branding.
+      </div>
+    </div>
+  );
+}
+
 function PromoVideoFields() {
   const [overwrite, setOverwrite] = React.useState(false);
   // Plain subtitles (no grammar annotation) for a promo line.
@@ -1215,6 +1262,160 @@ function PromoVideoFields() {
       <div className="toggle-row">
         <input type="checkbox" id="f_promo_ow" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}/>
         <label htmlFor="f_promo_ow">Overwrite existing clip</label>
+      </div>
+    </div>
+  );
+}
+
+// ── podcast Shorts step ────────────────────────────────────────────────────────
+
+function PodcastShortsFields({ projectName }) {
+  const { manifest, reloadManifest, toast } = useApp();
+  const saved = manifest?.podcast?.shorts || [];
+  const [shorts,    setShorts]    = React.useState(() => saved.map(s => ({ ...s })));
+  const [selected,  setSelected]  = React.useState(() => new Set(saved.map((_, i) => i + 1)));
+  const [overwrite, setOverwrite] = React.useState(false);
+  const [annotated, setAnnotated] = React.useState(false);
+  const [bg,        setBg]        = React.useState("");
+  const [busy,      setBusy]      = React.useState("");
+
+  // Re-sync when the manifest's saved moments change (script re-run, GPT re-pick).
+  const savedKey = JSON.stringify(saved);
+  React.useEffect(() => {
+    setShorts(saved.map(s => ({ ...s })));
+    setSelected(new Set(saved.map((_, i) => i + 1)));
+  }, [savedKey]);
+
+  // dialog index → {speaker, text, setting} for the line previews
+  const lines = {};
+  (manifest?.scenes || []).forEach(s => {
+    if (s._dialog_index === undefined) return;
+    lines[s._dialog_index] = {
+      speaker: (s.characters || ["?"])[0],
+      text: (s.subtitle_text || s.audio?.tts_text || "").replace(/[*_]/g, ""),
+      setting: s._podcast_setting || "studio",
+    };
+  });
+  const indices = Object.keys(lines).map(Number).sort((a, b) => a - b);
+
+  const cleanShorts = () => shorts.map(s => ({
+    start: parseInt(s.start, 10), end: parseInt(s.end, 10),
+    title: s.title || "", description: s.description || "", why: s.why || "",
+  }));
+
+  PodcastShortsFields._getPayload = () => {
+    // The backend stores moments sorted by start line, so number them the same way.
+    const order = cleanShorts().map((s, i) => ({ s, on: selected.has(i + 1) }))
+      .sort((a, b) => a.s.start - b.s.start);
+    return {
+      overwrite, annotated_subtitles: annotated,
+      bg_audio_name: bg.trim() || null,        // blank → [podcast] short_bg_audio_name
+      shorts: order.map(o => o.s),             // saved before the build starts
+      only: order.map((o, i) => o.on ? i + 1 : 0).filter(Boolean),
+    };
+  };
+
+  const update = (i, key, val) => setShorts(arr => arr.map((s, j) => j === i ? { ...s, [key]: val } : s));
+  const remove = i => setShorts(arr => arr.filter((_, j) => j !== i));
+  const add    = () => {
+    const last = indices[indices.length - 1] || 0;
+    setShorts(arr => [...arr, { start: Math.max(0, last - 5), end: last, title: "", description: "" }]);
+    setSelected(prev => new Set([...prev, shorts.length + 1]));
+  };
+  const toggle = n => setSelected(prev => {
+    const s = new Set(prev); s.has(n) ? s.delete(n) : s.add(n); return s;
+  });
+
+  async function save() {
+    setBusy("save");
+    try {
+      await apiPost(`/projects/${projectName}/podcast/shorts`, { shorts: cleanShorts() });
+      await reloadManifest(projectName);
+      toast("Saved", "Shorts moments saved.", "ok");
+    } catch (e) { toast("Error", e.message, "err"); }
+    finally { setBusy(""); }
+  }
+
+  async function repick() {
+    if (!window.confirm("Ask GPT to pick new moments? (one short OpenAI call — replaces the current list)")) return;
+    setBusy("pick");
+    try {
+      await apiPost(`/projects/${projectName}/podcast/pick_shorts`, {});
+      await reloadManifest(projectName);
+      toast("Done", "New moments picked.", "ok");
+    } catch (e) { toast("Error", e.message, "err"); }
+    finally { setBusy(""); }
+  }
+
+  const inputStyle = { width: "5rem", padding: ".35rem .5rem" };
+  return (
+    <div className="fields">
+      {indices.length === 0 && (
+        <div style={{fontSize:".8rem", color:"var(--muted)"}}>
+          Generate the script first — GPT picks the best moments automatically right after it.
+        </div>
+      )}
+
+      {shorts.map((s, i) => {
+        const n = i + 1;
+        const first = lines[parseInt(s.start, 10)];
+        const last  = lines[parseInt(s.end, 10)];
+        const len   = (parseInt(s.end, 10) - parseInt(s.start, 10) + 1) || 0;
+        return (
+          <div key={i} className="field" style={{border:"1px solid var(--border)", borderRadius:8,
+                               padding:".55rem .7rem", background:"var(--s2)"}}>
+            <div style={{display:"flex", alignItems:"center", gap:".5rem", flexWrap:"wrap"}}>
+              <input type="checkbox" checked={selected.has(n)} onChange={() => toggle(n)}
+                title="Build this Short"/>
+              <strong style={{fontSize:".85rem"}}>Short {n}</strong>
+              <span style={{fontSize:".78rem", color:"var(--muted)"}}>lines</span>
+              <input type="number" style={inputStyle} value={s.start} min={indices[0]} max={indices[indices.length-1]}
+                onChange={e => update(i, "start", e.target.value)}/>
+              <span>–</span>
+              <input type="number" style={inputStyle} value={s.end} min={indices[0]} max={indices[indices.length-1]}
+                onChange={e => update(i, "end", e.target.value)}/>
+              <span style={{fontSize:".75rem", color:"var(--muted)"}}>({len} lines)</span>
+              {s.file && <span style={{fontSize:".75rem", color:"var(--green, #4ade80)"}}>✓ {s.file}</span>}
+              <button className="btn-ghost" style={{marginLeft:"auto", fontSize:".74rem", padding:".15rem .5rem"}}
+                onClick={() => remove(i)}>Remove</button>
+            </div>
+            <input style={{width:"100%", boxSizing:"border-box"}} value={s.title || ""} placeholder="Short title"
+              onChange={e => update(i, "title", e.target.value)}/>
+            <div style={{fontSize:".76rem", color:"var(--muted)", marginTop:".35rem"}}>
+              {first ? <div>▶ {first.speaker}: {first.text}</div> : <div>⚠ start line not found</div>}
+              {last && len > 1 && <div>■ {last.speaker}: {last.text}</div>}
+              {s.why && <div style={{fontStyle:"italic", marginTop:".2rem"}}>{s.why}</div>}
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{display:"flex", gap:".5rem", flexWrap:"wrap", marginBottom:".6rem"}}>
+        <button className="btn-ghost" onClick={add} disabled={!indices.length}>+ Add moment</button>
+        <button className="btn-ghost" onClick={save} disabled={!!busy}>{busy === "save" ? "Saving…" : "Save moments"}</button>
+        <button className="btn-ghost" onClick={repick} disabled={!!busy || !indices.length}>
+          {busy === "pick" ? "Picking…" : "Re-pick with GPT"}
+        </button>
+      </div>
+
+      <div className="field-row">
+        <div className="field"><label>Background audio
+            <span style={{color:"var(--muted)",fontWeight:300}}> (blank = config.ini [podcast])</span></label>
+          <input value={bg} onChange={e=>setBg(e.target.value)} placeholder="e.g. office"/></div>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_pc_ann" checked={annotated} onChange={e=>setAnnotated(e.target.checked)}/>
+        <label htmlFor="f_pc_ann">Grammar-annotated subtitles</label>
+      </div>
+      <div className="toggle-row">
+        <input type="checkbox" id="f_pc_ow" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}/>
+        <label htmlFor="f_pc_ow">Overwrite existing vertical clips and Shorts</label>
+      </div>
+      <div style={{fontSize:".78rem", color:"var(--muted)"}}>
+        Renders the ticked moments as vertical clips (<code>videos/v/</code>) using the vertical studio image
+        and the episode's example images, then writes <code>final_&lt;project&gt;_shortN.mp4</code> with the
+        corner label and the “full episode” end card from config.ini [podcast]. Titles and descriptions
+        (with the episode link) are in <code>shorts.txt</code>. Needs the episode's audio and images first.
       </div>
     </div>
   );
@@ -1416,6 +1617,25 @@ function makeSteps(projectName, manifest) {
     ];
   }
 
+  if (ptype === "song") {
+    return [
+      { id:"song_build", num:1, title:"Build Song Source",
+        desc:"Transcribe the song (ElevenLabs Scribe), sync lyric subtitles, and slice into image slots.",
+        Fields: SongBuildFields, payload:()=>SongBuildFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/song_build` },
+      { id:"images", num:2, title:"Generate Images", desc:"fal.ai illustrates the performer for each slot.",
+        Fields: ImagesFields, payload:()=>ImagesFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/images` },
+      { id:"video", num:3, title:"Render Clips", desc:"One clip per slot with timed lyric subtitles.",
+        Fields: VideoFields, payload:()=>VideoFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/video` },
+      { id:"assemble", num:4, title:"Assemble Final Video",
+        desc:"Lays the song over the video start-to-finish. No background music, no branding.",
+        Fields: AssembleFields, payload:()=>AssembleFields._getPayload?.()||{},
+        endpoint:n=>`/projects/${n}/run/assemble` },
+    ];
+  }
+
   if (ptype === "promotional") {
     return [
       { id:"promo_build", num:1, title:"Build Promotional Scene",
@@ -1438,6 +1658,23 @@ function makeSteps(projectName, manifest) {
     ];
   }
 
+  const steps = makeDefaultSteps(projectName, igDisabled);
+  if (ptype === "podcast") {
+    // Full episode = the normal horizontal flow; the Shorts step re-cuts the best
+    // moments as vertical 9:16 videos right after the episode is assembled.
+    const at = steps.findIndex(s => s.id === "assemble") + 1;
+    steps.splice(at, 0, {
+      id:"podcast_shorts", num:0, title:"Build Shorts (vertical)",
+      desc:"Pick/edit the best moments, render them 9:16 and add a 'full episode' end card.",
+      Fields: PodcastShortsFields, payload:()=>PodcastShortsFields._getPayload?.()||{},
+      endpoint:n=>`/projects/${n}/run/podcast_shorts`,
+    });
+    steps.forEach((s, i) => { s.num = i + 1; });
+  }
+  return steps;
+}
+
+function makeDefaultSteps(projectName, igDisabled) {
   return [
     {
       id:"script", num:1,

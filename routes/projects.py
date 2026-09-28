@@ -152,13 +152,48 @@ def update_scene(name: str, scene_id: str):
         if "subtitle_text" in data:
             scene["subtitle_text"] = data["subtitle_text"].strip()
 
+        # subtitle_segments — timed lyric lines for a song slice. Each entry is
+        # {text, start_ms, end_ms} with timings RELATIVE to the scene start. The
+        # transcription can mis-hear words under the music, so this is the manual fix.
+        if "subtitle_segments" in data:
+            segs = data["subtitle_segments"]
+            if not isinstance(segs, list):
+                return jsonify({"error": "subtitle_segments must be a list"}), 400
+            dur = scene.get("duration_ms")
+            clean = []
+            for seg in segs:
+                if not isinstance(seg, dict):
+                    return jsonify({"error": "each subtitle segment must be an object"}), 400
+                try:
+                    st = int(seg.get("start_ms"))
+                    en = int(seg.get("end_ms"))
+                except (TypeError, ValueError):
+                    return jsonify({"error": "segment start_ms/end_ms must be integers"}), 400
+                if en < st:
+                    return jsonify({"error": "segment end_ms must be >= start_ms"}), 400
+                if dur:
+                    st = max(0, min(st, dur))
+                    en = max(0, min(en, dur))
+                clean.append({"text": (seg.get("text") or "").strip(),
+                              "start_ms": st, "end_ms": en})
+            scene["subtitle_segments"] = clean
+            # Keep subtitle_text (reference/editing) in sync with the edited lines.
+            scene["subtitle_text"] = " ".join(s["text"] for s in clean if s["text"]).strip() or None
+            # Drop the stale rendered clip so a re-render picks up the new lyrics even
+            # without the "overwrite" toggle (the per-scene video regen also works).
+            clip = PROJECTS_DIR / name / "videos" / f"{scene_id}.mp4"
+            if clip.exists():
+                clip.unlink()
+
         # scene_visual — English action description used for image (re)generation.
         # The image prompt embeds the visual at script time, so rewrite the stored
         # prompt too — otherwise a later image regen still uses the old visual.
         if "scene_visual" in data:
             scene["scene_visual"] = (data["scene_visual"] or "").strip()
             img = scene.get("image")
-            if scene["scene_visual"] and img and img.get("prompt_to_create"):
+            # The shared podcast studio prompt has no per-line action to swap.
+            if scene["scene_visual"] and img and img.get("prompt_to_create") \
+                    and img.get("reference_type") != "podcast_studio":
                 from create_script import update_prompt_scene_visual
                 img["prompt_to_create"] = update_prompt_scene_visual(
                     img["prompt_to_create"], scene["scene_visual"])
@@ -258,7 +293,13 @@ def create_project():
         level            = data.get("level", "").strip() or None
         visual_guidelines = data.get("visual_guidelines", "").strip()
 
-        if not name or not context:
+        # Song and promotional projects gather their real inputs in the Build step
+        # (the song's audio file, the promo character/line), so the scene description
+        # here is optional for them.
+        context_optional = project_type_key in ("song", "promotional")
+        if not name:
+            return jsonify({"error": "project_name is required"}), 400
+        if not context and not context_optional:
             return jsonify({"error": "project_name and context are required"}), 400
 
         from create_project import create_project as _create

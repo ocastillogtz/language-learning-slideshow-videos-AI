@@ -22,6 +22,12 @@ const NEW_PROJ_TYPES = {
   promotional: [
     { value: "promotional", label: "Promotional (character speaks → IG story)" },
   ],
+  song: [
+    { value: "song", label: "Song (audio file → synced lyric video)" },
+  ],
+  podcast: [
+    { value: "podcast", label: "Podcast (Brezel Podcast episode + Shorts)" },
+  ],
 };
 
 const LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"];
@@ -38,16 +44,17 @@ function NewProjectModal({ open, onClose }) {
   const [saving,   setSaving]   = useState(false);
 
   const isWordLearning = projType === "word_learning" || projType === "word_learning_long";
-  const isHorizontal   = projType.endsWith("_long");
+  const isHorizontal   = projType.endsWith("_long") || projType === "podcast";
   const isReading      = projType === "reading_together";
   const isPromotional  = projType === "promotional";
+  const isSong         = projType === "song";
 
   async function save() {
     setErr("");
     // Promotional projects gather their inputs (character, situation, text) in the
     // Build step, so the scene description here is optional.
-    if (!name.trim() || (!context.trim() && !isPromotional)) {
-      setErr(isPromotional
+    if (!name.trim() || (!context.trim() && !isPromotional && !isSong)) {
+      setErr((isPromotional || isSong)
         ? "Project name is required."
         : "Project name and scene description are required."); return;
     }
@@ -97,6 +104,8 @@ function NewProjectModal({ open, onClose }) {
                   ? <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--green,#10b981)",color:"#fff",letterSpacing:"0.03em"}}>Reading</span>
                   : isPromotional
                   ? <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--pink,#ec4899)",color:"#fff",letterSpacing:"0.03em"}}>Promo</span>
+                  : isSong
+                  ? <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--purple,#8b5cf6)",color:"#fff",letterSpacing:"0.03em"}}>Song</span>
                   : isHorizontal
                   ? <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--accent,#3b82f6)",color:"#fff",letterSpacing:"0.03em"}}>HD 16:9</span>
                   : <span style={{fontSize:"0.72rem",fontWeight:600,padding:"1px 7px",borderRadius:10,background:"var(--muted-bg,#e5e7eb)",color:"var(--muted,#6b7280)",letterSpacing:"0.03em"}}>9:16 Short</span>
@@ -115,6 +124,12 @@ function NewProjectModal({ open, onClose }) {
                 <optgroup label="▸ Promotional — single image, character speaks (IG story)">
                   {NEW_PROJ_TYPES.promotional.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </optgroup>
+                <optgroup label="▸ Song — audio file → synced lyric video">
+                  {NEW_PROJ_TYPES.song.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </optgroup>
+                <optgroup label="▸ Podcast — horizontal episode + vertical Shorts">
+                  {NEW_PROJ_TYPES.podcast.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </optgroup>
               </select>
             </div>
             <div className="field" style={{flex:1}}>
@@ -127,15 +142,20 @@ function NewProjectModal({ open, onClose }) {
           <div className="field">
             <label>{isReading ? "Story text (paste a public-domain story)"
               : isPromotional ? "What the video is about (optional)"
+              : isSong ? "What the song is about (optional)"
               : "Scene Description"}</label>
             <textarea rows={isReading ? 10 : 4} value={context} onChange={e=>setContext(e.target.value)}
               placeholder={isReading
                 ? "Paste the full story here. Old spelling is fine — it will be modernized and split into sentences."
                 : isPromotional
                 ? "Optional note. You'll pick the character, image situation, and the exact line in the Build step."
+                : isSong
+                ? "Optional note. You'll pick the audio file (and costume) in the Build Song Source step."
+                : projType === "podcast"
+                ? "Episode topic, e.g. How to order at a German bakery — polite phrases, what to say when you don't know the name of a pastry…"
                 : "Describe the scene setting and topic…"}/>
           </div>
-          {!isReading && !isPromotional && <div className="field">
+          {!isReading && !isPromotional && !isSong && <div className="field">
             <label>
               {isWordLearning ? "Words to Teach" : "Learning Points"}
               {!isWordLearning && <span style={{color:"var(--muted)",fontWeight:300}}> (optional)</span>}
@@ -157,9 +177,13 @@ function NewProjectModal({ open, onClose }) {
               <span style={{color:"var(--muted)",fontWeight:300}}> (optional)</span>
             </label>
             <textarea rows={3} value={visualGuidelines} onChange={e=>setVisualGuidelines(e.target.value)}
-              placeholder="Setting, character clothing/props, and mood/style — applied to every scene. e.g. a cozy local bakery; both wear white aprons, gloves and hair nets; warm morning light."/>
+              placeholder={isSong
+                ? "Performer costume + setting, kept consistent across every image. Blank = Amir as a rapper (hoodie, backwards snapback, gold chains, sunglasses; neon studio)."
+                : "Setting, character clothing/props, and mood/style — applied to every scene. e.g. a cozy local bakery; both wear white aprons, gloves and hair nets; warm morning light."}/>
             <span style={{fontSize:"0.78rem",color:"var(--muted)"}}>
-              Used to art-direct every image. With this set you don't need a pre-made location.
+              {isSong
+                ? "Art-directs every song image. You can also change it later in the Build Song Source step."
+                : "Used to art-direct every image. With this set you don't need a pre-made location."}
             </span>
           </div>}
           {err && <div className="err-msg" style={{display:"block"}}>{err}</div>}

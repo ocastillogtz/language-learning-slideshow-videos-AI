@@ -507,6 +507,91 @@ def run_reading_build(name):
         return jsonify({"error": str(e)}), 500
 
 
+# ── song pipeline ───────────────────────────────────────────────────────────────
+
+@bp.route("/projects/<name>/run/song_build", methods=["POST"])
+def run_song_build(name):
+    """Build a song project's scenes from a finished audio file (STT + slot chunking).
+
+    Body: { audio: "<path>", character?: "<name>", visual_guidelines?: "<brief>",
+            overwrite_stt?: bool }
+    """
+    try:
+        data       = request.get_json() or {}
+        audio      = (data.get("audio") or "").strip()
+        character  = (data.get("character") or "").strip() or None
+        vguide     = (data.get("visual_guidelines") or "").strip() or None
+        over_stt   = bool(data.get("overwrite_stt", False))
+        if not audio:
+            return jsonify({"error": "audio (path to the song file) is required"}), 400
+        from create_song_source import build_song_project
+        run_job(name, "song_build", build_song_project, name, audio, character, vguide, over_stt)
+        return jsonify({"message": "Song source build started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── podcast pipeline ────────────────────────────────────────────────────────────
+
+@bp.route("/projects/<name>/podcast/shorts", methods=["POST"])
+def save_podcast_shorts(name):
+    """Save hand-edited Short ranges/titles: {shorts: [{start, end, title, description}]}."""
+    try:
+        data   = request.get_json() or {}
+        shorts = data.get("shorts")
+        if not isinstance(shorts, list):
+            return jsonify({"error": "shorts must be a list"}), 400
+        from podcast import save_shorts
+        return jsonify({"shorts": save_shorts(name, shorts)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/podcast/pick_shorts", methods=["POST"])
+def pick_podcast_shorts(name):
+    """Re-pick the best moments with GPT (synchronous — one short call)."""
+    try:
+        data  = request.get_json() or {}
+        raw   = data.get("count")
+        count = int(raw) if raw not in (None, "") else None
+        from podcast import select_shorts
+        return jsonify({"shorts": select_shorts(name, count)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/projects/<name>/run/podcast_shorts", methods=["POST"])
+def run_podcast_shorts(name):
+    """Render the chosen moments as vertical clips and assemble final_<p>_shortN.mp4."""
+    try:
+        data          = request.get_json() or {}
+        overwrite     = bool(data.get("overwrite", False))
+        annotated     = bool(data.get("annotated_subtitles", False))
+        bg_audio_name = data.get("bg_audio_name")
+        bg_audio_name = bg_audio_name.strip() if isinstance(bg_audio_name, str) else None
+        raw_gain      = data.get("bg_audio_gain_db")
+        bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else None
+        raw_speed     = data.get("speed_factor")
+        speed_factor  = float(raw_speed) if raw_speed not in (None, "") else None
+        branding_file = (data.get("branding_file") or "").strip() or None
+        branding_mode = (data.get("branding_mode") or "none").strip() or "none"
+        if branding_mode not in ("none", "intro", "outro", "both"):
+            branding_mode = "none"
+        only = data.get("only")
+        if isinstance(only, list) and not only:
+            return jsonify({"error": "No Short ticked — tick at least one moment to build."}), 400
+        only = [int(x) for x in only] if isinstance(only, list) else None
+        from podcast import build_shorts, save_shorts
+        # The step form sends its (possibly edited) moments along — save them first.
+        if isinstance(data.get("shorts"), list):
+            save_shorts(name, data["shorts"])
+        run_job(name, "podcast_shorts", build_shorts, name, overwrite, annotated,
+                bg_audio_name, bg_gain_db, speed_factor, branding_file, branding_mode, only)
+        return jsonify({"message": "Shorts build started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/projects/<name>/run/reading_cast", methods=["POST"])
 def run_reading_cast(name):
     try:

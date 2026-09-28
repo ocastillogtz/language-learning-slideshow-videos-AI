@@ -21,6 +21,8 @@ Action:
   create_project       — create the project folder + manifest from the brief
   generate_script      — run the GPT script step (title, dialog, scenes)
   get_project_status   — inspect a project's current pipeline state
+  pick_podcast_shorts  — (podcast type) let GPT re-pick the best moments for the Shorts
+  set_podcast_shorts   — (podcast type) save hand-chosen Short ranges / titles
 
 The server chdir's to its own directory on startup so the pipeline's relative
 config paths (config.ini, projects/, assets/) resolve no matter how the MCP
@@ -85,7 +87,18 @@ mcp = MCPServer(
         "SPEAKING character is wearing that gear and holding the trade's tools — even as a "
         "costume outside their usual role. The render honours a costume only when the text "
         "names it. Avoid relying on readable text/labels on props (the illustrator can't draw "
-        "words)."
+        "words).\n"
+        "\n"
+        "PODCAST TYPE (project_type_key=\"podcast\", the 'Brezel Podcast'):\n"
+        "- A horizontal episode where char_a and char_b are the two hosts talking in a fixed podcast "
+        "studio. context = the episode topic; learning_points = what the episode must teach. "
+        "visual_guidelines (optional) only art-direct the EXAMPLE cut-aways, never the studio.\n"
+        "- GPT marks each line 'studio' (shared studio image, cached per host pair in "
+        "assets/podcast_studio — free after the first episode) or 'example' (the hosts act out a "
+        "real situation, which gets its own illustration). Default length 30-40 lines.\n"
+        "- generate_script also asks GPT for the best moments as vertical Shorts (returned as "
+        "podcast_shorts, dialog-line ranges). Adjust them with set_podcast_shorts or re-pick with "
+        "pick_podcast_shorts; they are rendered later in the web UI's 'Build Shorts' step."
     ),
 )
 
@@ -289,9 +302,16 @@ def generate_script(
     )
 
     scenes = manifest.get("scenes", [])
-    dialog_scenes = [s for s in scenes if s.get("type") == "dialog"]
+    dialog_scenes = [s for s in scenes if (s.get("description") or "").startswith("dialog_")]
     vi = manifest.get("video_info", {})
     gen = manifest.get("generation_config", {})
+    extra = {}
+    if "podcast" in manifest or any("_podcast_setting" in s for s in scenes):
+        extra = {
+            "studio_lines":  sum(1 for s in scenes if s.get("_podcast_setting") == "studio"),
+            "example_lines": sum(1 for s in scenes if s.get("_podcast_setting") == "example"),
+            "podcast_shorts": _shorts_summary(manifest),
+        }
     return {
         "status": "script_generated",
         "project_name": project_name.strip(),
@@ -302,6 +322,7 @@ def generate_script(
         "dialog_lines": len(dialog_scenes),
         "total_scenes": len(scenes),
         "next_step": "review, then run audio/images from the web UI or pipeline",
+        **extra,
     }
 
 
@@ -346,7 +367,60 @@ def get_project_status(project_name: str) -> dict:
         "has_images": bool(imgs),
         "has_video": (cfg["projects_dir"] / project_name.strip()
                       / f"final_{project_name.strip()}.mp4").exists(),
+        **({"podcast_shorts": _shorts_summary(m)} if "podcast" in m else {}),
     }
+
+
+# =============================================================================
+# Podcast tools
+# =============================================================================
+
+def _shorts_summary(manifest: dict) -> list[dict]:
+    """The chosen Shorts with the first/last line text so a chat can judge them."""
+    lines = {s["_dialog_index"]: f"{(s.get('characters') or ['?'])[0]}: {s.get('subtitle_text') or ''}"
+             for s in manifest.get("scenes", []) if "_dialog_index" in s}
+    out = []
+    for n, sh in enumerate((manifest.get("podcast") or {}).get("shorts") or [], start=1):
+        out.append({
+            "short": n, "start": sh.get("start"), "end": sh.get("end"),
+            "title": sh.get("title"), "why": sh.get("why"),
+            "first_line": lines.get(sh.get("start")), "last_line": lines.get(sh.get("end")),
+            "file": sh.get("file"),
+        })
+    return out
+
+
+@mcp.tool()
+def pick_podcast_shorts(project_name: str, count: int = 0) -> dict:
+    """(podcast type) Ask GPT to re-pick the best moments of the episode for vertical Shorts.
+
+    Replaces the current list. Calls the OpenAI API once (short request).
+    count = how many Shorts (0 = config.ini [podcast] shorts_count).
+    Returns the new Shorts (dialog-line ranges, titles, first/last line).
+    """
+    import json
+    from podcast import select_shorts
+    select_shorts(project_name.strip(), count or None)
+    cfg = load_config()
+    mp = cfg["projects_dir"] / project_name.strip() / "project_manifest.json"
+    return {"podcast_shorts": _shorts_summary(json.loads(mp.read_text(encoding="utf-8")))}
+
+
+@mcp.tool()
+def set_podcast_shorts(project_name: str, shorts: list[dict]) -> dict:
+    """(podcast type) Save hand-chosen Shorts. No API calls.
+
+    shorts: [{"start": int, "end": int, "title": str, "description": str}] — start/end are
+    0-based dialog line indices (inclusive), as returned in podcast_shorts. Overlapping ranges
+    are dropped; the list is stored sorted by start. Descriptions may contain {LINK}, which
+    is replaced by config.ini [podcast] full_episode_url in shorts.txt.
+    """
+    import json
+    from podcast import save_shorts
+    save_shorts(project_name.strip(), shorts)
+    cfg = load_config()
+    mp = cfg["projects_dir"] / project_name.strip() / "project_manifest.json"
+    return {"podcast_shorts": _shorts_summary(json.loads(mp.read_text(encoding="utf-8")))}
 
 
 if __name__ == "__main__":

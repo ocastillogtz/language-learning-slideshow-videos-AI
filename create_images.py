@@ -24,6 +24,8 @@ Reference types (scene.image.reference_type) — refs sent, in order
   "multi"         → each present cast member's art, [location]
   "reading_cast"  → each reading-scene cast member's art
   "none"          → text-only (no references)
+  "podcast_studio"→ not generated per scene: every such scene shares the cached
+                    studio art from podcast.ensure_studio_images()
 
 Flags
 -----
@@ -409,6 +411,14 @@ def create_images(
         use_location_ref=use_location_ref,
     )
 
+    # Podcast studio lines share ONE cached studio image per host pair (see podcast.py):
+    # fal.ai is only called if this pair has no cached studio yet. `overwrite` doesn't
+    # force a new studio — regenerate it from a studio scene in the Items tab instead.
+    from podcast import STUDIO_REF_TYPE, ensure_studio_images, studio_scenes
+    if studio_scenes(manifest):
+        ensure_studio_images(project_name, manifest, model_override=model_override)
+        _write_manifest(manifest_path, manifest)
+
     # Image-saving (mosaic) mode: one 2x2 image shared by 4 scenes. Horizontal only.
     if mosaic_mode and video_format == "horizontal":
         loc_desc = (loc_data["description"] if loc_key and loc_key in all_locs else
@@ -430,7 +440,8 @@ def create_images(
                        "projects — generating images normally.")
 
     # Progress is measured over the scenes that carry an image (the work).
-    img_scenes = [s for s in manifest["scenes"] if s.get("image")]
+    img_scenes = [s for s in manifest["scenes"] if s.get("image")
+                  and s["image"].get("reference_type") != STUDIO_REF_TYPE]
     img_total  = len(img_scenes)
     for img_done, scene in enumerate(img_scenes, start=1):
         img = scene.get("image")
@@ -476,7 +487,8 @@ def _generate_mosaics(
     # Scenes that carry an image, split into the standalone narration intro and the
     # rest (which get batched into mosaics).
     narration = [s for s in scenes if s.get("image") and s.get("_is_narration")]
-    batchable = [s for s in scenes if s.get("image") and not s.get("_is_narration")]
+    batchable = [s for s in scenes if s.get("image") and not s.get("_is_narration")
+                 and s["image"].get("reference_type") != "podcast_studio"]  # shared studio art
 
     # One fal.ai call per narration intro + one per mosaic batch — that's the unit
     # of work the progress bar tracks.
@@ -628,6 +640,31 @@ def create_image_single(
         target["_cast"] = list(cast_override)
     dest           = images_dir / f"{scene_id}.png"
 
+    # Podcast studio: the image is shared by every studio line (and cached in assets/ for
+    # later episodes), so regenerating it from any studio scene refreshes it everywhere.
+    # Switching a scene TO the studio just points it at the shared art (no new image when
+    # cached); switching a studio scene to another mode gives it its own image below.
+    from podcast import STUDIO_REF_TYPE, ensure_studio_images, invalidate_studio_clips
+    if reference_type == STUDIO_REF_TYPE:
+        was_studio = stored_ref == STUDIO_REF_TYPE
+        img["reference_type"] = STUDIO_REF_TYPE
+        if not was_studio:
+            # The prompt box held this line's example prompt — don't let it become the
+            # studio prompt; ensure_studio_images fills in the shared one.
+            img["prompt_to_create"] = ""
+        target["_podcast_setting"] = "studio"
+        ensure_studio_images(project_name, manifest, regenerate=was_studio,
+                             prompt=prompt if was_studio else None, model_override=model_override)
+        invalidate_studio_clips(project_name, manifest)
+        _write_manifest(manifest_path, manifest)
+        logger.info(f"Podcast studio image {'regenerated' if was_studio else 'assigned'} "
+                    f"for scene '{scene_id}'.")
+        return
+    if stored_ref == STUDIO_REF_TYPE:
+        img["reference_type"] = reference_type
+        img.pop("file_path_vertical", None)
+        target["_podcast_setting"] = "example"
+
     logger.info(f"Re-generating [{scene_id}] reference_type={reference_type} model={model}")
 
     if reference_type == "none":
@@ -663,11 +700,13 @@ def create_image_single(
 
     img["file_path"] = f"images/{scene_id}.png"
 
-    # Invalidate the rendered video clip so the next render pass rebuilds it
-    video_clip = project_path / "videos" / f"{scene_id}.mp4"
-    if video_clip.exists():
-        video_clip.unlink()
-        logger.info(f"Deleted stale video clip: {video_clip.name}")
+    # Invalidate the rendered video clip(s) so the next render pass rebuilds them
+    # (videos/v/ holds the podcast Shorts' vertical copies).
+    for video_clip in (project_path / "videos" / f"{scene_id}.mp4",
+                       project_path / "videos" / "v" / f"{scene_id}.mp4"):
+        if video_clip.exists():
+            video_clip.unlink()
+            logger.info(f"Deleted stale video clip: {video_clip}")
 
     _write_manifest(manifest_path, manifest)
 

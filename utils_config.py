@@ -225,6 +225,28 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "audio_format":            _p("audio", "output_format",    "mp3_44100_128"),
         "repetition_pause_factor": _f("repetition", "pause_factor", 1.3),
 
+        # Song video type — sing-along lyric videos from a finished audio file.
+        # image_interval drives how often the illustration changes; the STT keys pick
+        # the ElevenLabs Scribe model/language used to transcribe the lyrics with
+        # word-level timestamps. line_gap / max_line_chars group words into subtitle lines.
+        "song_image_interval_ms": int(_f("song", "image_interval_seconds", 5.0) * 1000),
+        "song_stt_model":         _p("song", "stt_model",       "scribe_v1"),
+        "song_stt_language":      _p("song", "stt_language",    "deu"),
+        "song_line_gap_s":        _f("song", "line_gap_seconds", 0.6),
+        "song_max_line_chars":    _i("song", "max_line_chars",   42),
+
+        # Podcast video type — horizontal episode + vertical Shorts of the best moments.
+        "podcast_shorts_count":        _i("podcast", "shorts_count",      3),
+        "podcast_short_min_lines":     _i("podcast", "short_min_lines",   4),
+        "podcast_short_max_lines":     _i("podcast", "short_max_lines",   10),
+        "podcast_short_label":         _p("podcast", "short_label",       "Brezel Podcast"),
+        "podcast_short_cta_text":      _p("podcast", "short_cta_text",
+                                          "Ganze Folge: Link in der Beschreibung"),
+        "podcast_short_cta_seconds":   _f("podcast", "short_cta_seconds", 2.5),
+        "podcast_short_bg_audio_name": (_p("podcast", "short_bg_audio_name", "") or "").strip(),
+        "podcast_short_bg_audio_gain_db": _f("podcast", "short_bg_audio_gain_db", 0.0),
+        "podcast_full_episode_url":    (_p("podcast", "full_episode_url", "") or "").strip(),
+
         # Script / GPT
         "script_model": _p("script", "openai_model", "gpt-4.1-mini"),
         # Manifest review / GPT (review_manifest.py)
@@ -289,6 +311,9 @@ def apply_video_format(cfg: dict, video_format: str) -> dict:
 
     Call this once per render after load_config(), passing the project's video_format.
     """
+    # Remember which orientation is active so per-orientation scene assets (e.g. the
+    # podcast studio's image.file_path_vertical) can be picked at render time.
+    cfg["active_video_format"] = video_format
     overrides = (cfg.get("video_formats") or {}).get(video_format, {})
     for key, raw in overrides.items():
         if raw is None:

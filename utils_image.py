@@ -60,6 +60,12 @@ def pad_image_to_frame(img: Image.Image, cfg: dict) -> Image.Image:
     if W > H and sh > sw:
         return _portrait_in_landscape(img, W, H, br, blend)
 
+    # Portrait canvas + landscape illustration (podcast Shorts re-using the episode's
+    # 16:9 example art): full-width illustration centered vertically over a blurred,
+    # expanded copy of itself, with feathered top/bottom seams.
+    if H > W and sw > sh:
+        return _landscape_in_portrait(img, W, H, br, blend)
+
     scale=W/sw; nh=int(sh*scale)
     img = img.resize((W,nh),Image.LANCZOS)
     if nh>=H: return img.crop((0,0,W,H))
@@ -119,6 +125,30 @@ def _portrait_in_landscape(img: Image.Image, W: int, H: int,
                 arr[:, x] = (1 - a) * blr[:, x] + a * arr[:, x]
         res = Image.fromarray(arr.astype(np.uint8))
 
+    return res
+
+
+def _landscape_in_portrait(img: Image.Image, W: int, H: int,
+                           blur_radius: int, blend: int) -> Image.Image:
+    """Compose a landscape illustration onto a portrait canvas: the full image scaled
+    to the canvas width and centered vertically, over a blurred "cover" copy."""
+    img  = img.convert("RGB")
+    fg_h = max(1, int(round(img.height * W / img.width)))
+    fg   = img.resize((W, fg_h), Image.LANCZOS)
+    bg   = _scale_to_fill(img, W, H).filter(ImageFilter.GaussianBlur(blur_radius))
+    fg_y = (H - fg_h) // 2
+    res  = bg.copy()
+    res.paste(fg, (0, fg_y))
+
+    span = min(blend, fg_h // 2)
+    if span > 0 and fg_y > 0:
+        arr = np.array(res, dtype=np.float32)
+        blr = np.array(bg, dtype=np.float32)
+        for i in range(span):
+            a = i / span
+            for y in (fg_y + i, fg_y + fg_h - 1 - i):
+                arr[y] = (1 - a) * blr[y] + a * arr[y]
+        res = Image.fromarray(arr.astype(np.uint8))
     return res
 
 

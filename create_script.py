@@ -124,6 +124,9 @@ _COSTUME_CUES = (
     "helmet", "hi-vis", "high-visibility", "high visibility", "safety vest",
     "chef's jacket", "chef jacket", "lab coat", "scrubs", "tool belt",
     "courier", "mechanic's overall", "overalls", "onesie",
+    # Register/formal wear — business and evening scenes must not fall back to casual refs.
+    "business suit", "suit and tie", "suit jacket", "blazer", "business attire",
+    "tuxedo", "evening gown", "cocktail dress",
 )
 
 
@@ -380,7 +383,16 @@ def _build_prompt(
     # regardless of project type (word_learning templates, for example, don't inject
     # the free-text context at all). Appended last so it applies on top of the type's
     # own scene rules.
-    if visual_guidelines:
+    if visual_guidelines and (project_type.get("scene_builder_rules") or {}).get("podcast_studio"):
+        # Podcast: the studio shot is fixed; the guidelines only art-direct the example
+        # cut-aways, which by design move between different real-world places.
+        prompt += (
+            "\n\n=== VISUAL GUIDELINES (apply to every \"example\" scene_visual) ===\n"
+            f"{visual_guidelines}\n\n"
+            "Use these for the mood, style, clothing and props of the example situations. Each "
+            "example still takes place wherever its situation happens — do not force one location.\n"
+        )
+    elif visual_guidelines:
         prompt += (
             "\n\n=== VISUAL GUIDELINES (MANDATORY, apply to every image) ===\n"
             f"{visual_guidelines}\n\n"
@@ -663,7 +675,7 @@ def _narrator_image_prompt(loc_desc: str, framing_tokens: str = None,
             f"{roster_block}"
             f"Action: {scene_visual}\n\n"
             "Opening establishing shot: show the characters together, genuinely engaged in the "
-            "shared activity described — relaxed friends hanging out, mid-action and candid. "
+            "shared activity described, in the mood it sets — mid-action and candid. "
             "Never just standing, posing, or staring at the camera. "
             "Match exact clothing, hair, and facial features from reference. "
             "Integrate them naturally into the environment. "
@@ -864,6 +876,8 @@ def build_scene_list(
             ),
             "reference_type": "multi" if multi else "both",
         }
+        if nar_scene_visual and _scene_overrides_wardrobe(nar_scene_visual):
+            nar_img["prompt_to_create"] = _relax_clothing(nar_img["prompt_to_create"])
         if multi:
             nar_img["_cast"] = list(cast)[:max_scene_chars]
         scenes.append({
@@ -887,6 +901,25 @@ def build_scene_list(
         # scene_builder_rules.expand_blank_quiz and create_video._build_clip
         # (_is_countdown / _quiz_options).
         expand_quiz = bool(rules.get("expand_blank_quiz") or rules.get("expand_preposition_quiz"))
+
+        # Podcast: "studio" lines all share ONE cached studio image (podcast.ensure_studio_images
+        # fills file_path at the image step); "example" lines get their own situation image,
+        # and consecutive lines of the same example_id reuse the first one's image (image None
+        # → the renderer keeps showing the previous frame).
+        podcast_mode = bool(rules.get("podcast_studio"))
+        podcast_studio_prompt = None
+        prev_example_id = None
+        if podcast_mode:
+            from podcast import studio_prompt
+            _load_style_tokens()
+            podcast_studio_prompt = studio_prompt(
+                char_a, char_b, chars_data, "horizontal",
+                studio_desc=project_type.get("studio_description"), style_tokens=_STYLE_TOKENS)
+            # Example cut-aways happen OUTSIDE the studio, each in its own place; the visual
+            # guidelines only art-direct them (they must not pin one fixed location).
+            loc_desc = "the real-world situation described in the Action below (not the podcast studio)"
+            if visual_guidelines:
+                loc_desc += f". Art direction: {visual_guidelines}"
 
         for i, item in enumerate(gpt_output.get("dialog", [])):
             # GPT models sometimes use "character" instead of "speaker" — handle both
@@ -971,6 +1004,48 @@ def build_scene_list(
             scene_chars    = item.get("scene_characters", "speaker_only")
             img_extra      = {}
 
+            if podcast_mode:
+                setting    = "example" if (item.get("setting") or "").strip().lower() == "example" \
+                             and scene_visual.strip() else "studio"
+                example_id = (item.get("example_id") or "").strip() or None
+                podcast_fields = {"_dialog_index": i, "_podcast_setting": setting}
+                if setting == "studio":
+                    prev_example_id = None
+                    scenes.append({
+                        "id": _sid(),
+                        "description": f"dialog_{i:03d} [{speaker}] studio",
+                        "characters": [speaker],
+                        "scene_visual": "", "scene_characters": "both",
+                        "image": {"file_path": None, "prompt_to_create": podcast_studio_prompt,
+                                  "reference_type": "podcast_studio", "speaker": speaker},
+                        "audio": {"type": "tts", "file_path": None, "tts_text": text,
+                                  "voice_id": _voice(speaker), "duration_ms": None},
+                        "subtitle_text": text, "duration_ms": None,
+                        **podcast_fields,
+                    })
+                    if rules.get("inter_pause_between_scenes"):
+                        scenes.append(_pause(inter_ms))
+                    continue
+                if example_id and example_id == prev_example_id:
+                    # Same situation continues — keep showing the example's first image.
+                    scenes.append({
+                        "id": _sid(),
+                        "description": f"dialog_{i:03d} [{speaker}] example:{example_id} (cont.)",
+                        "characters": [speaker],
+                        "scene_visual": scene_visual, "scene_characters": scene_chars,
+                        "image": None,
+                        "audio": {"type": "tts", "file_path": None, "tts_text": text,
+                                  "voice_id": _voice(speaker), "duration_ms": None},
+                        "subtitle_text": text, "duration_ms": None,
+                        "_podcast_example_id": example_id,
+                        **podcast_fields,
+                    })
+                    if rules.get("inter_pause_between_scenes"):
+                        scenes.append(_pause(inter_ms))
+                    continue
+                prev_example_id = example_id
+                img_extra = {}  # falls through to the normal two-person image logic below
+
             if multi:
                 # Resolve who is visible in this line's illustration. Prefer the
                 # model's "present_characters"; always ensure the speaker is included.
@@ -1025,7 +1100,7 @@ def build_scene_list(
                 "speaker": speaker,
             }
             image_obj.update(img_extra)
-            scenes.append({
+            scene = {
                 "id": _sid(),
                 "description": f"dialog_{i:03d} [{speaker}]",
                 "characters": [speaker],
@@ -1035,7 +1110,12 @@ def build_scene_list(
                 "audio": {"type": "tts", "file_path": None, "tts_text": text,
                           "voice_id": _voice(speaker), "duration_ms": None},
                 "subtitle_text": text, "duration_ms": None,
-            })
+            }
+            if podcast_mode:
+                scene["description"] += f" example:{prev_example_id or '-'}"
+                scene["_podcast_example_id"] = prev_example_id
+                scene.update(podcast_fields)
+            scenes.append(scene)
             if rules.get("inter_pause_between_scenes"):
                 scenes.append(_pause(inter_ms))
 
@@ -1210,12 +1290,24 @@ def create_script(
         max_scene_chars  = max_scene_chars,
     )
 
+    # Podcast: let GPT pick the best moments for the vertical Shorts right away (editable
+    # later in the Shorts step). A failure here must not lose the finished script.
+    if project_type["scene_builder_rules"].get("podcast_studio"):
+        from podcast import pick_shorts
+        try:
+            manifest.setdefault("podcast", {})["shorts"] = pick_shorts(manifest)
+        except Exception as e:
+            logger.warning(f"Could not pick podcast shorts (re-pick them in the Shorts step): {e}")
+
     manifest["project_metadata"]["update_date"] = datetime.utcnow().isoformat()
 
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     _write_script_txt(project_path, manifest, gpt_output, repetition_texts)
+    if manifest.get("podcast", {}).get("shorts"):
+        from podcast import write_shorts_txt
+        write_shorts_txt(project_name, manifest)
 
     logger.info(
         f"Script done — type={project_type_key}, location={location_key or '(auto)'}, "
@@ -1345,6 +1437,8 @@ def _write_script_txt(project_path, manifest, gpt_output, repetition_texts):
     lines.append("")
     for d in gpt_output.get("dialog", []):
         visual = f"  [VISUAL({d.get('scene_characters','speaker_only')}): {d.get('scene_visual','')}]" if d.get("scene_visual") else ""
+        if d.get("setting"):   # podcast: studio shot vs example cut-away
+            visual = f"  [{d['setting'].upper()}{':' + d['example_id'] if d.get('example_id') else ''}]{visual}"
         lines.append(f"[{d.get('speaker','?')}] {d.get('text','')}{visual}")
     if repetition_texts:
         lines += ["", "[SHADOWING SECTION]"]

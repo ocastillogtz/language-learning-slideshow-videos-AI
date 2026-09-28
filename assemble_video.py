@@ -74,10 +74,32 @@ def assemble_video(
     ffmpeg_concat_scenes(clip_paths, concat_tmp, fps=cfg["fps"])
     content = clamp_to_video_stream(VideoFileClip(str(concat_tmp)), concat_tmp, cfg["fps"])
 
-    # Background audio
-    bg_audio_path = _resolve_bg_audio(bg_audio_name, assets_dir)
+    # Master audio (song video type): a finished audio file is the ONLY soundtrack.
+    # Lay it over the whole (silent) video at full volume, trimmed to the video length,
+    # and skip background-audio mixing entirely.
+    master_rel = (manifest.get("project_metadata") or {}).get("master_audio")
+    if master_rel:
+        master_path = project_path / master_rel
+        if master_path.exists():
+            logger.info("Master audio (song): %s", master_path.name)
+            song = AudioFileClip(str(master_path))
+            if song.duration > content.duration:
+                song = song.subclip(0, content.duration)
+            # Release the concat clip's own (silent) audio reader before swapping, or its
+            # open handle keeps the temp concat file locked on Windows at cleanup.
+            if content.audio is not None:
+                content.audio.close()
+            content = content.set_audio(song)
+        else:
+            logger.warning("Master audio not found: %s -- assembling silent", master_path)
+        bg_audio_path = None
+    else:
+        # Background audio
+        bg_audio_path = _resolve_bg_audio(bg_audio_name, assets_dir)
 
-    if bg_audio_path and bg_audio_path.exists():
+    if master_rel:
+        pass  # song project: master track already set, no background audio
+    elif bg_audio_path and bg_audio_path.exists():
         logger.info("Background audio: %s", bg_audio_path.name)
         bg_clip   = AudioFileClip(str(bg_audio_path))
         repeats   = int(content.duration / bg_clip.duration) + 2

@@ -11,6 +11,11 @@ The output format is determined by the project type chosen at creation time. No 
 
 A third, specialised project type — **Reading Together** (`reading_together`) — turns a pasted public-domain short story into a sentence-by-sentence "read along" video with **grammar-annotated** on-screen text (TEKAMOLO boxes, separable-verb colouring, Nebensatz + verb-position markers, case/gender). It outputs several vertical 6-sentence **parts** plus one **long horizontal** video, and can create reusable single-image characters such as talking animals. See [Reading Together](#reading-together-reading_together).
 
+A **Podcast** type (`podcast`) produces a horizontal *"Brezel Podcast"* episode. Two hosts talk in a
+fixed studio (one cached studio image reused by every studio line), and the video cuts away to
+illustrations whenever they act out an example. The best moments are re-cut as **vertical Shorts** that
+link back to the episode. See [Podcast](#podcast-podcast).
+
 A **web-based control panel** (`app.py`) lets you manage every project and asset and run every pipeline step from a browser with no command-line work required.
 
 ---
@@ -132,6 +137,7 @@ Each `_long` type mirrors its vertical counterpart in content and structure, but
 | `word_learning_long` | `word_learning` | 2 + optional extras | driven by word list |
 | `register_phrases_long` | `register_phrases` | 2 + optional extras | 6 pairs |
 | `grammar_pairs_long` | `grammar_pairs` | 2 | 8 pairs |
+| `podcast` | (own template) | 2 hosts | 30–40 lines + vertical Shorts, see [Podcast](#podcast-podcast) |
 
 When a horizontal type is selected, the pipeline applies Full HD settings at every stage: fal.ai generates `landscape_16_9` images, the video canvas is set to 1920×1080, and subtitle/icon positions are adjusted for the wider frame. The `video_format` field in the manifest is set to `"horizontal"` at project creation and propagates through all downstream steps. These per-orientation values live in the **`[vertical]` and `[horizontal]` sections of `config.ini`** (see [Configuration](#configuration-configini)) and are applied at render time by `apply_video_format()` — so each orientation can be tuned independently without code changes.
 
@@ -152,6 +158,7 @@ Each scene object in `scenes[]` carries:
 | `image` | `file_path`, `prompt_to_create`, `reference_type`, `speaker` |
 | `audio` | `type` (`tts`/`sfx`/`video_clip`/`null`), `file_path`, `tts_text`, `voice_id` |
 | `subtitle_text` | On-screen subtitle text |
+| `_dialog_index`, `_podcast_setting`, `_podcast_example_id` | Podcast only: the dialog line number, `studio` / `example`, and the example slug. The Shorts ranges refer to `_dialog_index` |
 
 The raw GPT JSON response is saved to `generation_config.raw_gpt_script` before parsing, so any parse failures can be diagnosed without re-running the API call.
 
@@ -504,6 +511,77 @@ Known gaps / next ideas:
 
 ---
 
+## Podcast (`podcast`)
+
+A horizontal 16:9 **"Brezel Podcast"** episode in which two hosts (Character A + B) talk about a topic, plus
+**vertical 9:16 Shorts** cut from its best moments that send viewers to the full episode. The logic lives in
+[`podcast.py`](podcast.py); the type definition (script prompt + editable `studio_description`) is the
+`podcast` entry in `project_types.json`.
+
+### What it produces
+
+- `final_<project>.mp4` — the full horizontal episode (normal Render + Assemble steps).
+- `final_<project>_short1.mp4 … shortN.mp4` — vertical Shorts, each with a corner label ("Brezel Podcast")
+  and a frozen end card ("Ganze Folge: Link in der Beschreibung").
+- `shorts.txt` — each Short's title, description (with the episode link) and transcript, ready to paste.
+
+### How it works
+
+- **Script.** GPT writes an episode: a greeting and topic intro in the studio, a relaxed conversation
+  with explanations and concrete examples, a recap, and a goodbye (default 30–40 lines). Every line has a
+  `setting`:
+  - `studio`: the hosts are talking in the studio, and the line shows the shared studio shot.
+  - `example`: the hosts act out a real situation (bakery, doctor, landlord…), and the line gets its own
+    illustration. Consecutive lines with the same `example_id` share one image (`image: null` keeps the
+    previous frame).
+- **Studio art.** Every studio line points to one shared image (`reference_type: "podcast_studio"`). It shows
+  the two hosts with headphones, boom microphones with pop filters, acoustic foam panels, and a neon sign
+  with a cartoon pretzel and the words "Brezel Podcast".
+  - It is generated **once per host pair and orientation** and cached in `assets/podcast_studio/`, so
+    later episodes with the same hosts reuse it for free.
+  - The cache file name includes a hash of the prompt, so editing the prompt creates a new image instead
+    of reusing a stale one.
+  - The Images step creates both the horizontal version (episode) and the vertical version (Shorts). Its
+    *overwrite* flag does **not** regenerate the studio.
+  - To replace it, regenerate any studio line in the Generated Items tab. That refreshes the art for every
+    studio line and in the cache.
+- **Shorts selection.** Right after the script, one GPT call picks the best stand-alone moments
+  (`[podcast] shorts_count`, `short_min_lines`–`short_max_lines` lines each). They are stored as dialog-line
+  ranges in `manifest.podcast.shorts`. You can edit, add, remove or re-pick them in the **Build Shorts** step.
+- **Shorts render.** Only the chosen scenes are rendered, as 9:16 clips into `videos/v/`
+  (`create_videos(..., format_override="vertical", out_subdir="v", scene_ids=[…])`).
+  - Studio lines use the vertical studio art.
+  - Example lines reuse the episode's 16:9 art, centred over a blurred fill.
+  - A Short that starts mid-example still shows that example's image.
+  - Assembly reuses `assemble_reading._finalize`, which adds the corner label, the end card, optional
+    background music, speed and branding.
+- **Visual guidelines** only art-direct the example cut-aways. For this type they do not pin one fixed
+  location, because each example happens somewhere else.
+
+### Using it
+
+1. **+ New Project** → *Podcast (Brezel Podcast episode + Shorts)*. Put the episode topic in the scene
+   description and the teaching goals in the learning points.
+2. **Generate Script** with the two hosts. This also picks the Shorts.
+3. **Review, Audio, Images, Render, Assemble**: same as any horizontal type.
+4. **Build Shorts (vertical)**: tick, edit or re-pick the moments, then run.
+5. Upload the episode, paste its link into `[podcast] full_episode_url` (or into the descriptions in
+   `shorts.txt`), and publish the Shorts.
+
+All settings are in the `[podcast]` section of `config.ini`:
+
+| Key | Default | What it controls |
+|---|---|---|
+| `shorts_count` | 3 | How many Shorts GPT picks |
+| `short_min_lines`, `short_max_lines` | 4, 10 | Allowed length of a Short, in dialog lines |
+| `short_label` | Brezel Podcast | Corner label on every Short |
+| `short_cta_text` | `Ganze Folge:\nLink in der Beschreibung` | End-card text. A literal `\n` breaks the line, and the text shrinks to fit |
+| `short_cta_seconds` | 2.5 | How long the end card is held |
+| `short_bg_audio_name`, `short_bg_audio_gain_db` | (empty), 0 | Optional background music for the Shorts (empty = voices only) |
+| `full_episode_url` | (empty) | Replaces `{LINK}` in the Short descriptions |
+
+---
+
 ## Web Control Panel (`app.py`)
 
 A Flask + React (Babel standalone) single-page application.
@@ -528,6 +606,12 @@ Collapsible step cards covering the full pipeline (credential setup for the uplo
 | 7 · Instagram Upload | Caption override, share-to-feed toggle, **cover frame** (seconds → Reel thumbnail); connection status banner (setup on the Connections page) |
 | 8 · Facebook Upload | Caption/description override, **publish-as-Reel** toggle (vertical 9:16 Reel vs. feed video), **cover frame** (feed videos only), **scheduled release** (date/time picker); connection status banner (setup on the Connections page) |
 
+**Podcast projects** get an extra **Build Shorts (vertical)** step after Assemble. It lists the moments
+GPT picked, with their line ranges, titles and a first/last-line preview. You can tick which ones to
+build, edit the ranges and titles, add or remove moments, save them, or re-pick with GPT (one short
+OpenAI call). It also has options for background audio, annotated subtitles and overwrite. Running the
+step saves the list and builds the ticked Shorts.
+
 Steps run in background threads — the UI stays responsive during long operations. Live status badges (`idle` / `running` / `done` / `error`) are updated by background polling.
 
 ### Generated Items tab
@@ -536,6 +620,13 @@ Steps run in background threads — the UI stays responsive during long operatio
 - Shows the scene's German text, the English `scene_visual` description, and image/audio status badges
 - Expands to show the generated image, audio player, and the editable image prompt
 - **Characters in image selector** — choose per scene how many character references to use: "Both characters", "Speaker only", or "None (text only)". "None" bypasses the reference composite entirely and generates from text prompt alone.
+- **Podcast lines** also get a **"Podcast studio (shared)"** option.
+  - Regenerating a studio line replaces the shared studio art for every studio line, in both orientations
+    and in the cache.
+  - Switching an example line to it points that line at the studio (no new image if the studio is
+    cached).
+  - Switching a studio line to another mode turns it into its own example image. Write the situation in
+    the prompt first.
 - Location reference toggle — when using character references, optionally exclude the location artwork to let the model freely invent the background
 - Re-generate Image, Re-generate Audio, and **Re-render Clip (+ pause)** buttons trigger single-scene re-runs with live polling (and a progress bar) per card. The clip re-render rebuilds the scene's `.mp4` and the silent pause right after it; an *annotated subtitles* checkbox controls whether the grammar overlay is applied (cache is reused)
 - Text can be edited inline (clears the audio file path so audio is re-generated on the next audio step run)
@@ -576,7 +667,12 @@ This is the **brief seam**: Claude fills in the project brief and kicks off the 
 | `list_locations` | Location keys + descriptions (only needed for the opt-in location override) |
 | `create_project` | Create the project folder + manifest from the brief (name, type, level, scene description, optional learning points, optional **visual guidelines**) |
 | `generate_script` | Run the GPT script step (title, dialog, scenes) |
-| `get_project_status` | Inspect a project's current pipeline state |
+| `get_project_status` | Inspect a project's current pipeline state (podcast projects also list their Shorts) |
+| `pick_podcast_shorts` | Podcast: let GPT re-pick the best moments for the Shorts (one short OpenAI call) |
+| `set_podcast_shorts` | Podcast: save hand-chosen Short ranges and titles (no API call) |
+
+For a `podcast` project, `generate_script` also returns `studio_lines`, `example_lines` and the picked
+`podcast_shorts`. The Shorts themselves are rendered in the web UI's **Build Shorts** step.
 
 The three `list_*` tools let Claude discover valid types, characters and locations, so it fills the brief with real values instead of guessing.
 
@@ -686,6 +782,9 @@ Skip Claude entirely: hit **+ New Project** in the web UI, fill in the same brie
 | `POST` | `/projects/<name>/run/reading_build` | Reading Together: modernize + split the story, cast characters, plan detailed illustrations (`max_words`) |
 | `POST` | `/projects/<name>/run/reading_cast` | Reading Together: create single-image character assets and wire them into the scenes. Params: `regenerate` (redo reference images), `reanalyze` (re-detect + merge missing characters; default true). Non-destructive. |
 | `POST` | `/projects/<name>/run/reading_assemble` | Reading Together: build vertical parts + long horizontal video (`bg_audio_name` + `bg_audio_gain_db` — blank/omitted falls back to the `[reading]` config defaults `dustymagic` / `+20 dB`; `make_parts`, `make_long`, `overwrite`, `per_part` = sentences per vertical part) |
+| `POST` | `/projects/<name>/podcast/shorts` | Podcast: save the Short moments (`shorts` = list of `{start, end, title, description}`, 0-based inclusive dialog-line indices). Synchronous |
+| `POST` | `/projects/<name>/podcast/pick_shorts` | Podcast: re-pick the moments with GPT (`count` optional). Synchronous, one OpenAI call |
+| `POST` | `/projects/<name>/run/podcast_shorts` | Podcast: render the chosen moments as 9:16 clips (`videos/v/`) and assemble `final_<p>_shortN.mp4`. Parameters: `shorts` (saved first), `only` (1-based numbers to build), `overwrite`, `annotated_subtitles`, `bg_audio_name` / `bg_audio_gain_db` (blank = `[podcast]` config), `speed_factor`, `branding_file`, `branding_mode` |
 | `POST` | `/projects/<name>/run/assemble` | Assemble final video (`bg_audio_name`, `speed_factor`, `branding_file`, `branding_mode`, `overwrite`) |
 | `GET`  | `/projects/<name>/upload_meta` | Preview the generated YouTube `title`, `description`, and `tags` (read from the manifest) so they can be edited before upload |
 | `POST` | `/projects/<name>/run/upload` | Upload to YouTube (`privacy`, `title`, `description`, `tags`, `category_id`, `made_for_kids`, `publish_at` for scheduled release) |
@@ -817,7 +916,7 @@ assets/
 │   └── <location_key>.png            ← location background images
 ├── project_types/
 │   └── project_types.json            ← vertical: shadowing / story / word_learning / register_phrases / grammar_pairs
-│                                        horizontal: shadowing_long / story_long / word_learning_long / register_phrases_long / grammar_pairs_long
+│                                        horizontal: shadowing_long / story_long / word_learning_long / register_phrases_long / grammar_pairs_long / podcast
 ├── background_audio/
 │   ├── background_audio.json
 │   └── *.mp3
@@ -826,6 +925,7 @@ assets/
 │   ├── bell.mp3
 │   └── bitte_wiederholen.mp3
 ├── branding/                         ← intro/outro video clips (.mp4 / .mov / .webm)
+├── podcast_studio/                   ← cached shared podcast studio art: <A>__<B>__<orientation>_<prompt-hash>.png
 ├── samples/                          ← vertical.png / horizontal.png backgrounds for the Subtitle Preview
 └── video_clips/                      ← other raw .mp4 clips
 ```
@@ -842,6 +942,9 @@ projects/
     ├── audio/                        ← generated .mp3 per scene
     ├── images/                       ← generated .png per scene
     ├── videos/                       ← per-scene .mp4 clips
+    │   └── v/                        ← podcast only: vertical clips for the Shorts
+    ├── shorts.txt                    ← podcast only: Short titles, descriptions + transcripts
+    ├── final_my_project_shortN.mp4   ← podcast only: vertical Shorts
     └── final_my_project.mp4          ← assembled output
 ```
 
@@ -1179,6 +1282,18 @@ python create_video.py  grimm_fox --annotated-subtitles \
 python assemble_reading.py grimm_fox --per-part 6                             # final_*_part1..N.mp4 + final_*_long.mp4
 #   --bg-audio / --bg-audio-gain-db omitted → [reading] config defaults (dustymagic, +20 dB)
 python reconcile.py grimm_fox                                                 # self-heal manifest from files on disk
+
+# ── Podcast (horizontal episode + vertical Shorts) ──
+python create_project.py brezel_baecker --type podcast --level B1 \
+  --context "Beim Bäcker bestellen: höfliche Sätze, wenn man den Namen nicht kennt"
+python create_script.py brezel_baecker --char-a Zahra --char-b Olena --project-type podcast   # also picks the Shorts
+python create_audio.py  brezel_baecker
+python create_images.py brezel_baecker            # studio art only generated if this host pair has none cached
+python create_video.py  brezel_baecker
+python assemble_video.py brezel_baecker           # final_brezel_baecker.mp4 (horizontal episode)
+python podcast.py pick  brezel_baecker --count 3  # optional: re-pick the moments with GPT
+python podcast.py build brezel_baecker            # final_brezel_baecker_short1..N.mp4 + shorts.txt
+python podcast.py studio brezel_baecker --regenerate   # replace the cached studio art (2 fal.ai calls)
 
 # Assemble final video
 python assemble_video.py my_project \

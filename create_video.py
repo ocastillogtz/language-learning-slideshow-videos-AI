@@ -57,7 +57,10 @@ def create_videos(
     repeat_fontsize: int = None,
     repeat_font: str = None,
     footnote_hold_ms: int = None,
+    scene_ids: list | None = None,
 ) -> None:
+    """scene_ids: render only these scenes (podcast Shorts). A selected scene without its
+    own image still shows the latest image before it, even if that scene isn't selected."""
     cfg           = load_config()
     chars_data    = load_new_characters(cfg["assets_dir"])
     assets_dir    = cfg["assets_dir"]
@@ -111,16 +114,37 @@ def create_videos(
 
     # Pre-render grammar-annotated subtitle PNGs up-front, in a single Chromium
     # session, so the per-scene loop just loads images.  Maps scene_id -> png path.
+    selected = set(scene_ids) if scene_ids is not None else None
     annot_paths: dict[str, str] = {}
     if annotated_subtitles:
-        annot_paths = _prerender_annotations(manifest, videos_dir, cfg,
+        annot_src = manifest if selected is None else {
+            **manifest, "scenes": [s for s in manifest["scenes"] if s["id"] in selected]}
+        annot_paths = _prerender_annotations(annot_src, videos_dir, cfg,
                                              font_scale=annot_font_scale,
                                              force=regen_annotations)
 
-    scenes_total = len(manifest["scenes"])
-    for scene_idx, scene in enumerate(manifest["scenes"], start=1):
-        report_progress(scene_idx, scenes_total, f"Clip {scene_idx}/{scenes_total}")
-        sid   = scene["id"]
+    scenes_total = len(manifest["scenes"]) if selected is None else len(selected)
+    done = 0
+    latest_img = None    # latest scene image in manifest order (selected or not)
+    after_gap  = False   # subset renders: the previous scene was not selected
+    for scene in manifest["scenes"]:
+        sid     = scene["id"]
+        own_img = _scene_image_rel(scene.get("image"), cfg)
+        if selected is not None and sid not in selected:
+            latest_img = own_img or latest_img
+            after_gap  = True
+            continue
+        # Redraw the background from the image that is on screen instead of a previous
+        # clip's last frame (which has that clip's subtitle baked in) when (a) a subset
+        # render starts after a gap, or (b) a podcast line continues an example without
+        # its own image — skipped/existing clips would otherwise leak their subtitle.
+        if not own_img and latest_img and (after_gap or scene.get("_podcast_example_id")):
+            pil = Image.open(project_path / latest_img).convert("RGB")
+            last_frame_np = pil_to_numpy(pad_image_to_frame(pil, cfg))
+        after_gap  = False
+        latest_img = own_img or latest_img
+        done += 1
+        report_progress(done, scenes_total, f"Clip {done}/{scenes_total}")
         out   = videos_dir / f"{sid}.mp4"
         audio = scene.get("audio")
         atype = audio.get("type") if audio else None
@@ -253,6 +277,14 @@ def create_video_single(
         prev_clip = videos_dir / f"{scenes[idx - 1]['id']}.mp4"
         if prev_clip.exists():
             last_frame_np = _peek_last_frame(prev_clip, None)
+    # A podcast line continuing an example has no image of its own: redraw the example's
+    # image rather than a previous clip's frame (which carries that clip's subtitle).
+    if target.get("_podcast_example_id") and not _scene_image_rel(target.get("image"), cfg):
+        prev_img = next((_scene_image_rel(s.get("image"), cfg) for s in reversed(scenes[:idx])
+                         if _scene_image_rel(s.get("image"), cfg)), None)
+        if prev_img:
+            pil = Image.open(project_path / prev_img).convert("RGB")
+            last_frame_np = pil_to_numpy(pad_image_to_frame(pil, cfg))
 
     # Annotate only the target scene (cache is reused unless regen is requested).
     annot_paths: dict[str, str] = {}
@@ -304,6 +336,15 @@ def create_video_single(
 # =============================================================================
 # CLIP BUILDER
 # =============================================================================
+
+def _scene_image_rel(img: dict | None, cfg: dict) -> str | None:
+    """The scene image for the orientation being rendered: an orientation-specific
+    variant (e.g. the podcast studio's file_path_vertical for the Shorts) wins over
+    the default file_path."""
+    if not img:
+        return None
+    return img.get(f"file_path_{cfg.get('active_video_format', '')}") or img.get("file_path")
+
 
 def _build_clip(
     scene: dict,
@@ -435,6 +476,46 @@ def _build_clip(
         return clip, last_frame_np
 
     # ------------------------------------------------------------------
+    # song slice → image held for the slot + line-by-line timed lyric subtitles
+    # ------------------------------------------------------------------
+    # A "song" video's slot: one illustration shown for duration_ms while the lyric
+    # subtitles change WITHIN the clip, each line timed by its own start/end (relative
+    # to the slot). The clip is silent — the master song is laid over the whole video
+    # at assemble time (see assemble_video).
+    if scene.get("_is_song_slice"):
+        dur_ms = scene.get("duration_ms") or 3000
+        dur_s  = dur_ms / 1000.0
+
+        if img and img.get("file_path"):
+            pil_img  = Image.open(project_path / img["file_path"]).convert("RGB")
+            frame_np = pil_to_numpy(pad_image_to_frame(pil_img, cfg))
+        elif last_frame_np is not None:
+            frame_np = last_frame_np
+        else:
+            frame_np = pil_to_numpy(Image.new("RGB", (W, H), (0, 0, 0)))
+
+        layers = [ImageClip(frame_np).set_duration(dur_s)]
+
+        for seg in scene.get("subtitle_segments") or []:
+            seg_text = (seg.get("text") or "").strip()
+            if not seg_text:
+                continue
+            seg_start = max(0.0, (seg.get("start_ms") or 0) / 1000.0)
+            seg_end   = min(dur_s, (seg.get("end_ms") or dur_ms) / 1000.0)
+            seg_dur   = seg_end - seg_start
+            if seg_dur <= 0:
+                continue
+            sub   = _subtitle(seg_text, seg_dur, False, cfg)
+            sub_y = H - cfg["sub_margin_bottom"] - sub.h
+            for lyr in _sub_layers(sub, cfg["sub_margin_left"], sub_y, seg_dur, cfg):
+                layers.append(lyr.set_start(seg_start))
+
+        clip = (CompositeVideoClip(layers, size=(W, H))
+                .set_duration(dur_s)
+                .set_audio(_silent(dur_s)))
+        return clip, frame_np
+
+    # ------------------------------------------------------------------
     # null → silent pause
     # ------------------------------------------------------------------
     if atype is None:
@@ -493,8 +574,9 @@ def _build_clip(
         text   = (scene.get("subtitle_text") or audio.get("tts_text") or "").strip()
 
         # Background image
-        if img and img.get("file_path"):
-            img_path = project_path / img["file_path"]
+        img_rel = _scene_image_rel(img, cfg)
+        if img_rel:
+            img_path = project_path / img_rel
             pil_img  = Image.open(img_path).convert("RGB")
             frame    = pad_image_to_frame(pil_img, cfg)
             frame_np = pil_to_numpy(frame)

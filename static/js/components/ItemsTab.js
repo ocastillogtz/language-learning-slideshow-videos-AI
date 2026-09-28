@@ -330,13 +330,29 @@ function VideoRegenBtn({ projectName, sceneId, onDone }) {
 
 // ── Scene edit zone (text + prompt) ───────────────────────────────────────────
 
+// Format a millisecond offset (relative to the scene) as m:ss.mmm for the lyric editor.
+function _fmtMs(ms) {
+  const t = Math.max(0, ms | 0);
+  const m = Math.floor(t / 60000);
+  const s = Math.floor((t % 60000) / 1000);
+  const mm = t % 1000;
+  return `${m}:${String(s).padStart(2, "0")}.${String(mm).padStart(3, "0")}`;
+}
+
 function SceneEditZone({ scene, projectName, onSaved, speakerOptions }) {
   const { toast } = useApp();
+  const isSong = Array.isArray(scene.subtitle_segments);
   const [text,    setText]    = useState(scene.subtitle_text || "");
-  const [visual,  setVisual]  = useState(scene.scene_visual || "");
+  const [visual,  setVisual]  = useState(scene.scene_visual || scene.image?.scene_visual || "");
   const [speaker, setSpeaker] = useState(scene.characters?.[0] || "");
+  const [segments, setSegments] = useState(
+    () => (scene.subtitle_segments || []).map(s => ({ ...s }))
+  );
   const [saving,  setSaving]  = useState(false);
   const [notice,  setNotice]  = useState(false);
+
+  const setSegText = (i, val) =>
+    setSegments(prev => prev.map((s, j) => (j === i ? { ...s, text: val } : s)));
 
   // Speaker is only editable on spoken (TTS) non-narration scenes, and only when
   // the project has a named cast to pick from (the backend validates against it).
@@ -348,15 +364,19 @@ function SceneEditZone({ scene, projectName, onSaved, speakerOptions }) {
   // one; narration scenes don't yet, but can have one added since they too have
   // an image, so expose the field for them as well.
   const hasVisual = (scene.scene_visual !== undefined && scene.scene_visual !== null)
-    || (!!scene._is_narration && !!scene.image);
+    || (!!scene._is_narration && !!scene.image)
+    || (isSong && !!scene.image);
 
   async function save() {
     setSaving(true);
     try {
-      const payload = {
-        subtitle_text: text.trim(),
-        tts_text:      text.trim(),
-      };
+      const payload = isSong
+        ? { subtitle_segments: segments.map(s => ({
+              text: (s.text || "").trim(),
+              start_ms: s.start_ms | 0,
+              end_ms: s.end_ms | 0,
+            })) }
+        : { subtitle_text: text.trim(), tts_text: text.trim() };
       if (hasVisual) payload.scene_visual = visual.trim();
       if (canEditSpeaker && speaker && speaker !== (scene.characters?.[0] || "")) {
         payload.speaker = speaker;
@@ -391,10 +411,42 @@ function SceneEditZone({ scene, projectName, onSaved, speakerOptions }) {
             </select>
           </div>
         )}
-        <div className="edit-f">
-          <label>Text (German)</label>
-          <textarea rows={3} value={text} onChange={e => setText(e.target.value)}/>
-        </div>
+        {isSong ? (
+          <div className="edit-f">
+            <label>Lyric lines (each shows on screen at its timestamp)</label>
+            {segments.length === 0 && (
+              <div style={{fontSize:".78rem", color:"var(--muted)"}}>
+                No lyrics detected in this slot (instrumental).
+              </div>
+            )}
+            <div style={{display:"flex", flexDirection:"column", gap:".4rem"}}>
+              {segments.map((seg, i) => (
+                <div key={i} style={{display:"flex", alignItems:"center", gap:".5rem"}}>
+                  <span style={{fontSize:".72rem", color:"var(--muted)",
+                    fontVariantNumeric:"tabular-nums", whiteSpace:"nowrap",
+                    minWidth:"9.5rem"}}>
+                    {_fmtMs(seg.start_ms)} → {_fmtMs(seg.end_ms)}
+                  </span>
+                  <input type="text" value={seg.text}
+                    onChange={e => setSegText(i, e.target.value)}
+                    style={{flex:1, padding:".35rem .5rem", borderRadius:"5px",
+                      border:"1px solid var(--border)", background:"var(--surface-2)",
+                      color:"var(--fg)", fontSize:".84rem"}}/>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:".72rem", color:"var(--muted)", marginTop:".35rem",
+              fontStyle:"italic"}}>
+              Fix any words the transcription mis-heard. Timestamps are read-only; re-render
+              this clip (below) after saving.
+            </div>
+          </div>
+        ) : (
+          <div className="edit-f">
+            <label>Text (German)</label>
+            <textarea rows={3} value={text} onChange={e => setText(e.target.value)}/>
+          </div>
+        )}
         {hasVisual && (
           <div className="edit-f">
             <label>Visual description (English — used to generate the image)</label>
@@ -407,7 +459,10 @@ function SceneEditZone({ scene, projectName, onSaved, speakerOptions }) {
           {saving ? "Saving…" : "Save"}
         </button>
         {notice && (
-          <span className="edit-notice">Saved — re-run Audio &amp; Image to apply.</span>
+          <span className="edit-notice">
+            {isSong ? "Saved — re-render this clip to apply."
+                    : "Saved — re-run Audio & Image to apply."}
+          </span>
         )}
       </div>
     </div>
@@ -421,6 +476,7 @@ function _toCharMode(refType) {
   if (refType === "none")          return "none";
   if (refType === "single_speaker") return "single_speaker";
   if (refType === "reading_cast")   return "reading_cast";
+  if (refType === "podcast_studio") return "podcast_studio";
   return "both";
 }
 
@@ -429,6 +485,8 @@ const CHAR_MODE_OPTIONS = [
   { value: "single_speaker", label: "Speaker only"    },
   { value: "none",           label: "None (text only)" },
 ];
+// Podcast lines can also use the shared studio shot (one cached image for every studio line).
+const PODCAST_STUDIO_OPTION = { value: "podcast_studio", label: "Podcast studio (shared)" };
 
 function SceneCard({ scene, projectName, onChanged, onDelete, num, castOptions, speakerOptions }) {
   const [open,           setOpen]           = useState(false);
@@ -461,6 +519,7 @@ function SceneCard({ scene, projectName, onChanged, onDelete, num, castOptions, 
   const isRepetition = !!scene._is_repetition;
   const isSfx        = scene.audio?.type === "sfx";
   const isDialog     = !isNarration && !isRepetition && !isSfx && scene.audio?.type === "tts";
+  const isSong       = !!scene._is_song_slice;
 
   const hasImg   = !!scene.image?.file_path;
   const hasAudio = !!scene.audio?.file_path;
@@ -508,7 +567,7 @@ function SceneCard({ scene, projectName, onChanged, onDelete, num, castOptions, 
         {!hasAudio && scene.audio?.type === "tts" && (
           <span className="item-status-badge badge-idle" style={{marginLeft:".3rem"}}>no audio</span>
         )}
-        {(isDialog || isNarration) && (
+        {(isDialog || isNarration || isSong) && (
           <button className="btn-edit"
             onClick={e => { e.stopPropagation(); setEditing(v => !v); setOpen(true); }}>
             ✎ Edit
@@ -550,7 +609,7 @@ function SceneCard({ scene, projectName, onChanged, onDelete, num, castOptions, 
           </div>
 
           {/* Edit zone */}
-          {editing && (isDialog || isNarration) && (
+          {editing && (isDialog || isNarration || isSong) && (
             <SceneEditZone scene={scene} projectName={projectName}
               speakerOptions={speakerOptions}
               onSaved={() => { onChanged && onChanged(); setEditing(false); }}/>
@@ -612,7 +671,8 @@ function SceneCard({ scene, projectName, onChanged, onDelete, num, castOptions, 
                 <div style={{fontSize:".78rem", fontWeight:500, marginBottom:".3rem",
                   color:"var(--fg)"}}>Characters in image</div>
                 <div style={{display:"flex", gap:".4rem", flexWrap:"wrap"}}>
-                  {CHAR_MODE_OPTIONS.map(opt => (
+                  {(scene._podcast_setting ? [PODCAST_STUDIO_OPTION, ...CHAR_MODE_OPTIONS]
+                                           : CHAR_MODE_OPTIONS).map(opt => (
                     <label key={opt.value}
                       style={{
                         display:"flex", alignItems:"center", gap:".3rem",
@@ -637,6 +697,20 @@ function SceneCard({ scene, projectName, onChanged, onDelete, num, castOptions, 
                   <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".25rem",
                     fontStyle:"italic"}}>
                     Image generated from text only — no character reference art used.
+                  </div>
+                )}
+                {charactersMode === "podcast_studio" && (
+                  <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".25rem",
+                    fontStyle:"italic"}}>
+                    {scene.image?.reference_type === "podcast_studio"
+                      ? "Shared studio shot: regenerating replaces it for EVERY studio line (and the cached art for these hosts, both orientations)."
+                      : "Switches this line to the shared studio shot (no new image if the studio is already cached)."}
+                  </div>
+                )}
+                {scene.image?.reference_type === "podcast_studio" && charactersMode !== "podcast_studio" && (
+                  <div style={{fontSize:".73rem", color:"var(--muted)", marginTop:".25rem",
+                    fontStyle:"italic"}}>
+                    Turns this studio line into an example cut-away — write the situation in the image prompt first.
                   </div>
                 )}
               </div>

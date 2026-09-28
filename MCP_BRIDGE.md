@@ -16,11 +16,18 @@ generation still runs through the normal pipeline.
 | `list_locations` | Location keys + descriptions |
 | `create_project` | Create the project folder + manifest from the brief |
 | `generate_script` | Run the GPT script step (title, dialog, scenes) |
-| `get_project_status` | Inspect a project's pipeline state |
+| `get_project_status` | Inspect a project's pipeline state (podcast: also its Shorts) |
+| `pick_podcast_shorts` | Podcast: GPT re-picks the best moments for the vertical Shorts |
+| `set_podcast_shorts` | Podcast: save hand-chosen Short ranges and titles (no API call) |
 
 Typical flow Claude follows: `list_*` to see valid options → `create_project`
 with the refined brief → `generate_script` with `char_a` / `char_b` / a
 `location_key`.
+
+**Podcast** (`project_type_key="podcast"`): `char_a` / `char_b` are the two hosts,
+`context` is the episode topic. `generate_script` also returns the Shorts GPT picked
+(`podcast_shorts`, as dialog-line ranges). Refine them with `set_podcast_shorts` or
+`pick_podcast_shorts`, then render them in the web UI's **Build Shorts** step.
 
 ## Registration
 
