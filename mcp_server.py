@@ -5,10 +5,12 @@ MCP bridge between a Claude chat session (Claude Code / Claude Desktop) and the
 German-learning video pipeline.
 
 This is the **brief seam**: you refine a video idea in chat, and Claude calls
-these tools to (1) create the project from that refined brief and (2) kick off
-the existing GPT script step. The heavy creative generation still runs through
-create_script.py — these tools just let Claude drive it directly instead of you
-copy-pasting into the web UI.
+these tools to (1) create the project from that refined brief and (2) write its
+script. Through the MCP the script is written by Claude itself, locally, with no
+OpenAI call: get_script_instructions returns the exact instructions GPT would
+get, and submit_script hands Claude's finished script to the same scene-building
+code the GPT path uses (create_script.create_script(script=...)). The web UI
+keeps using OpenAI. generate_script (GPT) stays available as an explicit opt-in.
 
 Tools
 -----
@@ -19,10 +21,12 @@ Discovery (so Claude can fill a valid brief):
 
 Action:
   create_project       — create the project folder + manifest from the brief
-  generate_script      — run the GPT script step (title, dialog, scenes)
+  get_script_instructions — the type's script instructions + JSON format (no API call)
+  submit_script        — build the scenes from a script Claude wrote (no API call)
+  generate_script      — OPT-IN: let GPT write the script instead (OpenAI call)
   get_project_status   — inspect a project's current pipeline state
-  pick_podcast_shorts  — (podcast type) let GPT re-pick the best moments for the Shorts
-  set_podcast_shorts   — (podcast type) save hand-chosen Short ranges / titles
+  set_podcast_shorts   — (podcast type) save hand-chosen Short ranges / titles (no API call)
+  pick_podcast_shorts  — OPT-IN (podcast type): let GPT re-pick the Shorts (OpenAI call)
 
 The server chdir's to its own directory on startup so the pipeline's relative
 config paths (config.ini, projects/, assets/) resolve no matter how the MCP
@@ -58,12 +62,20 @@ mcp = MCPServer(
         "project. Typical flow: call list_project_types / list_characters to see "
         "valid options, then create_project with the refined brief (project name, "
         "type, level, scene description, optional learning points, optional visual "
-        "guidelines), then generate_script to produce the dialog and scenes. "
+        "guidelines).\n"
+        "\n"
+        "SCRIPT WRITING — DO IT YOURSELF, LOCALLY (the default when working through this MCP):\n"
+        "1. get_script_instructions(project_name, char_a, char_b) returns the exact instructions "
+        "and JSON output format the pipeline would give GPT, plus any extra fields the type needs.\n"
+        "2. YOU write the script following them (title, tags, insights, dialog, ... — same JSON).\n"
+        "3. submit_script(project_name, char_a, char_b, script) builds the scenes. No OpenAI call.\n"
+        "Only use generate_script (GPT writes the script) or pick_podcast_shorts when the user "
+        "explicitly asks for GPT/OpenAI. Both cost OpenAI credits.\n"
+        "\n"
         "By default no pre-made location is used — the scene's environment and the "
         "characters' attire come from the scene description and the visual_guidelines "
-        "field. list_locations + generate_script's location_key remain available only "
-        "as an opt-in override to reuse a hand-made location. generate_script calls "
-        "GPT and may take a while.\n"
+        "field. list_locations + the location_key parameter remain available only "
+        "as an opt-in override to reuse a hand-made location.\n"
         "\n"
         "AUTHORING CONVENTIONS (bake these into context + visual_guidelines):\n"
         "- Natural, native German: the example sentences must sound like a real speaker in "
@@ -93,12 +105,15 @@ mcp = MCPServer(
         "- A horizontal episode where char_a and char_b are the two hosts talking in a fixed podcast "
         "studio. context = the episode topic; learning_points = what the episode must teach. "
         "visual_guidelines (optional) only art-direct the EXAMPLE cut-aways, never the studio.\n"
-        "- GPT marks each line 'studio' (shared studio image, cached per host pair in "
+        "- The WHOLE episode is in German: the hosts explain, react and joke in German, with no "
+        "English sentences or translations.\n"
+        "- Each line is 'studio' (shared studio image, cached per host pair in "
         "assets/podcast_studio — free after the first episode) or 'example' (the hosts act out a "
-        "real situation, which gets its own illustration). Default length 30-40 lines.\n"
-        "- generate_script also asks GPT for the best moments as vertical Shorts (returned as "
-        "podcast_shorts, dialog-line ranges). Adjust them with set_podcast_shorts or re-pick with "
-        "pick_podcast_shorts; they are rendered later in the web UI's 'Build Shorts' step."
+        "real situation, which gets its own illustration; each new example_id = one paid image). "
+        "Default length 30-40 lines.\n"
+        "- Put the best moments for vertical Shorts in the script as podcast_shorts (dialog-line "
+        "ranges) or set them later with set_podcast_shorts; they are rendered in the web UI's "
+        "'Build Shorts' step."
     ),
 )
 
@@ -203,7 +218,7 @@ def create_project(
     """Create a new video project folder + manifest from a refined brief.
 
     This is step 1 of the brief seam. It does NOT generate any dialog yet —
-    call generate_script afterwards for that.
+    call get_script_instructions + submit_script afterwards for that.
 
     Parameters
     ----------
@@ -247,9 +262,119 @@ def create_project(
         "status": "created",
         "project_name": name,
         "manifest_path": str(path / "project_manifest.json"),
-        "next_step": "call generate_script with char_a and char_b (no location_key "
-                     "needed — the look comes from visual_guidelines)",
+        "next_step": "call get_script_instructions with char_a and char_b, write the script "
+                     "yourself, then submit_script (no location_key needed — the look comes "
+                     "from visual_guidelines)",
     }
+
+
+def _script_summary(project_name: str, manifest: dict, source: str) -> dict:
+    """What a chat needs after a script step: title, counts, podcast Shorts."""
+    scenes = manifest.get("scenes", [])
+    dialog_scenes = [s for s in scenes if (s.get("description") or "").startswith("dialog_")]
+    vi = manifest.get("video_info", {})
+    gen = manifest.get("generation_config", {})
+    extra = {}
+    if "podcast" in manifest or any("_podcast_setting" in s for s in scenes):
+        examples = [s for s in scenes if s.get("_podcast_setting") == "example"]
+        extra = {
+            "studio_lines":  sum(1 for s in scenes if s.get("_podcast_setting") == "studio"),
+            "example_lines": len(examples),
+            "example_images": sum(1 for s in examples if s.get("image")),
+            "podcast_shorts": _shorts_summary(manifest),
+        }
+    return {
+        "status": "script_generated",
+        "script_source": source,
+        "project_name": project_name,
+        "title": vi.get("title"),
+        "level": gen.get("level"),
+        "location_key": gen.get("location_key"),
+        "cast": gen.get("characters", []),
+        "dialog_lines": len(dialog_scenes),
+        "total_scenes": len(scenes),
+        "next_step": "review, then run audio/images from the web UI or pipeline",
+        **extra,
+    }
+
+
+@mcp.tool()
+def get_script_instructions(
+    project_name: str,
+    char_a: str,
+    char_b: str,
+    location_key: str = "",
+    project_type_key: str = "",
+    dialog_count: int = 0,
+    words: list[str] | None = None,
+    characters: list[str] | None = None,
+) -> dict:
+    """Get the script instructions for a project, to write the script YOURSELF. No API call.
+
+    Returns the exact prompt the pipeline would send to GPT for this project's type,
+    brief, level and cast — including the required JSON output structure — plus
+    extra_fields the type needs besides the dialog (e.g. "repetitions" for shadowing
+    types, "podcast_shorts" for the podcast). Follow it, then pass the finished JSON
+    object to submit_script with the same arguments.
+
+    Parameters are the same as submit_script / generate_script.
+    """
+    from create_script import script_prompt
+
+    if not char_a.strip() or not char_b.strip():
+        raise ValueError("char_a and char_b are required")
+    out = script_prompt(
+        project_name.strip(), char_a.strip(), char_b.strip(),
+        (location_key or "").strip() or None,
+        project_type_key=(project_type_key or "").strip() or None,
+        words=words or None,
+        dialog_count=dialog_count or None,
+        characters=[c for c in (characters or []) if c] or None,
+    )
+    out["next_step"] = ("write the script as ONE JSON object following the prompt (and extra_fields), "
+                        "then call submit_script with it")
+    return out
+
+
+@mcp.tool()
+def submit_script(
+    project_name: str,
+    char_a: str,
+    char_b: str,
+    script: dict,
+    location_key: str = "",
+    project_type_key: str = "",
+    words: list[str] | None = None,
+    characters: list[str] | None = None,
+) -> dict:
+    """Build the project's scenes from a script YOU wrote. No OpenAI call.
+
+    script: the JSON object described by get_script_instructions — at least
+    "title", "tags", "insights" and a non-empty "dialog" list whose items follow the
+    type's format ("text", "speaker", "scene_visual", "scene_characters", ... ; podcast
+    lines also "setting" and "example_id"). Every speaker must be in the cast.
+    Shadowing types also need "repetitions" (3 dialog texts); the podcast may include
+    "podcast_shorts" ([{start, end, title, description}], 0-based inclusive dialog
+    indices) — otherwise set them later with set_podcast_shorts.
+
+    The scenes, image prompts, voices and pauses are built exactly as for a GPT script,
+    and script.txt is written. Returns the same summary as generate_script.
+    """
+    from create_script import create_script
+
+    if not char_a.strip() or not char_b.strip():
+        raise ValueError("char_a and char_b are required")
+    manifest = create_script(
+        project_name.strip(),
+        char_a.strip(),
+        char_b.strip(),
+        (location_key or "").strip() or None,
+        project_type_key=(project_type_key or "").strip() or None,
+        words=words or None,
+        characters=[c for c in (characters or []) if c] or None,
+        script=script,
+    )
+    return _script_summary(project_name.strip(), manifest, "claude (local, no OpenAI call)")
 
 
 @mcp.tool()
@@ -263,11 +388,14 @@ def generate_script(
     words: list[str] | None = None,
     characters: list[str] | None = None,
 ) -> dict:
-    """Run the GPT script step for an existing project (brief seam, step 2).
+    """OPT-IN: let GPT write the script instead of writing it yourself.
 
+    Only use this when the user explicitly asks for GPT/OpenAI — the default through
+    this MCP is get_script_instructions + submit_script (no API cost).
     Expands the project's brief into a full title, tags, description, dialog and
     scene list by calling GPT, then writes the scenes back into the manifest.
-    This calls the OpenAI API and can take a while for long dialogs.
+    This calls the OpenAI API (script + grammar evaluation, and for the podcast the
+    Shorts pick) and can take a while for long dialogs.
 
     Parameters
     ----------
@@ -301,29 +429,7 @@ def generate_script(
         characters=[c for c in (characters or []) if c] or None,
     )
 
-    scenes = manifest.get("scenes", [])
-    dialog_scenes = [s for s in scenes if (s.get("description") or "").startswith("dialog_")]
-    vi = manifest.get("video_info", {})
-    gen = manifest.get("generation_config", {})
-    extra = {}
-    if "podcast" in manifest or any("_podcast_setting" in s for s in scenes):
-        extra = {
-            "studio_lines":  sum(1 for s in scenes if s.get("_podcast_setting") == "studio"),
-            "example_lines": sum(1 for s in scenes if s.get("_podcast_setting") == "example"),
-            "podcast_shorts": _shorts_summary(manifest),
-        }
-    return {
-        "status": "script_generated",
-        "project_name": project_name.strip(),
-        "title": vi.get("title"),
-        "level": gen.get("level"),
-        "location_key": gen.get("location_key"),
-        "cast": gen.get("characters", []),
-        "dialog_lines": len(dialog_scenes),
-        "total_scenes": len(scenes),
-        "next_step": "review, then run audio/images from the web UI or pipeline",
-        **extra,
-    }
+    return _script_summary(project_name.strip(), manifest, "gpt (OpenAI)")
 
 
 @mcp.tool()
@@ -392,7 +498,10 @@ def _shorts_summary(manifest: dict) -> list[dict]:
 
 @mcp.tool()
 def pick_podcast_shorts(project_name: str, count: int = 0) -> dict:
-    """(podcast type) Ask GPT to re-pick the best moments of the episode for vertical Shorts.
+    """OPT-IN (podcast type): ask GPT to re-pick the best moments for vertical Shorts.
+
+    Only when the user explicitly asks for GPT — otherwise choose the moments yourself
+    and save them with set_podcast_shorts (no API cost).
 
     Replaces the current list. Calls the OpenAI API once (short request).
     count = how many Shorts (0 = config.ini [podcast] shorts_count).

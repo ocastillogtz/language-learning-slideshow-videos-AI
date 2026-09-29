@@ -665,9 +665,9 @@ Reached from the **Connections** button in the top nav. One card per publishing 
 
 ## Claude Code MCP Bridge
 
-`mcp_server.py` exposes the pipeline to a Claude chat (Claude Code or Claude Desktop) as **MCP tools**, so you can refine a video idea in chat and have Claude create the project and run the script step directly — no copy-pasting into the web UI.
+`mcp_server.py` exposes the pipeline to a Claude chat (Claude Code or Claude Desktop) as **MCP tools**, so you can refine a video idea in chat and have Claude create the project and write its script directly — no copy-pasting into the web UI.
 
-This is the **brief seam**: Claude fills in the project brief and kicks off the existing GPT script step ([`create_script.py`](create_script.py)). All heavy generation still runs through the normal pipeline; audio, images and assembly stay in the web UI.
+This is the **brief seam**: Claude fills in the project brief and writes the script; the scenes are then built by the normal script step ([`create_script.py`](create_script.py)). Audio, images and assembly stay in the web UI.
 
 ### Tools exposed
 
@@ -677,13 +677,25 @@ This is the **brief seam**: Claude fills in the project brief and kicks off the 
 | `list_characters` | Castable speakers + their descriptions |
 | `list_locations` | Location keys + descriptions (only needed for the opt-in location override) |
 | `create_project` | Create the project folder + manifest from the brief (name, type, level, scene description, optional learning points, optional **visual guidelines**) |
-| `generate_script` | Run the GPT script step (title, dialog, scenes) |
+| `get_script_instructions` | The exact script instructions + JSON format for this project, so Claude can write the script itself (no API call) |
+| `submit_script` | Build the scenes from the script Claude wrote (no API call) |
+| `generate_script` | **Opt-in:** let GPT write the script instead (OpenAI call) |
 | `get_project_status` | Inspect a project's current pipeline state (podcast projects also list their Shorts) |
-| `pick_podcast_shorts` | Podcast: let GPT re-pick the best moments for the Shorts (one short OpenAI call) |
 | `set_podcast_shorts` | Podcast: save hand-chosen Short ranges and titles (no API call) |
+| `pick_podcast_shorts` | **Opt-in**, podcast: let GPT re-pick the best moments for the Shorts (one short OpenAI call) |
 
-For a `podcast` project, `generate_script` also returns `studio_lines`, `example_lines` and the picked
-`podcast_shorts`. The Shorts themselves are rendered in the web UI's **Build Shorts** step.
+**Who writes the script.** Through the MCP, Claude writes the script itself, locally, with no OpenAI call:
+1. `get_script_instructions` returns the exact prompt the pipeline would send to GPT for this project (type, brief, level, cast, and the JSON output format), plus any extra fields the type needs: `repetitions` for shadowing types, `podcast_shorts` for the podcast.
+2. Claude writes the script as that JSON object.
+3. `submit_script` passes it to `create_script.create_script(script=...)`. That builds the scenes, image prompts, voices, pauses and `script.txt` with the same code as the GPT path.
+
+With a supplied script, the pipeline skips every OpenAI call of the script step: the script itself, the grammar auto-evaluation, the shadowing repetition pick and the podcast Shorts pick. The manifest records `generation_config.script_source` = `supplied` (or `gpt`). The script is checked first: every speaker must be in the cast, `title`/`tags`/`insights` are required, and shadowing types need `repetitions`.
+
+The **web UI keeps using OpenAI**. Through the MCP, `generate_script` and `pick_podcast_shorts` remain as an explicit opt-in, used only when you ask for GPT.
+
+For a `podcast` project, `submit_script` / `generate_script` also return `studio_lines`, `example_lines`,
+`example_images` and the chosen `podcast_shorts`. The Shorts themselves are rendered in the web UI's
+**Build Shorts** step.
 
 The three `list_*` tools let Claude discover valid types, characters and locations, so it fills the brief with real values instead of guessing.
 

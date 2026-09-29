@@ -327,13 +327,19 @@ def select_shorts(project_name: str, count: int | None = None) -> list[dict]:
     return shorts
 
 
+def clean_shorts_for(manifest: dict, shorts: list[dict]) -> list[dict]:
+    """Validate hand-chosen Short ranges against a manifest's dialog (no length limit,
+    overlaps dropped). Pure: doesn't touch the manifest."""
+    valid = [l["index"] for l in _dialog_lines(manifest)]
+    return _clean_shorts(shorts, valid, 1, 10 ** 6)
+
+
 def save_shorts(project_name: str, shorts: list[dict]) -> list[dict]:
     """Store hand-edited Short ranges/titles (validated against the dialog)."""
     cfg  = load_config()
     path = cfg["projects_dir"] / project_name / "project_manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    valid = [l["index"] for l in _dialog_lines(manifest)]
-    clean = _clean_shorts(shorts, valid, 1, 10 ** 6)
+    clean = clean_shorts_for(manifest, shorts)
     manifest.setdefault("podcast", {})["shorts"] = clean
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     write_shorts_txt(project_name, manifest)

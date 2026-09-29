@@ -1147,17 +1147,21 @@ def build_scene_list(
 # MAIN ENTRY POINT
 # =============================================================================
 
-def create_script(
+def _load_script_context(
     project_name: str,
     char_a: str,
     char_b: str,
-    location_key: str | None = None,
-    project_type_key: str | None = None,
-    prompt_override: str | None = None,
-    words: list[str] | None = None,
-    dialog_count: int | None = None,
-    characters: list[str] | None = None,
+    location_key: str | None,
+    project_type_key: str | None,
+    words: list[str] | None,
+    dialog_count: int | None,
+    characters: list[str] | None,
 ) -> dict:
+    """Load the manifest and resolve type, cast and location for the script step.
+
+    Shared by create_script (which then writes the script) and script_prompt (which
+    only returns the instructions). Mutates the in-memory manifest the same way the
+    script step always has; nothing is written to disk here."""
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
@@ -1210,7 +1214,109 @@ def create_script(
     if dialog_count:
         manifest["generation_config"]["dialog_count"] = dialog_count
 
-    max_scene_chars = int(cfg.get("max_scene_characters") or MAX_SCENE_CHARACTERS)
+    return {
+        "cfg": cfg, "project_path": project_path, "manifest_path": manifest_path,
+        "manifest": manifest, "project_type": project_type,
+        "project_type_key": project_type_key, "chars_data": chars_data,
+        "all_locs": all_locs, "cast": cast,
+        "max_scene_chars": int(cfg.get("max_scene_characters") or MAX_SCENE_CHARACTERS),
+    }
+
+
+def script_prompt(
+    project_name: str,
+    char_a: str,
+    char_b: str,
+    location_key: str | None = None,
+    project_type_key: str | None = None,
+    words: list[str] | None = None,
+    dialog_count: int | None = None,
+    characters: list[str] | None = None,
+) -> dict:
+    """The exact instructions the script step would send to GPT, without calling it.
+
+    Used when the script is written outside the pipeline (e.g. by Claude through the
+    MCP server) and then handed back via create_script(script=...). Also lists what
+    the type needs besides the dialog (repetitions, podcast Shorts)."""
+    ctx = _load_script_context(project_name, char_a, char_b, location_key,
+                               project_type_key, words, dialog_count, characters)
+    project_type = ctx["project_type"]
+    rules = project_type.get("scene_builder_rules") or {}
+    prompt = _build_prompt(project_type, ctx["manifest"], ctx["chars_data"], ctx["all_locs"],
+                           max_scene_chars=ctx["max_scene_chars"])
+    extras = []
+    if rules.get("include_repetition_section"):
+        extras.append(
+            '"repetitions": a list of exactly 3 dialog texts, copied EXACTLY, that are the most '
+            "valuable for a learner to shadow (key structure/vocabulary, natural spoken German, "
+            "varied structures, not too short or too long). Do not include \"Bitte wiederholen\".")
+    if rules.get("podcast_studio"):
+        cfg = ctx["cfg"]
+        extras.append(
+            f'"podcast_shorts" (optional): {cfg["podcast_shorts_count"]} non-overlapping moments for '
+            f'vertical Shorts, each {{"start", "end", "title", "description"}} with 0-based inclusive '
+            f'dialog indices, {cfg["podcast_short_min_lines"]}-{cfg["podcast_short_max_lines"]} lines long, '
+            "self-contained with a strong first line. Title under 90 characters ending with "
+            f'"({ctx["manifest"]["generation_config"].get("level", "")}) 🥨 #shorts #deutschlernen"; '
+            'description = 2-3 sentences, then a line "Ganze Folge: {LINK}", then 3-5 hashtags.')
+    return {
+        "project_type_key": ctx["project_type_key"],
+        "cast": ctx["cast"],
+        "level": ctx["manifest"]["generation_config"].get("level"),
+        "prompt": prompt,
+        "extra_fields": extras,
+    }
+
+
+def _validate_supplied_script(script: dict, cast: list[str], project_type: dict) -> None:
+    """Sanity-check a script written outside the pipeline before building scenes."""
+    if not isinstance(script, dict):
+        raise ValueError("script must be a JSON object")
+    dialog = script.get("dialog")
+    if not isinstance(dialog, list) or not dialog:
+        raise ValueError('script needs a non-empty "dialog" list')
+    for i, item in enumerate(dialog):
+        if not isinstance(item, dict):
+            raise ValueError(f"dialog[{i}] must be an object")
+        speaker = item.get("speaker") or item.get("character")
+        if speaker not in cast:
+            raise ValueError(f"dialog[{i}] speaker {speaker!r} is not in the cast {cast}")
+        if not (item.get("text") or item.get("sentence_full")):
+            raise ValueError(f'dialog[{i}] has no "text"')
+    for key in ("title", "tags", "insights"):
+        if not (script.get(key) or "").strip():
+            raise ValueError(f'script needs "{key}"')
+    rules = project_type.get("scene_builder_rules") or {}
+    if rules.get("include_repetition_section") and not script.get("repetitions"):
+        raise ValueError('this project type needs "repetitions" (3 dialog texts to shadow)')
+
+
+def create_script(
+    project_name: str,
+    char_a: str,
+    char_b: str,
+    location_key: str | None = None,
+    project_type_key: str | None = None,
+    prompt_override: str | None = None,
+    words: list[str] | None = None,
+    dialog_count: int | None = None,
+    characters: list[str] | None = None,
+    script: dict | None = None,
+) -> dict:
+    """Write the script (title, tags, dialog, scenes) into the project manifest.
+
+    By default GPT writes it (plus a grammar auto-evaluation, the shadowing
+    repetitions and the podcast Shorts). Pass `script` — the same JSON object the
+    GPT prompt asks for, e.g. written by Claude through the MCP server — to skip
+    every OpenAI call: the dialog is used as given, repetitions come from
+    script["repetitions"] and podcast Shorts from script["podcast_shorts"]."""
+    ctx = _load_script_context(project_name, char_a, char_b, location_key,
+                               project_type_key, words, dialog_count, characters)
+    cfg, project_path, manifest_path = ctx["cfg"], ctx["project_path"], ctx["manifest_path"]
+    manifest, project_type = ctx["manifest"], ctx["project_type"]
+    project_type_key, chars_data, all_locs = ctx["project_type_key"], ctx["chars_data"], ctx["all_locs"]
+    max_scene_chars = ctx["max_scene_chars"]
+
     prompt = prompt_override or _build_prompt(project_type, manifest, chars_data, all_locs,
                                               max_scene_chars=max_scene_chars)
     manifest["generation_config"]["prompt_script"] = prompt
@@ -1222,7 +1328,15 @@ def create_script(
     batch_size   = int(cfg.get("dialog_batch_size") or 40)
     target_count = _parse_int_count(manifest["generation_config"].get("dialog_count"))
 
-    if not prompt_override and target_count and target_count > batch_size:
+    if script is not None:
+        # Written outside the pipeline (Claude via the MCP server): no OpenAI call.
+        _validate_supplied_script(script, ctx["cast"], project_type)
+        logger.info(f"Using the supplied script for {project_name} (no GPT call) …")
+        gpt_output  = script
+        raw_content = json.dumps(script, ensure_ascii=False)
+        manifest["generation_config"]["raw_gpt_script"] = raw_content
+        manifest["generation_config"]["script_source"]  = "supplied"
+    elif not prompt_override and target_count and target_count > batch_size:
         logger.info(f"Calling GPT ({cfg['script_model']}) for {project_name} — "
                     f"batched ({target_count} lines) …")
         gpt_output, raw_content = _generate_script_batched(
@@ -1248,6 +1362,8 @@ def create_script(
         # Save raw GPT response before parsing — useful for debugging parse failures
         manifest["generation_config"]["raw_gpt_script"] = raw_content
         gpt_output = json.loads(raw_content)
+    if script is None:
+        manifest["generation_config"]["script_source"] = "gpt"
 
     manifest["video_info"]["title"]    = gpt_output.get("title")
     manifest["video_info"]["tags"]     = gpt_output.get("tags")
@@ -1259,18 +1375,27 @@ def create_script(
     # Auto-evaluate grammar and naturality of each dialog line. Operates on the
     # dialog list directly (keyed dialog_0..N-1, matching the dialog scenes) and is
     # batched so long dialogs don't truncate the evaluation.
-    logger.info("Evaluating dialog grammar/naturality …")
-    eval_texts = [_strip_fancy_notation(item.get("text", ""))
-                  for item in gpt_output.get("dialog", []) if item.get("text")]
-    manifest["generation_config"]["dialog_auto_evaluation"] = _evaluate_dialog(
-        dialog_texts = eval_texts,
-        level        = manifest["generation_config"]["level"],
-        model        = cfg["script_model"],
-        batch_size   = batch_size,
-    )
+    # (A supplied script was already reviewed by its author — no GPT evaluation.)
+    if script is None:
+        logger.info("Evaluating dialog grammar/naturality …")
+        eval_texts = [_strip_fancy_notation(item.get("text", ""))
+                      for item in gpt_output.get("dialog", []) if item.get("text")]
+        manifest["generation_config"]["dialog_auto_evaluation"] = _evaluate_dialog(
+            dialog_texts = eval_texts,
+            level        = manifest["generation_config"]["level"],
+            model        = cfg["script_model"],
+            batch_size   = batch_size,
+        )
+    else:
+        manifest["generation_config"].pop("dialog_auto_evaluation", None)
 
     repetition_texts = None
-    if project_type["scene_builder_rules"].get("include_repetition_section"):
+    if project_type["scene_builder_rules"].get("include_repetition_section") and script is not None:
+        repetition_texts = [r.get("text", "") if isinstance(r, dict) else str(r)
+                            for r in script.get("repetitions") or []]
+        repetition_texts = [t for t in repetition_texts if t.strip()]
+        manifest["generation_config"]["prompt_repetitions"] = None
+    elif project_type["scene_builder_rules"].get("include_repetition_section"):
         dialog_texts = [item.get("text", "") for item in gpt_output.get("dialog", []) if item.get("text")]
         rep_texts, rep_prompt = _select_repetitions(
             dialog_texts,
@@ -1292,7 +1417,12 @@ def create_script(
 
     # Podcast: let GPT pick the best moments for the vertical Shorts right away (editable
     # later in the Shorts step). A failure here must not lose the finished script.
-    if project_type["scene_builder_rules"].get("podcast_studio"):
+    # A supplied script brings its own Shorts (or none — set them later); no GPT call.
+    if project_type["scene_builder_rules"].get("podcast_studio") and script is not None:
+        from podcast import clean_shorts_for
+        manifest.setdefault("podcast", {})["shorts"] = clean_shorts_for(
+            manifest, script.get("podcast_shorts") or [])
+    elif project_type["scene_builder_rules"].get("podcast_studio"):
         from podcast import pick_shorts
         try:
             manifest.setdefault("podcast", {})["shorts"] = pick_shorts(manifest)
