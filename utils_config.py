@@ -96,10 +96,6 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         # Subtitles
         "sub_font":          _p("subtitles", "font",          "Arial-Bold"),
         "sub_fontsize":      _i("subtitles", "fontsize",       76),
-        # Separate size for the markup (Pango) path — bold/coloured lines. Pango and
-        # the plain "caption" method size the same fontsize differently, so this lets
-        # markup lines match plain ones on screen. 0 = fall back to sub_fontsize.
-        "sub_markup_fontsize": _i("subtitles", "markup_fontsize", 0),
         "sub_color":         _p("subtitles", "color",          "white"),
         "sub_stroke_color":  _p("subtitles", "stroke_color",  "black"),
         "sub_stroke_width":  _i("subtitles", "stroke_width",   4),
@@ -109,14 +105,13 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "sub_bg_opacity":    _f("subtitles", "bg_opacity",     0.45),
         "sub_bg_padding_x":  _i("subtitles", "bg_padding_x",   20),
         "sub_bg_padding_y":  _i("subtitles", "bg_padding_y",   12),
-        "markup_italic_attrs":   _p("subtitles", "markup_italic_attrs",  'font_style="italic"'),
         "markup_italic_colors":  [
             c.strip() for c in
             _p("subtitles", "markup_italic_colors",
                "#FFD700,#DBB900,#FFDD24,#B89B00,#FFE247").split(",")
             if c.strip()
         ],
-        "markup_bold_attrs":     _p("subtitles", "markup_bold_attrs",   'weight="bold"'),
+        "markup_bold_color":     _p("subtitles", "markup_bold_color",   "#FFD700"),
 
 
         # Narrator subtitles

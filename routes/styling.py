@@ -52,11 +52,11 @@ def _write_profiles(data: dict) -> None:
 STYLE_SCHEMA = [
     {"id": "dialogue", "label": "Dialogue subtitles", "fields": [
         {"key": "sub_font",          "label": "Font",              "type": "text",   "section": "subtitles", "opt": "font"},
-        {"key": "sub_fontsize",      "label": "Font size (plain)", "type": "number", "section": "@orientation", "opt": "sub_fontsize", "per_orientation": True},
-        {"key": "sub_markup_fontsize","label": "Font size (markup, 0 = match)", "type": "number", "section": "@orientation", "opt": "sub_markup_fontsize", "per_orientation": True},
+        {"key": "sub_fontsize",      "label": "Font size",         "type": "number", "section": "@orientation", "opt": "sub_fontsize", "per_orientation": True},
         {"key": "sub_color",         "label": "Text colour",       "type": "color",  "section": "subtitles", "opt": "color"},
         {"key": "sub_stroke_color",  "label": "Outline colour",    "type": "color",  "section": "subtitles", "opt": "stroke_color"},
         {"key": "sub_stroke_width",  "label": "Outline width",     "type": "number", "section": "subtitles", "opt": "stroke_width"},
+        {"key": "markup_bold_color", "label": "Highlight colour (*bold*)", "type": "color", "section": "subtitles", "opt": "markup_bold_color"},
         {"key": "sub_margin_bottom", "label": "Distance from bottom", "type": "number", "section": "@orientation", "opt": "sub_margin_bottom", "per_orientation": True},
         {"key": "sub_margin_left",   "label": "Left margin",       "type": "number", "section": "subtitles", "opt": "margin_left"},
         {"key": "sub_margin_right",  "label": "Right margin",      "type": "number", "section": "subtitles", "opt": "margin_right"},

@@ -235,13 +235,15 @@ Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`.
 
 | Marker | Subtitle | TTS audio | Use for |
 |---|---|---|---|
-| `_text_` | italic + highlight colour | spoken normally | grammar features, key vocabulary |
-| `*text*` | bold | spoken normally | strong emphasis |
+| `_text_` | highlight colour (cycled through `markup_italic_colors`) | spoken normally | grammar features, key vocabulary |
+| `*text*` | highlight colour (`markup_bold_color`) | spoken normally | strong emphasis |
 | `-text-` | shown as plain text | **silent — not spoken** | speaker labels, section headings |
 
 The `-text-` marker lets you display text on screen without it being read aloud. For example `"-Sani:- Guten Morgen!"` renders the subtitle as `Sani: Guten Morgen!` but ElevenLabs only receives `Guten Morgen!`.
 
-Italic and bold styling attributes are configurable in `config.ini` under `markup_italic_attrs` and `markup_bold_attrs`.
+A silent span must stand apart from the words around it: its dashes may not touch a letter or digit on the outside (`(?<!\w)-…-(?!\w)`). Hyphenated words such as `Ja-Nein-Fragen` or `U-Bahn-Station` are therefore plain text and are spoken in full. (Before 2026-09-28 they were read as a silent `-Nein-` span, so the audio said "JaFragen". Re-voice such lines in older projects.) A label glued to a word, like `abholen-(trennbar)-`, is not recognised; leave a space before it.
+
+There is ONE dialog-subtitle style for every project type: `subtitle_render.py` draws each line with the `[subtitles]` font, colour and outline (Calibri Bold, BlanchedAlmond, sienna4 by default), and a highlight only re-colours its own words (`markup_italic_colors`, `markup_bold_color`). Plain and highlighted lines therefore look identical apart from the highlight. (The old ImageMagick Pango path for markup lines ignored font/colour/outline and produced a second, white style; it was removed.)
 
 Subtitle style: narration/repetition scenes → centred; dialogue scenes → bottom-aligned.
 
@@ -266,7 +268,14 @@ To force fresh annotations:
 
 Concatenates all per-scene clips, adds a looping background audio track with fade-in/out, and writes the final `final_<project_name>.mp4`.
 
-**Gapless concatenation:** per-scene clips are joined with the FFmpeg concat *filter* (`ffmpeg_concat_scenes()`), not MoviePy's `concatenate_videoclips`. Each scene `.mp4` is AAC-encoded, which adds ~1024 priming samples and leaves the audio track slightly shorter than the video track; MoviePy would fill that gap at every boundary by repeating the last audio buffer, producing an audible fragment of the previous clip's sound bleeding into the following (often silent) pause. Decoding through the concat filter trims the priming and pads short audio tails with real silence, and normalises every input (canvas size, fps, 44.1 kHz stereo) so mixed-resolution inserts concatenate cleanly. The reading assembler (`assemble_reading.py`) uses the same helper.
+**Gapless concatenation:** per-scene clips are joined with the FFmpeg concat *filter* (`ffmpeg_concat_scenes()`), not MoviePy's `concatenate_videoclips`. Each scene `.mp4` is AAC-encoded, which adds ~1024 priming samples and leaves the audio track slightly shorter than the video track; MoviePy would fill that gap at every boundary by repeating the last audio buffer, producing an audible fragment of the previous clip's sound bleeding into the following (often silent) pause. Decoding through the concat filter trims the priming and pads short audio tails with real silence, and normalises every input (canvas size, fps, 44.1 kHz stereo) so mixed-resolution inserts concatenate cleanly. The reading assembler (`assemble_reading.py`) and the podcast Shorts use the same helper.
+
+**Long projects and the Windows command-line limit:** Windows caps a process's whole command line at 32,767 characters, and going over it fails with `[WinError 206] The filename or extension is too long` before FFmpeg even starts. `ffmpeg_concat_scenes()` keeps both parts of the command bounded:
+- The filtergraph is never passed inline. It is written to a temp file and passed with `-filter_complex_script`.
+- The `-i <path>` inputs also grow with the scene count: a 528-scene podcast episode went over the limit on its input list alone. So the clips are split into batches sized by their real command length (`CONCAT_ARGV_BUDGET`, ~24,000 characters, and at most `MAX_CONCAT_INPUTS` = 150 clips). Each batch is joined into a temporary part file, then the parts are joined the same way. This recurses if needed, so any project length works. Projects that fit in one batch still run as a single FFmpeg call.
+- A final check measures the command before launching FFmpeg and raises a clear error instead of WinError 206.
+
+`test_concat_batches.py` covers this without FFmpeg.
 
 **Speed adjustment:** an optional FFmpeg pass changes playback speed without pitch shift. Set `speed_factor` in `config.ini` (e.g. `0.95` for 5% slower) or override per-project in the UI. The `atempo` filter is chained automatically when the factor falls outside the 0.5–2.0 range a single filter supports.
 
@@ -555,6 +564,8 @@ A horizontal 16:9 **"Brezel Podcast"** episode in which two hosts (Character A +
   - A Short that starts mid-example still shows that example's image.
   - Assembly reuses `assemble_reading._finalize`, which adds the corner label, the end card, optional
     background music, speed and branding.
+- **Language.** The whole episode is in German: the hosts explain, react and joke in German, and there are no English glosses. The type prompt enforces this.
+- **Hand-written episodes.** To use an exact script (for example, one modelled on a sample episode), build the dialog list yourself. Each item has `text`, `speaker`, `setting`, `example_id`, `scene_visual` and `scene_characters`. Pass it to `create_script.build_scene_list(...)` and store the Shorts with `podcast.save_shorts(...)`. Neither makes an API call. Setting some example lines to `studio` reduces the number of illustrations, since the studio shot is free after the first episode.
 - **Visual guidelines** only art-direct the example cut-aways. For this type they do not pin one fixed
   location, because each example happens somewhere else.
 
@@ -563,7 +574,7 @@ A horizontal 16:9 **"Brezel Podcast"** episode in which two hosts (Character A +
 1. **+ New Project** → *Podcast (Brezel Podcast episode + Shorts)*. Put the episode topic in the scene
    description and the teaching goals in the learning points.
 2. **Generate Script** with the two hosts. This also picks the Shorts.
-3. **Review, Audio, Images, Render, Assemble**: same as any horizontal type.
+3. **Review, Audio, Images, Render, Assemble**: same as any horizontal type. Assemble the episode without background music (voices only); on the CLI, pass `--bg-audio none`.
 4. **Build Shorts (vertical)**: tick, edit or re-pick the moments, then run.
 5. Upload the episode, paste its link into `[podcast] full_episode_url` (or into the descriptions in
    `shorts.txt`), and publish the Shorts.
@@ -1165,8 +1176,6 @@ seedream-5-lite = fal-ai/bytedance/seedream/v5/lite/edit
 target_w             = 1080   ; base/fallback canvas; per-orientation values live in [vertical]/[horizontal]
 target_h             = 1920
 fps                  = 30
-markup_italic_attrs  = style='italic'
-markup_bold_attrs    = weight='bold'
 
 ; Per-orientation render overrides — applied at render time over the base config by
 ; apply_video_format(), keyed on the manifest's video_format. Use the internal key

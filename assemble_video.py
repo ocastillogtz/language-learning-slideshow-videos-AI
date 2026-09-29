@@ -276,6 +276,40 @@ def _has_audio_stream(path):
     return bool(out)
 
 
+# Windows caps a process's whole command line at 32,767 chars (WinError 206 beyond).
+WIN_CMDLINE_LIMIT = 32_767
+# Budget for the per-clip `-i` tokens of ONE concat call. The fixed part of the
+# command (codec flags, temp script path, output path) needs < 1 KB; the rest of
+# the headroom absorbs estimation slack.
+CONCAT_ARGV_BUDGET = 24_000
+# Also cap the clip count per call: every input is a live decoder inside FFmpeg,
+# so hundreds of them at once cost a lot of memory even when the argv fits.
+MAX_CONCAT_INPUTS = 150
+
+
+def _concat_arg_cost(path, has_audio):
+    """Approximate argv characters one clip adds to the concat command."""
+    cost = len(str(path)) + 8                                   # -i "<path>"
+    if not has_audio:
+        cost += 70                                              # -f lavfi -t … -i anullsrc=…
+    return cost
+
+
+def _concat_batches(clip_paths, has_aud, budget=CONCAT_ARGV_BUDGET,
+                    max_inputs=MAX_CONCAT_INPUTS):
+    """Split clips into consecutive batches whose argv stays under `budget` chars
+    and `max_inputs` clips. Returns a list of (start, end) index ranges."""
+    batches, start, used = [], 0, 0
+    for i, (p, a) in enumerate(zip(clip_paths, has_aud)):
+        cost = _concat_arg_cost(p, a)
+        if i > start and (used + cost > budget or i - start >= max_inputs):
+            batches.append((start, i))
+            start, used = i, 0
+        used += cost
+    batches.append((start, len(clip_paths)))
+    return batches
+
+
 def ffmpeg_concat_scenes(clip_paths, out_path, fps, target_w=None, target_h=None, sr=44100):
     """
     Gapless concatenation of per-scene clips via the FFmpeg concat *filter*.
@@ -307,11 +341,19 @@ def ffmpeg_concat_scenes(clip_paths, out_path, fps, target_w=None, target_h=None
     is too long". (Despite the wording, nothing is wrong with any filename -- it
     is the command line as a whole that is too long.)
 
-    THE FIX, applied below: never put the filtergraph on the command line. Write
-    it to a temporary text file and hand FFmpeg the file path via
-    `-filter_complex_script`. The command line then only carries short tokens
-    (the `-i <path>` inputs and a handful of flags), which stays comfortably
-    under the limit even for hundreds of scenes.
+    THE FIX, part 1: never put the filtergraph on the command line. Write it to a
+    temporary text file and hand FFmpeg the file path via `-filter_complex_script`.
+
+    THE FIX, part 2: the `-i <path>` inputs grow with the scene count too. A
+    528-scene podcast episode blew the cap on its input list alone (~90 chars per
+    absolute path, plus a lavfi silence source for every silent pause clip). So
+    the clips are split into batches sized by their ACTUAL argv cost
+    (_concat_batches): each batch is concatenated into a temporary part file, and
+    the parts are then concatenated the same way. Parts are already on the common
+    canvas, so the second pass is a plain join, and it recurses if there are ever
+    enough parts to need batching again. The command line therefore stays bounded
+    no matter how long the project is. A last check before launching FFmpeg
+    raises a clear error instead of the cryptic WinError 206.
     """
     clip_paths = [Path(p) for p in clip_paths]
     dims = [_probe_video_dims(p) for p in clip_paths]
@@ -320,6 +362,22 @@ def ffmpeg_concat_scenes(clip_paths, out_path, fps, target_w=None, target_h=None
     W -= W % 2
     H -= H % 2
     has_aud = [_has_audio_stream(p) for p in clip_paths]
+
+    batches = _concat_batches(clip_paths, has_aud)
+    if len(batches) > 1:
+        out_path = Path(out_path)
+        logger.info("Concatenating %d clips in %d batches (command-line limit)",
+                    len(clip_paths), len(batches))
+        parts = []
+        try:
+            for n, (start, end) in enumerate(batches):
+                part = out_path.with_name(f"{out_path.stem}_part{n:02d}.mp4")
+                ffmpeg_concat_scenes(clip_paths[start:end], part, fps, W, H, sr)
+                parts.append(part)
+            return ffmpeg_concat_scenes(parts, out_path, fps, W, H, sr)
+        finally:
+            for part in parts:
+                part.unlink(missing_ok=True)
 
     inputs, extra = [], []
     for p in clip_paths:
@@ -377,6 +435,11 @@ def ffmpeg_concat_scenes(clip_paths, out_path, fps, target_w=None, target_h=None
                "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-r", str(fps),
                "-c:a", "aac", "-b:a", "192k", str(out_path)]
         )
+        cmd_len = len(subprocess.list2cmdline(cmd))
+        if cmd_len >= WIN_CMDLINE_LIMIT:
+            raise RuntimeError(
+                f"FFmpeg concat command is {cmd_len} chars (Windows limit "
+                f"{WIN_CMDLINE_LIMIT}) — lower CONCAT_ARGV_BUDGET in assemble_video.py")
         result = subprocess.run(cmd, capture_output=True, text=True)
     finally:
         os.unlink(script.name)  # always clean up the temp filtergraph file

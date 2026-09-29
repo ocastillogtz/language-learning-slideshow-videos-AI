@@ -1,13 +1,13 @@
 """
 utils_markup.py
 ===============
-Converts WhatsApp-style inline markup to Pango markup for TextClip rendering,
-and provides plain-text helpers for TTS and subtitle fallback.
+WhatsApp-style inline markup for dialog text: detection plus plain-text
+helpers for TTS and quizzes (rendering lives in subtitle_render.py).
 
 Supported markers
 -----------------
-  _text_   -> italic + highlight colour  (use for learning features)
-  *text*   -> bold                       (use for strong emphasis)
+  _text_   -> highlight colour, cycled    (use for learning features)
+  *text*   -> highlight colour            (use for strong emphasis)
   -text-   -> silent: visible in subtitles, EXCLUDED from TTS audio
 
 The -text- marker is intended for on-screen labels (e.g. speaker names,
@@ -18,20 +18,27 @@ the TTS voice.  Example:
   TTS receives   : "Guten Morgen!"
 
 Multiple _italic_ spans cycle through a list of colours defined in config.ini
-under [subtitles] -> markup_italic_colors (comma-separated hex values).
+under [subtitles] -> markup_italic_colors (comma-separated hex values);
+*bold* spans use [subtitles] -> markup_bold_color.
 The first span gets the first colour, the second span the second, and so on.
 If there are more spans than colours the list wraps around.
 
 These markers are written by GPT into the dialog "text" field.
-create_video.py calls to_pango() when rendering subtitles, with a safe
-fallback to strip_markup() if the Pango TextClip call fails.
+subtitle_render.py draws them in the single dialog-subtitle style (highlight
+spans only change the colour of their words).
 """
 
 import re
 
 _BOLD_RE   = re.compile(r'\*([^*\n]+)\*')
 _ITALIC_RE = re.compile(r'_([^_\n]+)_')
-_SILENT_RE = re.compile(r'-([^-\n]+)-')
+# A silent span must not touch letters/digits on the outside, so a hyphenated
+# word ("Ja-Nein-Fragen", "U-Bahn-Station") is NOT mistaken for "-Nein-" and
+# dropped from the audio; "-Sani:- Guten Morgen!" still matches.
+_SILENT_RE = re.compile(r'(?<!\w)-([^-\n]+)-(?!\w)')
+
+# All three markers in one alternation (bold first, so *____* stays one span).
+SPAN_RE = re.compile(r'(\*[^*\n]+\*|_[^_\n]+_|(?<!\w)-[^-\n]+-(?!\w))')
 
 
 def has_markup(text: str) -> bool:
@@ -66,70 +73,6 @@ def strip_silent_markers(text: str) -> str:
 
 
 # =============================================================================
-# PANGO RENDERING
-# =============================================================================
-
-def to_pango(text: str, italic_attrs: str, bold_attrs: str,
-             italic_colors: list = None) -> str:
-    """
-    Convert _text_, *text*, and -text- markers to Pango <span> tags.
-
-    -silent- spans: the content is shown as plain (unstyled) text; the dashes
-    are stripped.  The content will appear in the subtitle but was not spoken.
-
-    Each successive _italic_ span cycles through italic_colors.  If a colour
-    is available it is appended as foreground="COLOR" to italic_attrs.
-    If italic_colors is empty or None, italic_attrs is used as-is for every span.
-
-    Properly escapes XML special characters (&, <, >) in the plain portions
-    before inserting tags, so the result is always valid Pango markup.
-
-    Parameters
-    ----------
-    text          : Raw text with _..._, *...*, and -...- markers.
-    italic_attrs  : Pango span attribute string for italic/learning markup.
-                    Example: 'font_style="italic"'
-    bold_attrs    : Pango span attribute string for bold markup.
-                    Example: 'weight="bold"'
-    italic_colors : List of hex colour strings cycled across italic spans.
-                    Example: ['#FFD700', '#DBB900', '#FFDD24', '#B89B00', '#FFE247']
-                    Pass [] or None to use italic_attrs unchanged for every span.
-
-    Returns
-    -------
-    Pango markup string ready for TextClip(method='pango').
-    """
-    colors = italic_colors or []
-
-    combined = re.compile(r'(\*[^*\n]+\*|_[^_\n]+_|-[^-\n]+-)')
-    parts = combined.split(text)
-
-    out = []
-    italic_index = 0
-    for part in parts:
-        if _BOLD_RE.fullmatch(part):
-            inner = _xml_escape(part[1:-1])
-            out.append('<span ' + bold_attrs + '>' + inner + '</span>')
-        elif _ITALIC_RE.fullmatch(part):
-            inner = _xml_escape(part[1:-1])
-            if colors:
-                color = colors[italic_index % len(colors)]
-                attrs = italic_attrs + ' foreground="' + color + '"'
-            else:
-                attrs = italic_attrs
-            out.append('<span ' + attrs + '>' + inner + '</span>')
-            italic_index += 1
-        elif _SILENT_RE.fullmatch(part):
-            # Show content as plain unstyled text — no dashes, no special style
-            inner = _xml_escape(part[1:-1])
-            out.append(inner)
-        else:
-            out.append(_xml_escape(part))
-
-    return "".join(out)
-
-
-# =============================================================================
 # PLAIN-TEXT FALLBACKS
 # =============================================================================
 
@@ -140,7 +83,6 @@ def strip_markup(text: str) -> str:
     -silent- markers: content is KEPT (the text remains visible in subtitles).
     *bold* and _italic_ markers: content is kept, markers stripped.
 
-    Use this for subtitle display fallback when Pango rendering is unavailable.
     For TTS audio, use strip_for_tts() instead.
     """
     text = _SILENT_RE.sub(r'\1', text)   # keep content, strip dashes
@@ -175,7 +117,7 @@ def blank_the_answer(sentence_full: str, blank: str = "____") -> str:
     highlighted slot the answer will later fill on the reveal.
 
     The blank stays wrapped in *asterisks*; underscores inside a *bold* span are safe
-    (to_pango matches the bold span first and never re-parses its contents as italic).
+    (subtitle_render matches the bold span first and never re-parses its contents as italic).
 
         "Ich habe Angst *vor* großen Spinnen."  ->  "Ich habe Angst *____* großen Spinnen."
 
@@ -202,12 +144,3 @@ def gap_reading_for_tts(sentence_full: str, gap: str = "…") -> str:
     else:
         text = sentence_full
     return strip_for_tts(text)
-
-
-def _xml_escape(text: str) -> str:
-    """Escape characters that are special in XML/Pango markup."""
-    text = text.replace('&', '&amp;')
-    text = text.replace('<', '&lt;')
-    text = text.replace('>', '&gt;')
-    text = text.replace('"', '&quot;')
-    return text

@@ -32,7 +32,7 @@ from moviepy.editor import (
 from moviepy.config import change_settings
 from utils_config import load_config, load_new_characters, apply_video_format
 from utils_image import pad_image_to_frame, pil_to_numpy, make_icon_clip, make_corner_icon_clip
-from utils_markup import has_markup, to_pango, strip_markup
+from subtitle_render import render_subtitle
 from generate_annotations import generate_annotations
 from html_annotation_renderer import AnnotationBatchRenderer
 from utils_markup import strip_markup as _strip_markup_for_annot
@@ -682,32 +682,19 @@ def _subtitle(text: str, duration: float, is_narrator: bool, cfg: dict) -> TextC
 
     clean = text.rstrip(".")
 
-    # --- Try Pango markup rendering when markers are present ---
-    if not is_narrator and has_markup(clean):
-        # Pango (markup) and caption (plain) size the SAME fontsize differently, so a
-        # markup line and a plain line rendered at cfg["sub_fontsize"] don't match on
-        # screen. sub_markup_fontsize is the dedicated size for the markup/pango path;
-        # 0 (the default) means "match the plain size" so unconfigured setups are
-        # unchanged.
-        markup_sz = cfg.get("sub_markup_fontsize") or sz
-        try:
-            pango_text = to_pango(
-                clean,
-                italic_attrs=cfg.get("markup_italic_attrs", 'font_style="italic"'),
-                bold_attrs=cfg.get("markup_bold_attrs", 'weight="bold"'),
-                italic_colors=cfg.get("markup_italic_colors", []),
-            )
-            return TextClip(
-                pango_text, font=font, fontsize=markup_sz, color=col,
-                stroke_color=scol, stroke_width=sw,
-                method="pango", size=(w, None), align="center",
-            ).set_duration(duration)
-        except Exception as exc:
-            logger.warning(
-                "Pango markup render failed for %r — falling back to plain text: %s",
-                clean, exc,
-            )
-            clean = strip_markup(clean)
+    # Dialog subtitles: ONE style for every line, plain or with *bold*/_coloured_
+    # highlights (subtitle_render — the configured font, fill and outline; a
+    # highlight only re-colours its words). The old ImageMagick "pango" path for
+    # markup lines ignored font/colour/outline and produced a second, white style.
+    if not is_narrator:
+        rgba = render_subtitle(
+            clean, w, font=font, fontsize=sz, color=col,
+            stroke_color=scol, stroke_width=sw,
+            italic_colors=cfg.get("markup_italic_colors", []),
+            bold_color=cfg.get("markup_bold_color", ""),
+            magick=cfg.get("imagemagick") or "",
+        )
+        return ImageClip(rgba, transparent=True).set_duration(duration)
 
     return TextClip(
         clean, font=font, fontsize=sz, color=col,
