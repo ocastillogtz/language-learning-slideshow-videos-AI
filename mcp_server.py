@@ -54,6 +54,7 @@ from utils_config import (
     load_new_locations,
     get_new_locations_flat,
 )
+from platform_audio import any_variant_exists
 
 mcp = MCPServer(
     name="german-video-pipeline",
@@ -471,8 +472,8 @@ def get_project_status(project_name: str) -> dict:
         "has_script": bool(tts),
         "has_audio": any(s["audio"].get("file_path") for s in tts),
         "has_images": bool(imgs),
-        "has_video": (cfg["projects_dir"] / project_name.strip()
-                      / f"final_{project_name.strip()}.mp4").exists(),
+        "has_video": any_variant_exists(cfg["projects_dir"] / project_name.strip()
+                                        / f"final_{project_name.strip()}.mp4"),
         **({"podcast_shorts": _shorts_summary(m)} if "podcast" in m else {}),
     }
 

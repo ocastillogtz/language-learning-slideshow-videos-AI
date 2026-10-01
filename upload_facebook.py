@@ -461,7 +461,10 @@ def _final_video_path(project_name: str) -> Path:
         projects_dir = Path(cfg["paths"]["projects_dir"])
     except Exception:
         projects_dir = Path("projects")
-    return projects_dir / project_name / ("final_" + project_name + ".mp4")
+    from platform_audio import find_variant, META_PREFER
+    # final_<p>_Meta.mp4 (Meta-safe music), else _YT, else a legacy final_<p>.mp4
+    return find_variant(projects_dir / project_name / ("final_" + project_name + ".mp4"),
+                        META_PREFER)
 
 
 # =============================================================================

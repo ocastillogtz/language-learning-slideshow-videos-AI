@@ -244,7 +244,9 @@ def _final_video_path(project_name: str, manifest: dict) -> Path:
     except Exception:
         projects_dir = Path("projects")
 
-    return projects_dir / project_name / f"final_{project_name}.mp4"
+    from platform_audio import find_variant, YOUTUBE_PREFER
+    # final_<p>_YT.mp4, else a legacy un-suffixed final_<p>.mp4
+    return find_variant(projects_dir / project_name / f"final_{project_name}.mp4", YOUTUBE_PREFER)
 
 
 def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:

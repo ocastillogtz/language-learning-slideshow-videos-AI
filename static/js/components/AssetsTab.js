@@ -551,12 +551,16 @@ function BackgroundAudioPane() {
     <div>
       <div style={{fontSize:".82rem",color:"var(--muted)",marginBottom:".75rem"}}>
         Audio files live in <code>assets/background_audio/</code>. Register them here to use in assembly.
+        <code>license</code> marks where a track is safe: <b>YTsafe</b> (YouTube Audio Library — blocked on
+        long Instagram videos), <b>Metasafe</b> (<code>meta_safe_music/</code>), <b>TikToksafe</b> (reserved).
       </div>
       {Object.keys(data).length === 0 && (
         <div style={{color:"var(--muted)",fontSize:".83rem"}}>No background audio registered.</div>
       )}
       {Object.entries(data).map(([key, a]) => (
-        <AssetRow key={key} label={key} meta={a.file_path || a.description || ""}
+        <AssetRow key={key} label={key}
+          meta={[a.license, a.full_path || a.file_path,
+                 a.description !== a.license ? a.description : ""].filter(Boolean).join(" · ")}
           onRemove={()=>remove(key)}/>
       ))}
     </div>

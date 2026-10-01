@@ -3,8 +3,11 @@ assemble_reading.py
 ===================
 Phase 5 of reading_together: package the rendered per-scene clips into
 
-  final_<project>_part1.mp4 ... partN.mp4   (vertical 6-sentence shorts)
-  final_<project>_long.mp4                  (one horizontal video, all sentences)
+  final_<project>_part1_YT.mp4 ... partN_YT.mp4   (vertical 6-sentence shorts)
+  final_<project>_long_YT.mp4                     (one horizontal video, all sentences)
+
+plus a *_Meta.mp4 (/ *_TikTok.mp4) twin of each when a track for that platform
+is chosen (see platform_audio).
 
 Vertical part clips are read from   projects/<p>/videos/<scene>.mp4
 Horizontal long clips are read from projects/<p>/videos/h/<scene>.mp4
@@ -22,14 +25,15 @@ from pathlib import Path
 
 import numpy as np
 from moviepy.editor import (
-    VideoFileClip, AudioFileClip, CompositeAudioClip,
-    ImageClip, TextClip, ColorClip, CompositeVideoClip,
-    concatenate_videoclips, concatenate_audioclips,
+    VideoFileClip, ImageClip, TextClip, ColorClip, CompositeVideoClip,
+    concatenate_videoclips,
 )
 from moviepy.config import change_settings
 
 import assemble_video as av
 from utils_config import load_config
+from platform_audio import (PLATFORMS, PLATFORM_ORDER, normalize_bg_tracks, platform_path,
+                            remove_stale_variants)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -207,21 +211,37 @@ def group_scenes_into_parts(scenes, per_part=None):
 def _finalize(clip_paths, out_path, cfg, assets_dir, project_path,
               bg_audio_name, speed_factor, branding_file, branding_mode,
               overwrite, tag, corner_label=None, add_continuation=False,
-              bg_audio_gain_db=0.0):
+              bg_audio_gain_db=0.0, bg_tracks=None):
     """
-    Concat clips -> [continuation end-card] -> [corner label] -> bg audio ->
-    speed -> branding -> out_path. Returns out_path or None.
+    Concat clips -> [continuation end-card] -> [corner label] -> per platform:
+    bg audio -> speed -> branding -> <out_path stem>_<PLATFORM>.mp4.
+    Returns {platform: path} of the variants on disk (empty if no clips).
 
+    out_path:         the un-suffixed base name (final_x_part1.mp4); each platform
+                      variant gets its suffix (_YT / _Meta / _TikTok).
+    bg_tracks:        {platform: {"name", "gain_db"}}; None = bg_audio_name /
+                      bg_audio_gain_db as the YouTube track only.
     corner_label:     text shown top-left for the whole clip (e.g. "Teil 1"), or None.
     add_continuation: append a frozen end-card with the continuation legend.
     """
-    if out_path.exists() and not overwrite:
-        logger.info("exists: %s -- skip (use overwrite)", out_path.name)
-        return out_path
+    variants = normalize_bg_tracks(bg_tracks, bg_audio_name, bg_audio_gain_db)
+    done = {}
+    todo = []
+    for v in variants:
+        vp = platform_path(out_path, v[0])
+        if vp.exists() and not overwrite:
+            logger.info("exists: %s -- skip (use overwrite)", vp.name)
+            done[v[0]] = vp
+        else:
+            todo.append(v)
+    if not todo:
+        return done
     clip_paths = [p for p in clip_paths if p.exists()]
     if not clip_paths:
         logger.warning("no clips for %s -- skipped", out_path.name)
-        return None
+        return {}
+    for stale in remove_stale_variants(out_path, {v[0] for v in variants}):
+        logger.info("removed stale variant (no track for it this run): %s", stale.name)
 
     # Gapless FFmpeg concat (trims AAC priming, pads short audio tails with real
     # silence) instead of MoviePy's concatenate_videoclips, which repeats the last
@@ -243,63 +263,59 @@ def _finalize(clip_paths, out_path, cfg, assets_dir, project_path,
                       .set_duration(content.duration)
                       .set_audio(base_audio))
 
-    bg_audio_path = av._resolve_bg_audio(bg_audio_name, assets_dir)
-    if bg_audio_path and bg_audio_path.exists():
-        bg_clip   = AudioFileClip(str(bg_audio_path))
-        repeats   = int(content.duration / bg_clip.duration) + 2
-        bg_looped = concatenate_audioclips([AudioFileClip(str(bg_audio_path))] * repeats)
-        bg_volume = cfg["bg_audio_volume"] * (10.0 ** (float(bg_audio_gain_db) / 20.0))
-        bg_looped = bg_looped.subclip(0, content.duration).volumex(bg_volume)
-        bg_looped = bg_looped.audio_fadein(cfg["bg_audio_fadein_s"]).audio_fadeout(cfg["bg_audio_fadeout_s"])
-        mixed     = CompositeAudioClip([content.audio, bg_looped]) if content.audio else bg_looped
-        content   = content.set_audio(mixed)
-
     apply_speed    = abs((speed_factor or 1.0) - 1.0) > 1e-4
     apply_branding = bool(branding_file) and branding_mode and branding_mode != "none"
     needs_post     = apply_speed or apply_branding
-    target = (project_path / (out_path.stem + "_raw.mp4")) if needs_post else out_path
+    final_w, final_h = content.size   # parts 1080x1920, long 1920x1080
 
-    final_w, final_h = content.size   # capture before close (parts 1080x1920, long 1920x1080)
+    for platform, track_name, gain_db in todo:
+        vout    = platform_path(out_path, platform)
+        vtag    = tag + PLATFORMS[platform][0]
+        variant = av.mix_bg_audio(content, track_name, gain_db, cfg, assets_dir)
+        target  = (project_path / (vout.stem + "_raw.mp4")) if needs_post else vout
 
-    logger.info("Writing %s (%.1fs, %d clips) ...", target.name, content.duration, len(clip_paths))
-    content.write_videofile(
-        str(target), fps=cfg["fps"], codec="libx264", audio_codec="aac",
-        temp_audiofile=str(project_path / (tag + "_tmp.m4a")), remove_temp=True, logger=None,
-    )
+        logger.info("Writing %s (%.1fs, %d clips, bg: %s %+.1f dB) ...", target.name,
+                    variant.duration, len(clip_paths), track_name or "none", gain_db)
+        variant.write_videofile(
+            str(target), fps=cfg["fps"], codec="libx264", audio_codec="aac",
+            temp_audiofile=str(project_path / (vtag + "_tmp.m4a")), remove_temp=True, logger=None,
+        )
+
+        if apply_speed:
+            spd = project_path / (vout.stem + "_spd.mp4")
+            av._ffmpeg_speed(target, spd, speed_factor)
+            target.unlink(missing_ok=True)
+            target = spd
+
+        if apply_branding:
+            branding_path = cfg["branding_dir"] / branding_file
+            if branding_path.exists():
+                branded = project_path / (vout.stem + "_branded.mp4")
+                # Scale+pad the branding clip to this output's resolution so a single
+                # intro file works for both vertical parts and the horizontal long video.
+                _branding_concat_fit(branding_path, target, branded, branding_mode,
+                                     final_w, final_h, cfg["fps"])
+                target.unlink(missing_ok=True)
+                target = branded
+            else:
+                logger.warning("branding file not found: %s -- skipping", branding_path)
+
+        if target != vout:
+            if vout.exists():
+                vout.unlink()
+            target.rename(vout)
+        logger.info("Done: %s", vout.name)
+        done[platform] = vout
+
     content.close()
     concat_tmp.unlink(missing_ok=True)
-
-    if apply_speed:
-        spd = project_path / (out_path.stem + "_spd.mp4")
-        av._ffmpeg_speed(target, spd, speed_factor)
-        target.unlink(missing_ok=True)
-        target = spd
-
-    if apply_branding:
-        branding_path = cfg["branding_dir"] / branding_file
-        if branding_path.exists():
-            branded = project_path / (out_path.stem + "_branded.mp4")
-            # Scale+pad the branding clip to this output's resolution so a single
-            # intro file works for both vertical parts and the horizontal long video.
-            _branding_concat_fit(branding_path, target, branded, branding_mode,
-                                 final_w, final_h, cfg["fps"])
-            target.unlink(missing_ok=True)
-            target = branded
-        else:
-            logger.warning("branding file not found: %s -- skipping", branding_path)
-
-    if target != out_path:
-        if out_path.exists():
-            out_path.unlink()
-        target.rename(out_path)
-    logger.info("Done: %s", out_path.name)
-    return out_path
+    return {p: done[p] for p in PLATFORM_ORDER if p in done}
 
 
 def assemble_reading(project_name, bg_audio_name=None, overwrite=False,
                      speed_factor=None, branding_file=None, branding_mode="none",
                      make_parts=True, make_long=True, per_part=None,
-                     bg_audio_gain_db=None):
+                     bg_audio_gain_db=None, bg_tracks=None):
     cfg = load_config()
     assets_dir = cfg["assets_dir"]
     project_path = cfg["projects_dir"] / project_name
@@ -344,9 +360,8 @@ def assemble_reading(project_name, bg_audio_name=None, overwrite=False,
                             overwrite, tag=f"part{p + 1}",
                             corner_label=f"{word} {p + 1}",
                             add_continuation=(p != last_key),
-                            bg_audio_gain_db=bg_audio_gain_db)
-            if res:
-                outputs.append(res)
+                            bg_audio_gain_db=bg_audio_gain_db, bg_tracks=bg_tracks)
+            outputs.extend(res.values())
 
     # --- horizontal long (all scenes) ---
     if make_long:
@@ -358,9 +373,9 @@ def assemble_reading(project_name, bg_audio_name=None, overwrite=False,
         out = project_path / f"final_{project_name}_long.mp4"
         res = _finalize(clip_paths, out, cfg, assets_dir, project_path,
                         bg_audio_name, speed_factor, branding_file, branding_mode,
-                        overwrite, tag="long", bg_audio_gain_db=bg_audio_gain_db)
-        if res:
-            outputs.append(res)
+                        overwrite, tag="long", bg_audio_gain_db=bg_audio_gain_db,
+                        bg_tracks=bg_tracks)
+        outputs.extend(res.values())
 
     logger.info("assemble_reading produced %d file(s).", len(outputs))
     return outputs
@@ -376,6 +391,12 @@ def main():
                    help="Adjust background audio volume in dB relative to config "
                         "(positive = louder, negative = quieter). "
                         "Default: [reading] bg_audio_gain_db in config.ini")
+    p.add_argument("--bg-audio-meta", default=None, dest="bg_audio_meta",
+                   help="Meta-safe track -> also writes the *_Meta.mp4 variants")
+    p.add_argument("--bg-audio-meta-gain-db", type=float, default=0.0, dest="bg_audio_meta_gain_db")
+    p.add_argument("--bg-audio-tiktok", default=None, dest="bg_audio_tiktok",
+                   help="TikTok track -> also writes the *_TikTok.mp4 variants")
+    p.add_argument("--bg-audio-tiktok-gain-db", type=float, default=0.0, dest="bg_audio_tiktok_gain_db")
     p.add_argument("--speed-factor", type=float, default=None, dest="speed_factor")
     p.add_argument("--branding-file", dest="branding_file", default=None)
     p.add_argument("--branding-mode", dest="branding_mode", default="none",
@@ -389,7 +410,11 @@ def main():
     assemble_reading(a.project_name, a.bg_audio_name, a.overwrite, a.speed_factor,
                      branding_file=a.branding_file, branding_mode=a.branding_mode,
                      make_parts=not a.no_parts, make_long=not a.no_long, per_part=a.per_part,
-                     bg_audio_gain_db=a.bg_audio_gain_db)
+                     bg_audio_gain_db=a.bg_audio_gain_db,
+                     bg_tracks={"meta":   {"name": a.bg_audio_meta or "",
+                                           "gain_db": a.bg_audio_meta_gain_db},
+                                "tiktok": {"name": a.bg_audio_tiktok or "",
+                                           "gain_db": a.bg_audio_tiktok_gain_db}})
 
 
 if __name__ == "__main__":

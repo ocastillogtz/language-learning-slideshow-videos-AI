@@ -1,6 +1,7 @@
 import json
 from flask import Blueprint, request, jsonify
 from core import run_job, get_job, PROJECTS_DIR
+from platform_audio import parse_bg_tracks, find_variant, META_PREFER
 
 bp = Blueprint("pipeline", __name__, url_prefix="")
 
@@ -581,12 +582,14 @@ def run_podcast_shorts(name):
         if isinstance(only, list) and not only:
             return jsonify({"error": "No Short ticked — tick at least one moment to build."}), 400
         only = [int(x) for x in only] if isinstance(only, list) else None
+        bg_tracks = parse_bg_tracks(data.get("bg_tracks"))
         from podcast import build_shorts, save_shorts
         # The step form sends its (possibly edited) moments along — save them first.
         if isinstance(data.get("shorts"), list):
             save_shorts(name, data["shorts"])
         run_job(name, "podcast_shorts", build_shorts, name, overwrite, annotated,
-                bg_audio_name, bg_gain_db, speed_factor, branding_file, branding_mode, only)
+                bg_audio_name, bg_gain_db, speed_factor, branding_file, branding_mode, only,
+                bg_tracks)
         return jsonify({"message": "Shorts build started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -631,10 +634,11 @@ def run_reading_assemble(name):
         per_part      = int(raw_pp) if raw_pp not in (None, "") else None
         raw_gain      = data.get("bg_audio_gain_db")
         bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else None
+        bg_tracks     = parse_bg_tracks(data.get("bg_tracks"))
         from assemble_reading import assemble_reading
         run_job(name, "reading_assemble", assemble_reading, name, bg_audio_name, overwrite,
                 speed_factor, branding_file, branding_mode, make_parts, make_long, per_part,
-                bg_gain_db)
+                bg_gain_db, bg_tracks)
         return jsonify({"message": "Reading assembly started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -656,18 +660,22 @@ def run_assemble(name):
             branding_mode = "none"
         raw_gain      = data.get("bg_audio_gain_db")
         bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else 0.0
+        # Per-platform tracks ({"yt"|"meta"|"tiktok": {"name","gain_db"}}): one
+        # final_<p>_<PLATFORM>.mp4 per chosen track; YouTube falls back to the above.
+        bg_tracks     = parse_bg_tracks(data.get("bg_tracks"))
         # Remember the chosen assembly preferences so the UI pre-fills them next
         # time — no re-picking background audio / branding on every re-assemble.
         _save_render_settings(name, "assemble", {
             "bg_audio_name": bg_audio_name,
             "bg_audio_gain_db": bg_gain_db,
+            "bg_tracks": bg_tracks,
             "speed_factor": speed_factor,
             "branding_file": branding_file,
             "branding_mode": branding_mode,
         })
         from assemble_video import assemble_video
         run_job(name, "assemble", assemble_video, name, bg_audio_name, overwrite,
-                speed_factor, branding_file, branding_mode, bg_gain_db)
+                speed_factor, branding_file, branding_mode, bg_gain_db, bg_tracks)
         return jsonify({"message": "Assembly started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -779,7 +787,8 @@ def run_upload_instagram(name):
             cfg = configparser.ConfigParser()
             cfg.read("config.ini")
             projects_dir = Path(cfg.get("paths", "projects_dir", fallback="projects"))
-            file_path = projects_dir / name / ("final_" + name + ".mp4")
+            file_path = find_variant(projects_dir / name / ("final_" + name + ".mp4"),
+                                     META_PREFER)
             manifest  = _read_manifest(name)
             caption   = caption_override or _build_caption(manifest)
             # Default the cover frame to the auto-computed "first clean pause"

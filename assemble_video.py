@@ -18,6 +18,7 @@ from moviepy.editor import (
 )
 from moviepy.config import change_settings
 from utils_config import load_config, load_background_audio_index
+from platform_audio import PLATFORMS, normalize_bg_tracks, platform_path, remove_stale_variants
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,7 +32,12 @@ def assemble_video(
     branding_file=None,
     branding_mode="none",
     bg_audio_gain_db=0.0,
+    bg_tracks=None,
 ):
+    """Assemble final_<project>_<PLATFORM>.mp4 -- one file per platform that has a
+    background track (see platform_audio). bg_tracks = {"yt"|"meta"|"tiktok":
+    {"name", "gain_db"}}; without it the legacy bg_audio_name/bg_audio_gain_db
+    become the YouTube track and only final_<project>_YT.mp4 is written."""
     cfg          = load_config()
     assets_dir   = cfg["assets_dir"]
     project_path = cfg["projects_dir"] / project_name
@@ -48,10 +54,19 @@ def assemble_video(
         manifest = json.load(f)
 
     videos_dir = project_path / "videos"
-    out_path   = project_path / ("final_" + project_name + ".mp4")
+    base_path  = project_path / ("final_" + project_name + ".mp4")
 
-    if out_path.exists() and not overwrite:
-        logger.info("Output exists: %s -- use --overwrite to regenerate", out_path)
+    # Master audio (song video type): a finished audio file is the ONLY soundtrack,
+    # so there is nothing per-platform to vary -- render just the YouTube variant.
+    master_rel = (manifest.get("project_metadata") or {}).get("master_audio")
+    variants = normalize_bg_tracks(bg_tracks, bg_audio_name, bg_audio_gain_db)
+    if master_rel:
+        variants = [("yt", "", 0.0)]
+    variants = [v for v in variants
+                if overwrite or not platform_path(base_path, v[0]).exists()]
+    if not variants:
+        logger.info("Output exists: %s -- use --overwrite to regenerate",
+                    platform_path(base_path, "yt"))
         return
 
     # Collect per-scene clips in scene order
@@ -66,6 +81,11 @@ def assemble_video(
     if not clip_paths:
         raise RuntimeError("No clips found -- run create_video first")
 
+    for stale in remove_stale_variants(base_path, {"yt"} if master_rel else
+                                       {v[0] for v in normalize_bg_tracks(
+                                           bg_tracks, bg_audio_name, bg_audio_gain_db)}):
+        logger.info("Removed stale variant (no track for it this run): %s", stale.name)
+
     logger.info("Assembling %d clips ...", len(clip_paths))
     # Concatenate per-scene clips with FFmpeg (gapless; trims AAC priming and pads
     # short audio tails with real silence) instead of MoviePy, which otherwise
@@ -74,10 +94,8 @@ def assemble_video(
     ffmpeg_concat_scenes(clip_paths, concat_tmp, fps=cfg["fps"])
     content = clamp_to_video_stream(VideoFileClip(str(concat_tmp)), concat_tmp, cfg["fps"])
 
-    # Master audio (song video type): a finished audio file is the ONLY soundtrack.
-    # Lay it over the whole (silent) video at full volume, trimmed to the video length,
-    # and skip background-audio mixing entirely.
-    master_rel = (manifest.get("project_metadata") or {}).get("master_audio")
+    # Master audio (song video type): lay it over the whole (silent) video at full
+    # volume, trimmed to the video length, and skip background-audio mixing entirely.
     if master_rel:
         master_path = project_path / master_rel
         if master_path.exists():
@@ -92,83 +110,69 @@ def assemble_video(
             content = content.set_audio(song)
         else:
             logger.warning("Master audio not found: %s -- assembling silent", master_path)
-        bg_audio_path = None
-    else:
-        # Background audio
-        bg_audio_path = _resolve_bg_audio(bg_audio_name, assets_dir)
 
-    if master_rel:
-        pass  # song project: master track already set, no background audio
-    elif bg_audio_path and bg_audio_path.exists():
-        logger.info("Background audio: %s", bg_audio_path.name)
-        bg_clip   = AudioFileClip(str(bg_audio_path))
-        repeats   = int(content.duration / bg_clip.duration) + 2
-        bg_looped = concatenate_audioclips([AudioFileClip(str(bg_audio_path))] * repeats)
-        bg_looped = bg_looped.subclip(0, content.duration)
-        bg_volume = cfg["bg_audio_volume"] * (10.0 ** (float(bg_audio_gain_db) / 20.0))
-        logger.info("Background audio gain: %+.1f dB (volume %.3f -> %.3f)",
-                    float(bg_audio_gain_db), cfg["bg_audio_volume"], bg_volume)
-        bg_looped = bg_looped.volumex(bg_volume)
-        bg_looped = bg_looped.audio_fadein(cfg["bg_audio_fadein_s"])
-        bg_looped = bg_looped.audio_fadeout(cfg["bg_audio_fadeout_s"])
-        mixed     = CompositeAudioClip([content.audio, bg_looped]) if content.audio else bg_looped
-        content   = content.set_audio(mixed)
-    else:
-        logger.warning("Background audio not found for key '%s' -- skipping", bg_audio_name)
-
-    # MoviePy write — to temp file if speed or branding will follow
     apply_speed    = abs(speed_factor - 1.0) > 1e-4
     apply_branding = bool(branding_file) and branding_mode and branding_mode != "none"
     needs_postpass = apply_speed or apply_branding
 
-    moviepy_target = (
-        project_path / ("final_" + project_name + "_raw.mp4")
-        if needs_postpass else out_path
-    )
+    for platform, track_name, gain_db in variants:
+        out_path = platform_path(base_path, platform)
+        tag      = PLATFORMS[platform][0]
+        logger.info("=== %s variant -> %s (bg: %s, %+.1f dB) ===",
+                    PLATFORMS[platform][2], out_path.name, track_name or "none", gain_db)
+        variant = content if master_rel else mix_bg_audio(content, track_name, gain_db,
+                                                          cfg, assets_dir)
 
-    logger.info("Writing %s (%.1fs) ...", moviepy_target.name, content.duration)
-    content.write_videofile(
-        str(moviepy_target), fps=cfg["fps"], codec="libx264", audio_codec="aac",
-        temp_audiofile=str(project_path / "final_tmp.m4a"),
-        remove_temp=True, logger=None,
-    )
+        # MoviePy write -- to temp file if speed or branding will follow
+        moviepy_target = (
+            project_path / ("final_" + project_name + tag + "_raw.mp4")
+            if needs_postpass else out_path
+        )
+        logger.info("Writing %s (%.1fs) ...", moviepy_target.name, variant.duration)
+        variant.write_videofile(
+            str(moviepy_target), fps=cfg["fps"], codec="libx264", audio_codec="aac",
+            temp_audiofile=str(project_path / ("final_tmp" + tag + ".m4a")),
+            remove_temp=True, logger=None,
+        )
+
+        # Optional speed pass
+        if apply_speed:
+            logger.info("Applying speed factor %.4f via FFmpeg ...", speed_factor)
+            speed_out = project_path / ("final_" + project_name + tag + "_spd.mp4")
+            _ffmpeg_speed(moviepy_target, speed_out, speed_factor)
+            moviepy_target.unlink(missing_ok=True)
+            moviepy_target = speed_out
+            logger.info("Speed pass complete -> %s", moviepy_target.name)
+
+        # Optional branding concat
+        if apply_branding:
+            branding_path = cfg["branding_dir"] / branding_file
+            if branding_path.exists():
+                logger.info("Attaching branding (%s) as %s ...", branding_file, branding_mode)
+                branded_out = project_path / ("final_" + project_name + tag + "_branded.mp4")
+                _ffmpeg_branding_concat(branding_path, moviepy_target, branded_out, branding_mode)
+                moviepy_target.unlink(missing_ok=True)
+                moviepy_target = branded_out
+                logger.info("Branding pass complete -> %s", moviepy_target.name)
+            else:
+                logger.warning("Branding file not found: %s -- skipping", branding_path)
+
+        # Move to final path if not already there
+        if moviepy_target != out_path:
+            if out_path.exists():
+                out_path.unlink()
+            moviepy_target.rename(out_path)
+        logger.info("Done: %s", out_path)
 
     content.close()
     concat_tmp.unlink(missing_ok=True)
 
-    # Optional speed pass
-    if apply_speed:
-        logger.info("Applying speed factor %.4f via FFmpeg ...", speed_factor)
-        speed_out = project_path / ("final_" + project_name + "_spd.mp4")
-        _ffmpeg_speed(moviepy_target, speed_out, speed_factor)
-        moviepy_target.unlink(missing_ok=True)
-        moviepy_target = speed_out
-        logger.info("Speed pass complete -> %s", moviepy_target.name)
-
-    # Optional branding concat
-    if apply_branding:
-        branding_path = cfg["branding_dir"] / branding_file
-        if branding_path.exists():
-            logger.info("Attaching branding (%s) as %s ...", branding_file, branding_mode)
-            branded_out = project_path / ("final_" + project_name + "_branded.mp4")
-            _ffmpeg_branding_concat(branding_path, moviepy_target, branded_out, branding_mode)
-            moviepy_target.unlink(missing_ok=True)
-            moviepy_target = branded_out
-            logger.info("Branding pass complete -> %s", moviepy_target.name)
-        else:
-            logger.warning("Branding file not found: %s -- skipping", branding_path)
-
-    # Move to final path if not already there
-    if moviepy_target != out_path:
-        if out_path.exists():
-            out_path.unlink()
-        moviepy_target.rename(out_path)
-
     # Auto-thumbnail: record where in the FINAL video the first "clean" pause sits
-    # (a silent pause freezes the previous scene's image WITHOUT a subtitle — an
+    # (a silent pause freezes the previous scene's image WITHOUT a subtitle -- an
     # ideal cover frame). Stored as video_info.thumb_offset_ms so the Instagram
     # upload can default its cover frame to it. Computed here because only the
     # assembler knows the true clip durations plus the branding/speed offsets.
+    # Identical for every platform variant (only the background music differs).
     intro_dur_s = 0.0
     if apply_branding and branding_mode in ("intro", "both"):
         bp = cfg["branding_dir"] / branding_file
@@ -184,7 +188,31 @@ def assemble_video(
     except Exception as e:
         logger.warning("Could not compute thumbnail offset: %s", e)
 
-    logger.info("Done: %s", out_path)
+
+def mix_bg_audio(content, track_name, gain_db, cfg, assets_dir):
+    """Return `content` with the background track looped under its audio at
+    [assembly] bg_audio_volume * 10^(gain_db/20), faded in/out. The input clip is
+    left untouched, so it can be mixed again with another platform's track.
+    A blank/unknown track name returns the clip unchanged."""
+    if not track_name:
+        return content
+    bg_audio_path = _resolve_bg_audio(track_name, assets_dir)
+    if not (bg_audio_path and bg_audio_path.exists()):
+        logger.warning("Background audio not found for key '%s' -- skipping", track_name)
+        return content
+    logger.info("Background audio: %s", bg_audio_path.name)
+    bg_clip   = AudioFileClip(str(bg_audio_path))
+    repeats   = int(content.duration / bg_clip.duration) + 2
+    bg_looped = concatenate_audioclips([AudioFileClip(str(bg_audio_path))] * repeats)
+    bg_looped = bg_looped.subclip(0, content.duration)
+    bg_volume = cfg["bg_audio_volume"] * (10.0 ** (float(gain_db) / 20.0))
+    logger.info("Background audio gain: %+.1f dB (volume %.3f -> %.3f)",
+                float(gain_db), cfg["bg_audio_volume"], bg_volume)
+    bg_looped = bg_looped.volumex(bg_volume)
+    bg_looped = bg_looped.audio_fadein(cfg["bg_audio_fadein_s"])
+    bg_looped = bg_looped.audio_fadeout(cfg["bg_audio_fadeout_s"])
+    mixed     = CompositeAudioClip([content.audio, bg_looped]) if content.audio else bg_looped
+    return content.set_audio(mixed)
 
 
 def _compute_thumb_offset_ms(manifest, videos_dir, intro_dur_s, speed_factor):
@@ -533,7 +561,7 @@ def _resolve_bg_audio(key, assets_dir):
     try:
         index = load_background_audio_index(assets_dir)
         if key in index:
-            rel = index[key].get("file_path", "")
+            rel = index[key].get("full_path") or index[key].get("file_path", "")
             if rel:
                 return assets_dir / rel
     except Exception as e:
@@ -550,6 +578,12 @@ def main():
     p.add_argument("--bg-audio-gain-db", type=float, default=0.0, dest="bg_audio_gain_db",
                    help="Adjust background audio volume in dB relative to config "
                         "(positive = louder, negative = quieter, 0 = unchanged)")
+    p.add_argument("--bg-audio-meta", default=None, dest="bg_audio_meta",
+                   help="Meta-safe track -> also writes final_<project>_Meta.mp4")
+    p.add_argument("--bg-audio-meta-gain-db", type=float, default=0.0, dest="bg_audio_meta_gain_db")
+    p.add_argument("--bg-audio-tiktok", default=None, dest="bg_audio_tiktok",
+                   help="TikTok track -> also writes final_<project>_TikTok.mp4")
+    p.add_argument("--bg-audio-tiktok-gain-db", type=float, default=0.0, dest="bg_audio_tiktok_gain_db")
     p.add_argument("--speed-factor", type=float, default=None, dest="speed_factor",
                    help="Playback speed multiplier (0.95 = 5 percent slower)")
     p.add_argument("--branding-file", dest="branding_file", default=None,
@@ -562,7 +596,17 @@ def main():
         a.project_name, a.bg_audio_name, a.overwrite, a.speed_factor,
         branding_file=a.branding_file, branding_mode=a.branding_mode,
         bg_audio_gain_db=a.bg_audio_gain_db,
+        bg_tracks=cli_bg_tracks(a),
     )
+
+
+def cli_bg_tracks(a):
+    """bg_tracks from the --bg-audio[-meta|-tiktok][-gain-db] CLI flags."""
+    return {
+        "yt":     {"name": a.bg_audio_name or "", "gain_db": a.bg_audio_gain_db},
+        "meta":   {"name": a.bg_audio_meta or "", "gain_db": a.bg_audio_meta_gain_db},
+        "tiktok": {"name": a.bg_audio_tiktok or "", "gain_db": a.bg_audio_tiktok_gain_db},
+    }
 
 
 if __name__ == "__main__":

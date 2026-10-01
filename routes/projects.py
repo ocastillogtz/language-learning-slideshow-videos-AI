@@ -3,6 +3,7 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, abort
 
 from core import PROJECTS_DIR, cfg
+from platform_audio import any_variant_exists
 
 bp = Blueprint("projects", __name__, url_prefix="")
 
@@ -89,7 +90,7 @@ def _summarise_project(d: Path, m: dict) -> dict:
         "has_script":       bool(tts_scenes),
         "has_audio":        any(s["audio"].get("file_path") for s in tts_scenes),
         "has_images":       bool(img_scenes),
-        "has_video":        (d / f"final_{d.name}.mp4").exists(),
+        "has_video":        any_variant_exists(d / f"final_{d.name}.mp4"),
     }
 
 

@@ -26,7 +26,8 @@ Shorts
     select_shorts() asks GPT for the best self-contained stretches of the episode
     (dialog index ranges, stored in manifest["podcast"]["shorts"]). build_shorts()
     renders only those scenes as vertical clips into videos/v/ and assembles
-    final_<project>_short<N>.mp4 with a corner label and a "full episode" end card.
+    final_<project>_short<N>_YT.mp4 (+ _Meta twin) with a corner label and a
+    "full episode" end card.
 """
 
 import hashlib
@@ -370,9 +371,11 @@ def short_scene_ids(scenes: list[dict], start: int, end: int) -> list[str]:
 def build_shorts(project_name: str, overwrite: bool = False, annotated_subtitles: bool = False,
                  bg_audio_name: str | None = None, bg_audio_gain_db: float | None = None,
                  speed_factor: float | None = None, branding_file: str | None = None,
-                 branding_mode: str = "none", only: list[int] | None = None) -> list[Path]:
+                 branding_mode: str = "none", only: list[int] | None = None,
+                 bg_tracks: dict | None = None) -> list[Path]:
     """Render the chosen moments as vertical clips (videos/v/) and assemble each into
-    final_<project>_short<N>.mp4. `only` = 1-based short numbers to build (None = all)."""
+    final_<project>_short<N>_YT.mp4 (+ _Meta/_TikTok twins when bg_tracks names a
+    track for that platform). `only` = 1-based short numbers to build (None = all)."""
     import assemble_reading as ar
     from create_video import create_videos
 
@@ -414,11 +417,13 @@ def build_shorts(project_name: str, overwrite: bool = False, annotated_subtitles
             [v_dir / f"{sid}.mp4" for sid in groups[n]], out, fcfg, cfg["assets_dir"], project,
             bg_audio_name or "", float(speed_factor), branding_file, branding_mode, overwrite,
             tag=f"short{n}", corner_label=cfg["podcast_short_label"] or None,
-            add_continuation=True, bg_audio_gain_db=bg_audio_gain_db,
+            add_continuation=True, bg_audio_gain_db=bg_audio_gain_db, bg_tracks=bg_tracks,
         )
         if res:
-            shorts[n - 1]["file"] = res.name
-            outputs.append(res)
+            # "file" = the YouTube variant (or the first one built); "files" = all of them.
+            shorts[n - 1]["file"]  = (res.get("yt") or next(iter(res.values()))).name
+            shorts[n - 1]["files"] = {k: v.name for k, v in res.items()}
+            outputs.extend(res.values())
 
     manifest.setdefault("podcast", {})["shorts"] = shorts
     man_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")

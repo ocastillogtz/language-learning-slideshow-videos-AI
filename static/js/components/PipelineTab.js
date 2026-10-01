@@ -599,11 +599,141 @@ function VideoFields() {
   );
 }
 
+// ── per-platform background music ─────────────────────────────────────────────
+// YouTube Audio Library tracks ("YTsafe") get long Instagram videos blocked, so
+// each platform can get its own track + volume. Every chosen track renders its own
+// file: final_<p>_YT.mp4 (always), final_<p>_Meta.mp4 (only if a Meta track is
+// picked), final_<p>_TikTok.mp4 (prepared — flip TIKTOK_ENABLED once TikTok exists).
+const TIKTOK_ENABLED = false;
+const BG_PLATFORMS = [
+  { key:"yt",     label:"YouTube",  suffix:"_YT",     license:"YTsafe"     },
+  { key:"meta",   label:"Meta",     suffix:"_Meta",   license:"Metasafe"   },
+  { key:"tiktok", label:"TikTok",   suffix:"_TikTok", license:"TikToksafe" },
+];
+
+function emptyBgTracks(ytName = "", ytGain = "0") {
+  return {
+    yt:     { name: ytName, gain_db: ytGain },
+    meta:   { name: "",     gain_db: "0" },
+    tiktok: { name: "",     gain_db: "0" },
+  };
+}
+
+// UI state → request payload ({platform: {name, gain_db:number|null}}).
+function bgTracksPayload(t) {
+  const out = {};
+  BG_PLATFORMS.forEach(p => {
+    if (p.key === "tiktok" && !TIKTOK_ENABLED) return;
+    const s = t[p.key] || {};
+    out[p.key] = { name: (s.name || "").trim(),
+                   gain_db: s.gain_db !== "" && s.gain_db != null ? parseFloat(s.gain_db) : null };
+  });
+  return out;
+}
+
+// Saved render_settings.bg_tracks → UI state (merged over the defaults).
+function bgTracksFromSaved(saved, base) {
+  const out = { ...base };
+  BG_PLATFORMS.forEach(p => {
+    const s = saved && saved[p.key];
+    if (s) out[p.key] = { name: s.name || "", gain_db: s.gain_db != null ? String(s.gain_db) : "0" };
+  });
+  return out;
+}
+
+function useBgAudioTracks() {
+  const [tracks, setTracks] = useState([]);
+  useEffect(() => {
+    fetch("/assets/background-audio")
+      .then(r => r.json())
+      .then(d => setTracks(Object.values(d).sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => {});
+  }, []);
+  return tracks;
+}
+
+function gainHintText(v) {
+  const n = parseFloat(v);
+  return isNaN(n) || Math.abs(n) < 0.05
+    ? "config default"
+    : n > 0 ? `+${n.toFixed(1)} dB louder` : `${n.toFixed(1)} dB quieter`;
+}
+
+// value/onChange = the {yt, meta, tiktok} state. ytBlankLabel: when set, YouTube may be
+// left blank (e.g. "config default"); otherwise a YouTube track is always selected.
+function PlatformBgAudioFields({ value, onChange, tracks, ytBlankLabel, fileHint }) {
+  const set = (pk, key, v) => onChange({ ...value, [pk]: { ...value[pk], [key]: v } });
+  const groups = (license) => {
+    // The platform's own safe tracks first, then the others.
+    const order = [license, ...["YTsafe", "Metasafe", "TikToksafe"].filter(l => l !== license), ""];
+    return order.map(l => ({
+      l, items: tracks.filter(t => (t.license || "") === l),
+    })).filter(g => g.items.length);
+  };
+  return (
+    <div style={{display:"flex", flexDirection:"column", gap:".35rem"}}>
+      {BG_PLATFORMS.map(p => {
+        const disabled = p.key === "tiktok" && !TIKTOK_ENABLED;
+        const s = value[p.key] || { name: "", gain_db: "0" };
+        const picked = tracks.find(t => t.name === s.name);
+        const offLicense = picked && s.name && picked.license !== p.license;
+        const blank = p.key === "yt" ? ytBlankLabel : "none — no " + p.suffix + " file";
+        return (
+          <div key={p.key} className="field-row" style={{opacity: disabled ? .5 : 1, alignItems:"flex-end"}}>
+            <div className="field" style={{flex:2}}>
+              <label>{p.label} background
+                <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
+                  {disabled ? "(coming soon)" : `→ ${p.suffix}.mp4`}
+                </span>
+              </label>
+              {tracks.length > 0 ? (
+                <select value={s.name} disabled={disabled}
+                  onChange={e => set(p.key, "name", e.target.value)}>
+                  {blank && <option value="">— {blank} —</option>}
+                  {groups(p.license).map(g => (
+                    <optgroup key={g.l || "other"} label={g.l || "other (unlabelled)"}>
+                      {g.items.map(t => (
+                        <option key={t.name} value={t.name}>
+                          {t.name}{t.description && t.description !== t.license ? ` — ${t.description}` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              ) : (
+                <input value={s.name} disabled={disabled} placeholder={blank || "e.g. office"}
+                  onChange={e => set(p.key, "name", e.target.value)}/>
+              )}
+              {offLicense && !disabled && (
+                <div style={{fontSize:".74rem", color:"var(--warn, #f59e0b)", marginTop:".2rem"}}>
+                  ⚠ {picked.license ? `${picked.license} track` : "unlabelled track"} — not marked {p.license}
+                </div>
+              )}
+            </div>
+            <div className="field" style={{flex:1}}>
+              <label>Volume
+                <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
+                  ({gainHintText(s.gain_db)})
+                </span>
+              </label>
+              <input type="number" min="-30" max="30" step="0.5" value={s.gain_db}
+                disabled={disabled || (p.key !== "yt" && !s.name)}
+                onChange={e => set(p.key, "gain_db", e.target.value)} placeholder="0"/>
+            </div>
+          </div>
+        );
+      })}
+      <div style={{fontSize:".74rem", color:"var(--muted)", fontStyle:"italic"}}>
+        {fileHint || "Each chosen track renders its own file."} No Meta track = only the YouTube file.
+      </div>
+    </div>
+  );
+}
+
 function AssembleFields() {
   const { manifest, currentProject } = useApp();
-  const [bgAudio,       setBgAudio]       = useState("office");
-  const [bgAudioTracks, setBgAudioTracks] = useState([]);
-  const [bgGainDb,      setBgGainDb]      = useState("0");
+  const bgAudioTracks = useBgAudioTracks();
+  const [bgTracks,      setBgTracks]      = useState(() => emptyBgTracks("office"));
   const [speedFactor,   setSpeedFactor]   = useState("1.0");
   const [overwrite,     setOverwrite]     = useState(false);
   const [brandingFile,  setBrandingFile]  = useState("");
@@ -618,33 +748,32 @@ function AssembleFields() {
     appliedFor.current = currentProject;
     const s = manifest.render_settings && manifest.render_settings.assemble;
     if (!s) return;
-    if (s.bg_audio_name)          setBgAudio(s.bg_audio_name);
-    if (s.bg_audio_gain_db != null) setBgGainDb(String(s.bg_audio_gain_db));
+    setBgTracks(bgTracksFromSaved(s.bg_tracks,
+      emptyBgTracks(s.bg_audio_name || "office",
+                    s.bg_audio_gain_db != null ? String(s.bg_audio_gain_db) : "0")));
     if (s.speed_factor != null)   setSpeedFactor(String(s.speed_factor));
     if (s.branding_file)          setBrandingFile(s.branding_file);
     if (s.branding_mode)          setBrandingMode(s.branding_mode);
   }, [manifest, currentProject]);
 
   AssembleFields._getPayload = () => ({
-    bg_audio_name: bgAudio,
-    bg_audio_gain_db: bgGainDb !== "" ? parseFloat(bgGainDb) : 0,
+    bg_audio_name: bgTracks.yt.name,
+    bg_audio_gain_db: bgTracks.yt.gain_db !== "" ? parseFloat(bgTracks.yt.gain_db) : 0,
+    bg_tracks: bgTracksPayload(bgTracks),
     overwrite,
     speed_factor:  speedFactor !== "" ? parseFloat(speedFactor) : null,
     branding_file: brandingMode !== "none" ? brandingFile : null,
     branding_mode: brandingMode,
   });
 
+  // A YouTube track is always selected here — snap an unknown name to the first track.
   useEffect(() => {
-    fetch("/assets/background-audio")
-      .then(r => r.json())
-      .then(d => {
-        const tracks = Object.values(d).sort((a, b) => a.name.localeCompare(b.name));
-        setBgAudioTracks(tracks);
-        if (tracks.length > 0 && !tracks.find(t => t.name === bgAudio)) {
-          setBgAudio(tracks[0].name);
-        }
-      })
-      .catch(() => {});
+    if (bgAudioTracks.length > 0 && !bgAudioTracks.find(t => t.name === bgTracks.yt.name)) {
+      setBgTracks(t => ({ ...t, yt: { ...t.yt, name: bgAudioTracks[0].name } }));
+    }
+  }, [bgAudioTracks]);
+
+  useEffect(() => {
     fetch("/assets/branding/list")
       .then(r => r.json())
       .then(d => {
@@ -663,40 +792,11 @@ function AssembleFields() {
       : `${((speedNum - 1) * 100).toFixed(1)} % faster`
     : "normal speed";
 
-  const gainNum  = parseFloat(bgGainDb);
-  const gainHint = isNaN(gainNum) || Math.abs(gainNum) < 0.05
-    ? "config default"
-    : gainNum > 0 ? `+${gainNum.toFixed(1)} dB louder` : `${gainNum.toFixed(1)} dB quieter`;
-
   return (
     <div className="fields">
+      <PlatformBgAudioFields value={bgTracks} onChange={setBgTracks} tracks={bgAudioTracks}
+        fileHint="Writes final_<project>_YT.mp4, plus final_<project>_Meta.mp4 when a Meta track is picked."/>
       <div className="field-row">
-        <div className="field" style={{flex:2}}>
-          <label>Background Audio</label>
-          {bgAudioTracks.length > 0 ? (
-            <select value={bgAudio} onChange={e=>setBgAudio(e.target.value)}>
-              {bgAudioTracks.map(t => (
-                <option key={t.name} value={t.name}>{t.name} — {t.description}</option>
-              ))}
-            </select>
-          ) : (
-            <input value={bgAudio} onChange={e=>setBgAudio(e.target.value)}
-              placeholder="e.g. office, elevator"/>
-          )}
-        </div>
-        <div className="field" style={{flex:1}}>
-          <label>Bg Volume
-            <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
-              ({gainHint})
-            </span>
-          </label>
-          <input
-            type="number" min="-30" max="12" step="0.5"
-            value={bgGainDb}
-            onChange={e => setBgGainDb(e.target.value)}
-            placeholder="0"
-          />
-        </div>
         <div className="field" style={{flex:1}}>
           <label>Speed Factor
             <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
@@ -1049,8 +1149,9 @@ function ReadingHorizFields() {
 }
 
 function ReadingAssembleFields() {
-  const [bg, setBg]             = React.useState("office");
-  const [bgGainDb, setBgGainDb] = React.useState("0");
+  const bgAudioTracks           = useBgAudioTracks();
+  // Blank YouTube track = [reading] bg_audio_name / bg_audio_gain_db in config.ini.
+  const [bgTracks, setBgTracks] = React.useState(() => emptyBgTracks("", ""));
   const [overwrite, setOverwrite] = React.useState(false);
   const [parts, setParts]       = React.useState(true);
   const [long, setLong]         = React.useState(true);
@@ -1060,8 +1161,9 @@ function ReadingAssembleFields() {
   const [brandingFile, setBrandingFile] = React.useState("");
   const [brandingFiles, setBrandingFiles] = React.useState([]);
   ReadingAssembleFields._getPayload = () => ({
-    bg_audio_name: bg, overwrite, make_parts: parts, make_long: long,
-    bg_audio_gain_db: bgGainDb !== "" ? parseFloat(bgGainDb) : 0,
+    bg_audio_name: bgTracks.yt.name || null, overwrite, make_parts: parts, make_long: long,
+    bg_audio_gain_db: bgTracks.yt.gain_db !== "" ? parseFloat(bgTracks.yt.gain_db) : null,
+    bg_tracks: bgTracksPayload(bgTracks),
     branding_mode: brandingOn && brandingFile ? "intro" : "none",
     branding_file: brandingOn ? brandingFile : null,
     per_part: perPart !== "" ? parseInt(perPart, 10) : null,
@@ -1087,23 +1189,12 @@ function ReadingAssembleFields() {
       : `${((speedNum - 1) * 100).toFixed(1)} % faster`
     : "normal speed";
 
-  const rtGainNum  = parseFloat(bgGainDb);
-  const rtGainHint = isNaN(rtGainNum) || Math.abs(rtGainNum) < 0.05
-    ? "config default"
-    : rtGainNum > 0 ? `+${rtGainNum.toFixed(1)} dB louder` : `${rtGainNum.toFixed(1)} dB quieter`;
-
   return (
     <div className="fields">
+      <PlatformBgAudioFields value={bgTracks} onChange={setBgTracks} tracks={bgAudioTracks}
+        ytBlankLabel="config.ini [reading] default"
+        fileHint="Each part and the long video get a _YT file, plus a _Meta twin when a Meta track is picked."/>
       <div className="field-row">
-        <div className="field"><label>Background Audio</label>
-          <input value={bg} onChange={e=>setBg(e.target.value)} placeholder="e.g. office, park"/></div>
-        <div className="field"><label>Bg Volume
-            <span style={{marginLeft:".4rem", fontWeight:300, color:"var(--muted)"}}>
-              ({rtGainHint})
-            </span>
-          </label>
-          <input type="number" min="-30" max="12" step="0.5" value={bgGainDb}
-            onChange={e=>setBgGainDb(e.target.value)} placeholder="0"/></div>
         <div className="field"><label>Sentences per vertical part</label>
           <input type="number" min="1" max="20" value={perPart} onChange={e=>setPerPart(e.target.value)}/></div>
       </div>
@@ -1276,7 +1367,8 @@ function PodcastShortsFields({ projectName }) {
   const [selected,  setSelected]  = React.useState(() => new Set(saved.map((_, i) => i + 1)));
   const [overwrite, setOverwrite] = React.useState(false);
   const [annotated, setAnnotated] = React.useState(false);
-  const [bg,        setBg]        = React.useState("");
+  const bgAudioTracks             = useBgAudioTracks();
+  const [bgTracks,  setBgTracks]  = React.useState(() => emptyBgTracks("", ""));
   const [busy,      setBusy]      = React.useState("");
 
   // Re-sync when the manifest's saved moments change (script re-run, GPT re-pick).
@@ -1309,7 +1401,9 @@ function PodcastShortsFields({ projectName }) {
       .sort((a, b) => a.s.start - b.s.start);
     return {
       overwrite, annotated_subtitles: annotated,
-      bg_audio_name: bg.trim() || null,        // blank → [podcast] short_bg_audio_name
+      bg_audio_name: bgTracks.yt.name.trim() || null,        // blank → [podcast] short_bg_audio_name
+      bg_audio_gain_db: bgTracks.yt.gain_db !== "" ? parseFloat(bgTracks.yt.gain_db) : null,
+      bg_tracks: bgTracksPayload(bgTracks),
       shorts: order.map(o => o.s),             // saved before the build starts
       only: order.map((o, i) => o.on ? i + 1 : 0).filter(Boolean),
     };
@@ -1398,11 +1492,9 @@ function PodcastShortsFields({ projectName }) {
         </button>
       </div>
 
-      <div className="field-row">
-        <div className="field"><label>Background audio
-            <span style={{color:"var(--muted)",fontWeight:300}}> (blank = config.ini [podcast])</span></label>
-          <input value={bg} onChange={e=>setBg(e.target.value)} placeholder="e.g. office"/></div>
-      </div>
+      <PlatformBgAudioFields value={bgTracks} onChange={setBgTracks} tracks={bgAudioTracks}
+        ytBlankLabel="config.ini [podcast] default"
+        fileHint="Each Short gets final_<project>_shortN_YT.mp4, plus a _Meta twin when a Meta track is picked."/>
       <div className="toggle-row">
         <input type="checkbox" id="f_pc_ann" checked={annotated} onChange={e=>setAnnotated(e.target.checked)}/>
         <label htmlFor="f_pc_ann">Grammar-annotated subtitles</label>
@@ -1413,7 +1505,7 @@ function PodcastShortsFields({ projectName }) {
       </div>
       <div style={{fontSize:".78rem", color:"var(--muted)"}}>
         Renders the ticked moments as vertical clips (<code>videos/v/</code>) using the vertical studio image
-        and the episode's example images, then writes <code>final_&lt;project&gt;_shortN.mp4</code> with the
+        and the episode's example images, then writes <code>final_&lt;project&gt;_shortN_YT.mp4</code> (+ <code>_Meta</code>) with the
         corner label and the “full episode” end card from config.ini [podcast]. Titles and descriptions
         (with the episode link) are in <code>shorts.txt</code>. Needs the episode's audio and images first.
       </div>
@@ -1608,7 +1700,7 @@ function makeSteps(projectName, manifest) {
         Fields: ReadingHorizFields, payload:()=>ReadingHorizFields._getPayload?.()||{},
         endpoint:n=>`/projects/${n}/run/video` },
       { id:"reading_assemble", num:7, title:"Assemble Parts + Long",
-        desc:"final_part1..N.mp4 (vertical) + final_long.mp4 (horizontal).",
+        desc:"final_part1..N_YT.mp4 (vertical) + final_long_YT.mp4 (horizontal), + _Meta twins.",
         Fields: ReadingAssembleFields, payload:()=>ReadingAssembleFields._getPayload?.()||{},
         endpoint:n=>`/projects/${n}/run/reading_assemble` },
       { id:"upload", num:8, title:"Upload to YouTube", desc:"Metadata auto-read from manifest.",
