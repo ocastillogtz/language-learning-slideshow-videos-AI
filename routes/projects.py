@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, abort
 
-from core import PROJECTS_DIR, cfg
+import db
+from core import projects_dir, get_cfg
 from platform_audio import any_variant_exists
 
 bp = Blueprint("projects", __name__, url_prefix="")
@@ -10,11 +11,11 @@ bp = Blueprint("projects", __name__, url_prefix="")
 
 @bp.route("/project-files/<path:filepath>")
 def serve_project_file(filepath):
-    full = PROJECTS_DIR / filepath
+    full = projects_dir() / filepath
     if not full.exists() or not full.is_file():
         abort(404)
     try:
-        full.resolve().relative_to(PROJECTS_DIR.resolve())
+        full.resolve().relative_to(projects_dir().resolve())
     except ValueError:
         abort(403)
     return send_file(full)
@@ -22,44 +23,67 @@ def serve_project_file(filepath):
 
 @bp.route("/projects")
 def list_projects():
+    """Project cards for the sidebar. Summaries are cached in the workspace's project
+    index (data/pipeline.db) and only re-read when a manifest's mtime changes; the
+    same pass records which assets each project uses ("used by" in the Assets view)."""
     try:
-        if not PROJECTS_DIR.exists():
+        pdir = projects_dir()
+        if not pdir.exists():
             return jsonify([])
+        ws    = get_cfg()["workspace"]
+        index = db.get_project_index(ws) if ws else {}
 
-        projects = []
-        for d in PROJECTS_DIR.iterdir():
-            if not d.is_dir():
-                continue
+        out, seen = [], set()
+        for d in pdir.iterdir():
             mp = d / "project_manifest.json"
-            if not mp.exists():
+            if not d.is_dir() or not mp.exists():
                 continue
-            try:
-                with open(mp, encoding="utf-8") as f:
-                    m = json.load(f)
-            except Exception:
-                continue  # skip unreadable manifests
-            projects.append((d, m))
+            seen.add(d.name)
+            mtime  = mp.stat().st_mtime
+            cached = index.get(d.name)
+            if cached and cached["mtime"] == mtime:
+                summary = cached["summary"]
+            else:
+                try:
+                    with open(mp, encoding="utf-8") as f:
+                        m = json.load(f)
+                    summary = _summarise_project(d, m)
+                except Exception:
+                    # Never let one bad manifest break the whole list
+                    out.append({"name": d.name, "error": "could not parse manifest"})
+                    continue
+                if ws:
+                    db.upsert_project_index(ws, d.name, mtime, summary, _asset_usage(m))
+            # The final video can appear without the manifest changing — check live.
+            summary = {**summary, "has_video": any_variant_exists(d / f"final_{d.name}.mp4")}
+            out.append(summary)
+        if ws:
+            db.prune_project_index(ws, seen)
 
-        # Sort newest first — handle both old ("project.created_at") and new ("project_metadata.creation_date") schemas
-        def _sort_key(pair):
-            _, m = pair
-            return (
-                m.get("project_metadata", {}).get("creation_date")
-                or m.get("project", {}).get("created_at")
-                or ""
-            )
-
-        out = []
-        for d, m in sorted(projects, key=_sort_key, reverse=True):
-            try:
-                out.append(_summarise_project(d, m))
-            except Exception:
-                # Never let one bad manifest break the whole list
-                out.append({"name": d.name, "error": "could not parse manifest"})
-
+        # Newest first
+        out.sort(key=lambda s: s.get("created_at") or "", reverse=True)
         return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _asset_usage(m: dict) -> list[tuple[str, str]]:
+    """(kind, key) of every catalog asset a manifest references."""
+    gen   = m.get("generation_config") or {}
+    meta  = m.get("project_metadata") or {}
+    usage = [("characters", c) for c in gen.get("characters") or [] if isinstance(c, str)]
+    usage.append(("locations", gen.get("location_key") or m.get("location-key")))
+    usage.append(("project_types", meta.get("project_type_key") or m.get("style")))
+    # Music / branding chosen at assembly time (render_settings.<step>.*)
+    for rs in (m.get("render_settings") or {}).values():
+        if not isinstance(rs, dict):
+            continue
+        usage.append(("background_audio", rs.get("bg_audio_name")))
+        for spec in (rs.get("bg_tracks") or {}).values():
+            if isinstance(spec, dict):
+                usage.append(("background_audio", spec.get("name")))
+        usage.append(("branding_files", rs.get("branding_file")))
+    return [(k, v) for k, v in usage if isinstance(v, str) and v]
 
 
 def _summarise_project(d: Path, m: dict) -> dict:
@@ -90,14 +114,13 @@ def _summarise_project(d: Path, m: dict) -> dict:
         "has_script":       bool(tts_scenes),
         "has_audio":        any(s["audio"].get("file_path") for s in tts_scenes),
         "has_images":       bool(img_scenes),
-        "has_video":        any_variant_exists(d / f"final_{d.name}.mp4"),
     }
 
 
 @bp.route("/projects/<name>")
 def get_project(name):
     try:
-        mp = PROJECTS_DIR / name / "project_manifest.json"
+        mp = projects_dir() / name / "project_manifest.json"
         if not mp.exists():
             return jsonify({"error": "Not found"}), 404
         # Self-heal: back-fill image/audio paths for files that exist on disk but
@@ -138,7 +161,7 @@ def update_scene(name: str, scene_id: str):
     """
     try:
         data = request.get_json() or {}
-        mp   = PROJECTS_DIR / name / "project_manifest.json"
+        mp   = projects_dir() / name / "project_manifest.json"
         if not mp.exists():
             return jsonify({"error": "Project not found"}), 404
 
@@ -182,7 +205,7 @@ def update_scene(name: str, scene_id: str):
             scene["subtitle_text"] = " ".join(s["text"] for s in clean if s["text"]).strip() or None
             # Drop the stale rendered clip so a re-render picks up the new lyrics even
             # without the "overwrite" toggle (the per-scene video regen also works).
-            clip = PROJECTS_DIR / name / "videos" / f"{scene_id}.mp4"
+            clip = projects_dir() / name / "videos" / f"{scene_id}.mp4"
             if clip.exists():
                 clip.unlink()
 
@@ -222,7 +245,7 @@ def update_scene(name: str, scene_id: str):
             audio = scene.get("audio") or {}
             if audio.get("type") == "tts":
                 from utils_config import load_new_characters
-                chars_data = load_new_characters(cfg["assets_dir"])
+                chars_data = load_new_characters(get_cfg()["assets_dir"])
                 if data["speaker"] in chars_data:
                     audio["voice_id"] = chars_data[data["speaker"]].get("voice_id", audio.get("voice_id"))
 

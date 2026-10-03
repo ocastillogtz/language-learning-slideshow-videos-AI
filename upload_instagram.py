@@ -395,10 +395,8 @@ def upload_instagram(file_path: Path, caption: str = "", share_to_feed: bool = T
 
 def _read_manifest(project_name: str) -> dict:
     try:
-        import configparser
-        cfg = configparser.ConfigParser()
-        cfg.read("config.ini")
-        projects_dir = Path(cfg["paths"]["projects_dir"])
+        from utils_config import load_config
+        projects_dir = Path(load_config()["projects_dir"])
     except Exception:
         projects_dir = Path("projects")
     path = projects_dir / project_name / "project_manifest.json"
@@ -410,10 +408,8 @@ def _read_manifest(project_name: str) -> dict:
 
 def _final_video_path(project_name: str) -> Path:
     try:
-        import configparser
-        cfg = configparser.ConfigParser()
-        cfg.read("config.ini")
-        projects_dir = Path(cfg["paths"]["projects_dir"])
+        from utils_config import load_config
+        projects_dir = Path(load_config()["projects_dir"])
     except Exception:
         projects_dir = Path("projects")
     from platform_audio import find_variant, META_PREFER

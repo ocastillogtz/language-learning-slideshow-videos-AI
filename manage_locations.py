@@ -30,7 +30,8 @@ from pathlib import Path
 import fal_client
 from dotenv import load_dotenv
 
-from utils_config import load_config
+import db
+from utils_config import load_config, workspace_for_assets_dir
 
 load_dotenv()
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -40,44 +41,15 @@ ALL_CHARACTERS = ["Amir", "Mario", "Sani", "Olena", "Zahra", "Wiebke"]
 
 
 # ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-def _locs_path(assets_dir: Path) -> Path:
-    return assets_dir / "locations" / "locations.json"
-
-def _registry_path(assets_dir: Path) -> Path:
-    return assets_dir / "assets.json"
-
-
-# ---------------------------------------------------------------------------
-# Load / Save
+# Load / Save — the catalog lives in data/pipeline.db (see db.py), one per workspace;
+# `assets_dir` selects the workspace whose assets folder it is.
 # ---------------------------------------------------------------------------
 
 def load_locations(assets_dir: Path) -> dict:
-    path = _locs_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return db.load_assets("locations", workspace_for_assets_dir(assets_dir))
 
 def save_locations(assets_dir: Path, data: dict) -> None:
-    path = _locs_path(assets_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-def load_registry(assets_dir: Path) -> dict:
-    path = _registry_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-def save_registry(assets_dir: Path, data: dict) -> None:
-    path = _registry_path(assets_dir)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    db.save_assets("locations", data, workspace_for_assets_dir(assets_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +84,6 @@ def add_location(
     locs[name] = entry
     save_locations(assets_dir, locs)
 
-    registry = load_registry(assets_dir)
-    registry.setdefault("locations", {})[name] = {
-        "config": f"locations/locations.json#{name}"
-    }
-    save_registry(assets_dir, registry)
 
     logger.info(f"Location '{name}' added.")
     return entry
@@ -144,9 +111,6 @@ def remove_location(assets_dir: Path, name: str) -> None:
     del locs[name]
     save_locations(assets_dir, locs)
 
-    registry = load_registry(assets_dir)
-    registry.get("locations", {}).pop(name, None)
-    save_registry(assets_dir, registry)
     logger.info(f"Location '{name}' removed.")
 
 
@@ -161,9 +125,9 @@ def generate_location_art(assets_dir: Path, name: str) -> dict:
     if not prompt:
         raise ValueError(f"Location '{name}' has no creation_prompt set.")
 
-    loc_dir = assets_dir / "locations"
+    loc_dir = assets_dir / "locations" / name
     loc_dir.mkdir(parents=True, exist_ok=True)
-    out_path = loc_dir / f"{name}.png"
+    out_path = loc_dir / "background.png"
 
     cfg = load_config()
     model = cfg.get("fal_t2i_model", "fal-ai/flux/dev")
@@ -178,7 +142,7 @@ def generate_location_art(assets_dir: Path, name: str) -> dict:
     url = result["images"][0]["url"]
     urllib.request.urlretrieve(url, out_path)
 
-    locs[name]["artwork_file_path"] = f"locations/{name}.png"
+    locs[name]["artwork_file_path"] = f"locations/{name}/background.png"
     save_locations(assets_dir, locs)
     logger.info(f"Location art saved: {out_path}")
     return locs[name]

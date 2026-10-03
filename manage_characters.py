@@ -31,7 +31,8 @@ from pathlib import Path
 import fal_client
 from dotenv import load_dotenv
 
-from utils_config import load_config
+import db
+from utils_config import load_config, workspace_for_assets_dir
 
 load_dotenv()
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -39,44 +40,20 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-def _chars_path(assets_dir: Path) -> Path:
-    return assets_dir / "characters" / "characters.json"
-
-def _registry_path(assets_dir: Path) -> Path:
-    return assets_dir / "assets.json"
-
-
-# ---------------------------------------------------------------------------
-# Load / Save
+# Load / Save — the catalog lives in data/pipeline.db (see db.py), one per workspace;
+# `assets_dir` selects the workspace whose assets folder it is.
 # ---------------------------------------------------------------------------
 
 def load_characters(assets_dir: Path) -> dict:
-    path = _chars_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return db.load_assets("characters", workspace_for_assets_dir(assets_dir))
 
 def save_characters(assets_dir: Path, data: dict) -> None:
-    path = _chars_path(assets_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    db.save_assets("characters", data, workspace_for_assets_dir(assets_dir))
 
-def load_registry(assets_dir: Path) -> dict:
-    path = _registry_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
 
-def save_registry(assets_dir: Path, data: dict) -> None:
-    path = _registry_path(assets_dir)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+def char_folder(name: str) -> str:
+    """Folder of a character's files: assets/characters/<name with _ for spaces>/."""
+    return name.replace(" ", "_")
 
 
 # ---------------------------------------------------------------------------
@@ -116,12 +93,6 @@ def add_character(
     chars[name] = entry
     save_characters(assets_dir, chars)
 
-    # Update master registry
-    registry = load_registry(assets_dir)
-    registry.setdefault("characters", {})[name] = {
-        "config": f"characters/characters.json#{name}"
-    }
-    save_registry(assets_dir, registry)
 
     logger.info(f"Character '{name}' added.")
     return entry
@@ -154,9 +125,6 @@ def remove_character(assets_dir: Path, name: str) -> None:
     del chars[name]
     save_characters(assets_dir, chars)
 
-    registry = load_registry(assets_dir)
-    registry.get("characters", {}).pop(name, None)
-    save_registry(assets_dir, registry)
     logger.info(f"Character '{name}' removed.")
 
 
@@ -169,14 +137,14 @@ def save_reference_image(assets_dir: Path, name: str, image_bytes: bytes, ext: s
     if name not in chars:
         raise KeyError(f"Character '{name}' not found.")
 
-    char_dir = assets_dir / "characters" / name
+    char_dir = assets_dir / "characters" / char_folder(name)
     char_dir.mkdir(parents=True, exist_ok=True)
 
     filename  = f"ref_drawing{ext}"
     dest      = char_dir / filename
     dest.write_bytes(image_bytes)
 
-    rel_path = f"characters/{name}/{filename}"
+    rel_path = f"characters/{char_folder(name)}/{filename}"
     chars[name]["ref_drawing_file_path"] = rel_path
     save_characters(assets_dir, chars)
     logger.info(f"Reference drawing saved: {dest}")
@@ -202,7 +170,7 @@ def generate_character_art(assets_dir: Path, name: str) -> dict:
     variable = char.get("variable_description", "")
     full_desc = f"{fixed}, {variable}".strip(", ")
 
-    char_dir = assets_dir / "characters" / name
+    char_dir = assets_dir / "characters" / char_folder(name)
     char_dir.mkdir(parents=True, exist_ok=True)
 
     cfg        = load_config()
@@ -245,7 +213,7 @@ def generate_character_art(assets_dir: Path, name: str) -> dict:
     art_url  = _call(art_prompt, "landscape_16_9")
     art_path = char_dir / "art.png"
     _download(art_url, art_path)
-    chars[name]["artwork_file_path"] = f"characters/{name}/art.png"
+    chars[name]["artwork_file_path"] = f"characters/{char_folder(name)}/art.png"
 
     # --- 3/4 left view (used as scene composite reference) ---
     left_prompt = (
@@ -255,7 +223,7 @@ def generate_character_art(assets_dir: Path, name: str) -> dict:
     left_url  = _call(left_prompt, "portrait_4_3")
     left_path = char_dir / "34left.png"
     _download(left_url, left_path)
-    chars[name]["art_34left_file_path"] = f"characters/{name}/34left.png"
+    chars[name]["art_34left_file_path"] = f"characters/{char_folder(name)}/34left.png"
 
     save_characters(assets_dir, chars)
     logger.info(f"Art generated for '{name}': {art_path}, {left_path}")
@@ -291,9 +259,6 @@ def add_single_ref_character(assets_dir: Path, name: str, description: str,
     chars[name] = entry
     save_characters(assets_dir, chars)
 
-    registry = load_registry(assets_dir)
-    registry.setdefault("characters", {})[name] = {"config": f"characters/characters.json#{name}"}
-    save_registry(assets_dir, registry)
 
     logger.info("Single-ref character '%s' added/updated.", name)
     return entry
@@ -319,12 +284,12 @@ def generate_single_ref_art(assets_dir: Path, name: str,
     result = fal_client.subscribe(t2i_model, arguments={"prompt": prompt, "image_size": image_size})
     url = result["images"][0]["url"]
 
-    char_dir = assets_dir / "characters" / name
+    char_dir = assets_dir / "characters" / char_folder(name)
     char_dir.mkdir(parents=True, exist_ok=True)
     ref_path = char_dir / "ref.png"
     _download(url, ref_path)
 
-    chars[name]["ref_image_file_path"] = f"characters/{name}/ref.png"
+    chars[name]["ref_image_file_path"] = f"characters/{char_folder(name)}/ref.png"
     save_characters(assets_dir, chars)
     logger.info("Single-ref art saved: %s", ref_path)
     return chars[name]

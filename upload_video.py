@@ -220,10 +220,8 @@ def _read_manifest(project_name: str) -> dict:
     """Load the project manifest from the projects/ directory."""
     # Try config.ini first; fall back to default path
     try:
-        import configparser
-        cfg = configparser.ConfigParser()
-        cfg.read("config.ini")
-        projects_dir = Path(cfg["paths"]["projects_dir"])
+        from utils_config import load_config
+        projects_dir = Path(load_config()["projects_dir"])
     except Exception:
         projects_dir = Path("projects")
 
@@ -237,10 +235,8 @@ def _read_manifest(project_name: str) -> dict:
 def _final_video_path(project_name: str, manifest: dict) -> Path:
     """Return the expected path of the assembled final video."""
     try:
-        import configparser
-        cfg = configparser.ConfigParser()
-        cfg.read("config.ini")
-        projects_dir = Path(cfg["paths"]["projects_dir"])
+        from utils_config import load_config
+        projects_dir = Path(load_config()["projects_dir"])
     except Exception:
         projects_dir = Path("projects")
 

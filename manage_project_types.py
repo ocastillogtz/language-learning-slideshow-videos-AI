@@ -29,7 +29,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from utils_config import load_config
+import db
+from utils_config import load_config, workspace_for_assets_dir
 
 load_dotenv()
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -37,43 +38,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-def _types_path(assets_dir: Path) -> Path:
-    return assets_dir / "project_types" / "project_types.json"
-
-def _registry_path(assets_dir: Path) -> Path:
-    return assets_dir / "assets.json"
-
-
-# ---------------------------------------------------------------------------
-# Load / Save
+# Load / Save — the catalog lives in data/pipeline.db (see db.py), one per workspace;
+# `assets_dir` selects the workspace whose assets folder it is.
 # ---------------------------------------------------------------------------
 
 def load_project_types(assets_dir: Path) -> dict:
-    path = _types_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return db.load_assets("project_types", workspace_for_assets_dir(assets_dir))
 
 def save_project_types(assets_dir: Path, data: dict) -> None:
-    path = _types_path(assets_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-def load_registry(assets_dir: Path) -> dict:
-    path = _registry_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-def save_registry(assets_dir: Path, data: dict) -> None:
-    with open(_registry_path(assets_dir), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    db.save_assets("project_types", data, workspace_for_assets_dir(assets_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +96,6 @@ def add_project_type(
     types[name] = entry
     save_project_types(assets_dir, types)
 
-    registry = load_registry(assets_dir)
-    registry.setdefault("project_types", {})[name] = {
-        "config": f"project_types/project_types.json#{name}"
-    }
-    save_registry(assets_dir, registry)
 
     logger.info(f"Project type '{name}' added.")
     return entry
@@ -155,9 +123,6 @@ def remove_project_type(assets_dir: Path, name: str) -> None:
     del types[name]
     save_project_types(assets_dir, types)
 
-    registry = load_registry(assets_dir)
-    registry.get("project_types", {}).pop(name, None)
-    save_registry(assets_dir, registry)
     logger.info(f"Project type '{name}' removed.")
 
 

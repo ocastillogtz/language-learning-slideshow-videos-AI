@@ -43,7 +43,7 @@ logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 STUDIO_REF_TYPE = "podcast_studio"
-STUDIO_ASSET_DIR = "podcast_studio"
+STUDIO_ASSET_DIR = "studios/podcast"
 # Project-local copies of the cached studio art (the per-scene image paths point here).
 STUDIO_PROJECT_FILES = {
     "horizontal": "images/podcast_studio.png",

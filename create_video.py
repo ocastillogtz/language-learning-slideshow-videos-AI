@@ -552,6 +552,8 @@ def _build_clip(
         if not sfx_path.exists():
             sfx_path = assets_dir.parent / sfx_rel
         if not sfx_path.exists():
+            sfx_path = Path(sfx_rel)              # repo-relative (e.g. library/sfx/bell.mp3)
+        if not sfx_path.exists():
             logger.error(f"SFX file not found: {sfx_rel}")
             return None, last_frame_np
         sfx_audio     = AudioFileClip(str(sfx_path))

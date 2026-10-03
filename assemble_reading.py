@@ -385,7 +385,7 @@ def main():
     p = argparse.ArgumentParser(description="Assemble reading_together parts + long video")
     p.add_argument("project_name")
     p.add_argument("--bg-audio", default=None, dest="bg_audio_name",
-                   help="Background music (file in assets/background_audio, no extension). "
+                   help="Background music (key from the shared music library). "
                         "Default: [reading] bg_audio_name in config.ini")
     p.add_argument("--bg-audio-gain-db", type=float, default=None, dest="bg_audio_gain_db",
                    help="Adjust background audio volume in dB relative to config "

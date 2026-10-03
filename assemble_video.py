@@ -557,17 +557,19 @@ def _build_atempo_chain(speed_factor):
     return ",".join(filters)
 
 
-def _resolve_bg_audio(key, assets_dir):
+def _resolve_bg_audio(key, assets_dir=None):
+    """Path of a background-music track (shared library, see manage_background_audio)."""
+    library_dir = load_config()["library_dir"]
     try:
-        index = load_background_audio_index(assets_dir)
+        index = load_background_audio_index()
         if key in index:
             rel = index[key].get("full_path") or index[key].get("file_path", "")
             if rel:
-                return assets_dir / rel
+                return library_dir / rel
     except Exception as e:
         logger.debug("Could not load background audio index: %s", e)
 
-    fallback = assets_dir / "background_audio" / (key + ".mp3")
+    fallback = library_dir / "music" / (key + ".mp3")
     return fallback if fallback.exists() else None
 
 

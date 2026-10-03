@@ -27,7 +27,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from utils_config import load_config
+import db
+from utils_config import load_config, workspace_for_assets_dir
 
 load_dotenv()
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -35,43 +36,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-def _clips_path(assets_dir: Path) -> Path:
-    return assets_dir / "video_clips" / "video_clips.json"
-
-def _registry_path(assets_dir: Path) -> Path:
-    return assets_dir / "assets.json"
-
-
-# ---------------------------------------------------------------------------
-# Load / Save
+# Load / Save — the catalog lives in data/pipeline.db (see db.py), one per workspace;
+# `assets_dir` selects the workspace whose assets folder it is.
 # ---------------------------------------------------------------------------
 
 def load_video_clips(assets_dir: Path) -> dict:
-    path = _clips_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return db.load_assets("video_clips", workspace_for_assets_dir(assets_dir))
 
 def save_video_clips(assets_dir: Path, data: dict) -> None:
-    path = _clips_path(assets_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-def load_registry(assets_dir: Path) -> dict:
-    path = _registry_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-def save_registry(assets_dir: Path, data: dict) -> None:
-    with open(_registry_path(assets_dir), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    db.save_assets("video_clips", data, workspace_for_assets_dir(assets_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -106,12 +79,12 @@ def add_video_clip(
     if name in clips:
         raise ValueError(f"Video clip '{name}' already exists. Remove it first.")
 
-    clips_dir = assets_dir / "video_clips"
+    clips_dir = assets_dir / "branding"
     clips_dir.mkdir(parents=True, exist_ok=True)
 
     dest = clips_dir / f"{name}.mp4"
     shutil.copy2(source_file, dest)
-    rel_path = f"video_clips/{name}.mp4"
+    rel_path = f"branding/{name}.mp4"
 
     duration_ms = _get_duration_ms(dest)
 
@@ -124,11 +97,6 @@ def add_video_clip(
     clips[name] = entry
     save_video_clips(assets_dir, clips)
 
-    registry = load_registry(assets_dir)
-    registry.setdefault("video_clips", {})[name] = {
-        "config": f"video_clips/video_clips.json#{name}"
-    }
-    save_registry(assets_dir, registry)
 
     logger.info(f"Video clip '{name}' added: {dest} ({duration_ms} ms)")
     return entry
@@ -148,9 +116,6 @@ def remove_video_clip(assets_dir: Path, name: str, delete_file: bool = False) ->
     del clips[name]
     save_video_clips(assets_dir, clips)
 
-    registry = load_registry(assets_dir)
-    registry.get("video_clips", {}).pop(name, None)
-    save_registry(assets_dir, registry)
     logger.info(f"Video clip '{name}' removed.")
 
 

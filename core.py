@@ -3,8 +3,29 @@ import threading
 from pathlib import Path
 from utils_config import load_config
 
-cfg = load_config()
-PROJECTS_DIR = Path(cfg["projects_dir"])
+
+
+# The active workspace can change while the app runs (Settings → workspace switcher),
+# so routes read the config / folders per request instead of caching them at import.
+def get_cfg() -> dict:
+    return load_config()
+
+
+def projects_dir() -> Path:
+    return Path(load_config()["projects_dir"])
+
+
+def assets_dir() -> Path:
+    return Path(load_config()["assets_dir"])
+
+
+def library_dir() -> Path:
+    return Path(load_config()["library_dir"])
+
+
+def any_job_running() -> bool:
+    with _lock:
+        return any(j.get("status") == "running" for j in _jobs.values())
 
 # Job status store: { "project__step": { status, log, progress } }
 # progress is either None or {"current": int, "total": int, "label": str}.

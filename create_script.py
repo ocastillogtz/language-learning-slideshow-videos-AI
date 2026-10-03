@@ -1121,13 +1121,21 @@ def build_scene_list(
 
     # --- Repetition section ---
     if rules.get("include_repetition_section") and repetition_texts:
-        scenes.append(_sfx("bitte_wiederholen", "assets/sfx/bitte_wiederholen.mp3", "bitte_wiederholen intro"))
+        from utils_config import load_sfx_index
+        sfx_index = load_sfx_index()
+        lib = load_config()["library_dir"]
+
+        def _sfx_file(key: str) -> str:
+            rel = (sfx_index.get(key) or {}).get("full_path") or f"sfx/{key}.mp3"
+            return (lib / rel).as_posix()
+
+        scenes.append(_sfx("bitte_wiederholen", _sfx_file("bitte_wiederholen"), "bitte_wiederholen intro"))
         if rules.get("inter_pause_between_scenes"):
             scenes.append(_pause(inter_ms))
 
         for rep_text in repetition_texts:
             if rules.get("bell_before_repetition"):
-                scenes.append(_sfx("bell", "assets/sfx/bell.mp3", "bell"))
+                scenes.append(_sfx("bell", _sfx_file("bell"), "bell"))
             scenes.append({
                 "id": _sid(),
                 "description": f"repetition: {rep_text[:40]}",

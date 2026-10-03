@@ -29,6 +29,7 @@ import logging
 import shutil
 from pathlib import Path
 
+import db
 from utils_config import load_config
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -36,43 +37,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Paths
+# Load / Save — the catalog lives in data/pipeline.db (see db.py). This library is
+# SHARED by every workspace; file paths are relative to cfg["library_dir"].
 # ---------------------------------------------------------------------------
 
-def _audio_path(assets_dir: Path) -> Path:
-    return assets_dir / "background_audio" / "background_audio.json"
+def load_background_audio(library_dir: Path | None = None) -> dict:
+    return db.load_assets("background_audio")
 
-def _registry_path(assets_dir: Path) -> Path:
-    return assets_dir / "assets.json"
-
-
-# ---------------------------------------------------------------------------
-# Load / Save
-# ---------------------------------------------------------------------------
-
-def load_background_audio(assets_dir: Path) -> dict:
-    path = _audio_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-def save_background_audio(assets_dir: Path, data: dict) -> None:
-    path = _audio_path(assets_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-def load_registry(assets_dir: Path) -> dict:
-    path = _registry_path(assets_dir)
-    if not path.exists():
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-def save_registry(assets_dir: Path, data: dict) -> None:
-    with open(_registry_path(assets_dir), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+def save_background_audio(library_dir: Path | None, data: dict) -> None:
+    db.save_assets("background_audio", data)
 
 
 # ---------------------------------------------------------------------------
@@ -82,13 +55,13 @@ def save_registry(assets_dir: Path, data: dict) -> None:
 LICENSES = ("YTsafe", "Metasafe", "TikToksafe")
 
 
-def list_background_audio(assets_dir: Path, license: str | None = None) -> list[dict]:
-    tracks = load_background_audio(assets_dir).values()
+def list_background_audio(library_dir: Path, license: str | None = None) -> list[dict]:
+    tracks = load_background_audio(library_dir).values()
     return [t for t in tracks if not license or t.get("license") == license]
 
 
 def add_background_audio(
-    assets_dir: Path,
+    library_dir: Path,
     name: str,
     description: str,
     source_file: Path,
@@ -97,18 +70,18 @@ def add_background_audio(
 ) -> dict:
     if license and license not in LICENSES:
         raise ValueError(f"license must be one of {LICENSES}")
-    audio = load_background_audio(assets_dir)
+    audio = load_background_audio(library_dir)
     if name in audio:
         raise ValueError(f"Background audio '{name}' already exists.")
 
-    audio_dir = assets_dir / "background_audio" / subdir
+    audio_dir = library_dir / "music" / subdir
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     suffix = Path(source_file).suffix
     dest = audio_dir / f"{name}{suffix}"
     shutil.copy2(source_file, dest)
 
-    rel = "/".join(x for x in ("background_audio", subdir, f"{name}{suffix}") if x)
+    rel = "/".join(x for x in ("music", subdir, f"{name}{suffix}") if x)
     entry = {
         "name": name,
         "description": description,
@@ -117,21 +90,16 @@ def add_background_audio(
     if license:
         entry["license"] = license
     audio[name] = entry
-    save_background_audio(assets_dir, audio)
+    save_background_audio(library_dir, audio)
 
-    registry = load_registry(assets_dir)
-    registry.setdefault("background_audio", {})[name] = {
-        "config": f"background_audio/background_audio.json#{name}"
-    }
-    save_registry(assets_dir, registry)
 
     logger.info(f"Background audio '{name}' added.")
     return entry
 
 
-def edit_background_audio(assets_dir: Path, name: str, data: dict) -> dict:
+def edit_background_audio(library_dir: Path, name: str, data: dict) -> dict:
     """Update description / license of a registered track. KeyError if unknown."""
-    audio = load_background_audio(assets_dir)
+    audio = load_background_audio(library_dir)
     if name not in audio:
         raise KeyError(name)
     entry = audio[name]
@@ -145,26 +113,23 @@ def edit_background_audio(assets_dir: Path, name: str, data: dict) -> dict:
             entry["license"] = lic
         else:
             entry.pop("license", None)
-    save_background_audio(assets_dir, audio)
+    save_background_audio(library_dir, audio)
     return entry
 
 
-def remove_background_audio(assets_dir: Path, name: str, delete_file: bool = False) -> None:
-    audio = load_background_audio(assets_dir)
+def remove_background_audio(library_dir: Path, name: str, delete_file: bool = False) -> None:
+    audio = load_background_audio(library_dir)
     if name not in audio:
         raise ValueError(f"Background audio '{name}' not found.")
 
     if delete_file:
-        file_path = assets_dir / audio[name].get("full_path", "")
+        file_path = library_dir / audio[name].get("full_path", "")
         if file_path.exists():
             file_path.unlink()
 
     del audio[name]
-    save_background_audio(assets_dir, audio)
+    save_background_audio(library_dir, audio)
 
-    registry = load_registry(assets_dir)
-    registry.get("background_audio", {}).pop(name, None)
-    save_registry(assets_dir, registry)
     logger.info(f"Background audio '{name}' removed.")
 
 
@@ -174,7 +139,7 @@ def remove_background_audio(assets_dir: Path, name: str, delete_file: bool = Fal
 
 def main() -> None:
     cfg = load_config()
-    assets_dir = cfg["assets_dir"]
+    library_dir = cfg["library_dir"]
 
     p = argparse.ArgumentParser(description="Manage background audio assets")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -202,22 +167,22 @@ def main() -> None:
     args = p.parse_args()
 
     if args.cmd == "list":
-        for a in list_background_audio(assets_dir, args.license):
+        for a in list_background_audio(library_dir, args.license):
             print(f"  {a['name']:20}  {a.get('license') or '-':10}  {a['full_path']}  —  {a['description']}")
 
     elif args.cmd == "add":
-        add_background_audio(assets_dir, args.name, args.description, Path(args.file),
+        add_background_audio(library_dir, args.name, args.description, Path(args.file),
                              license=args.license, subdir=args.subdir)
         print(f"Background audio '{args.name}' added.")
 
     elif args.cmd == "edit":
         data = {k: v for k, v in (("description", args.description), ("license", args.license))
                 if v is not None}
-        edit_background_audio(assets_dir, args.name, data)
+        edit_background_audio(library_dir, args.name, data)
         print(f"Background audio '{args.name}' updated.")
 
     elif args.cmd == "remove":
-        remove_background_audio(assets_dir, args.name, delete_file=args.delete_file)
+        remove_background_audio(library_dir, args.name, delete_file=args.delete_file)
         print(f"Background audio '{args.name}' removed.")
 
 

@@ -1,7 +1,7 @@
 import json
 from flask import Blueprint, request, jsonify
 
-from core import PROJECTS_DIR, cfg
+from core import projects_dir, get_cfg
 from utils_config import load_new_characters, load_project_types, get_new_locations_flat
 
 bp = Blueprint("prompts", __name__, url_prefix="")
@@ -41,7 +41,7 @@ def preview_script_prompt(name):
                 cast.append(nm)
 
         # Load assets
-        assets_dir    = cfg["assets_dir"]
+        assets_dir    = get_cfg()["assets_dir"]
         chars_data    = load_new_characters(assets_dir)
         project_types = load_project_types(assets_dir)
         all_locs      = get_new_locations_flat(assets_dir)
@@ -54,7 +54,7 @@ def preview_script_prompt(name):
             return jsonify({"error": f"Location '{location_key}' not found"}), 400
 
         # Load manifest and temporarily patch generation_config with the preview values
-        mp = PROJECTS_DIR / name / "project_manifest.json"
+        mp = projects_dir() / name / "project_manifest.json"
         if not mp.exists():
             return jsonify({"error": "Project not found"}), 404
 
@@ -72,7 +72,7 @@ def preview_script_prompt(name):
         manifest["generation_config"]["characters"]   = cast
         manifest["generation_config"]["location_key"] = location_key or ""
         if "level" not in manifest["generation_config"]:
-            manifest["generation_config"]["level"] = cfg.get("level", "B1")
+            manifest["generation_config"]["level"] = get_cfg().get("level", "B1")
         if words is not None:
             manifest["generation_config"]["words"] = words
         if dialog_count is not None:
@@ -86,7 +86,7 @@ def preview_script_prompt(name):
 
         from create_script import _build_prompt, MAX_SCENE_CHARACTERS
         prompt = _build_prompt(project_type, manifest, chars_data, all_locs,
-                               max_scene_chars=int(cfg.get("max_scene_characters") or MAX_SCENE_CHARACTERS))
+                               max_scene_chars=int(get_cfg().get("max_scene_characters") or MAX_SCENE_CHARACTERS))
         return jsonify({"prompt": prompt})
 
     except Exception as e:

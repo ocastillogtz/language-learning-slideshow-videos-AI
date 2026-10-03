@@ -44,11 +44,9 @@ SFX
 
 import os
 from flask import Blueprint, jsonify, request, send_file, abort
-from core import cfg, run_job
+from core import get_cfg, run_job, assets_dir, library_dir
 
 bp = Blueprint("assets", __name__, url_prefix="")
-
-ASSETS_DIR = cfg["assets_dir"]
 
 ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
@@ -60,9 +58,9 @@ ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 @bp.route("/asset-files/<path:filepath>")
 def serve_asset_file(filepath):
     """Serve a file from the assets directory (used for character reference images, etc.)."""
-    full = ASSETS_DIR / filepath
+    full = assets_dir() / filepath
     try:
-        full.resolve().relative_to(ASSETS_DIR.resolve())
+        full.resolve().relative_to(assets_dir().resolve())
     except ValueError:
         abort(403)
     if not full.exists() or not full.is_file():
@@ -78,7 +76,7 @@ def serve_asset_file(filepath):
 def list_characters():
     try:
         from manage_characters import load_characters
-        return jsonify(load_characters(ASSETS_DIR))
+        return jsonify(load_characters(assets_dir()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -98,7 +96,7 @@ def add_character():
             return jsonify({"error": "name, voice_id, fixed_description, variable_description required"}), 400
 
         from manage_characters import add_character as _add
-        _add(ASSETS_DIR, name, voice_id, fixed_desc, variable_desc,
+        _add(assets_dir(), name, voice_id, fixed_desc, variable_desc,
              height_cm=int(height) if height else None,
              ref_desc=ref_desc)
         return jsonify({"message": f"Character '{name}' added"})
@@ -114,7 +112,7 @@ def edit_character(name: str):
         data = request.get_json() or {}
         from manage_characters import edit_character as _edit
         _edit(
-            ASSETS_DIR, name,
+            assets_dir(), name,
             voice_id        = data.get("voice_id"),
             fixed_description  = data.get("fixed_description"),
             variable_description = data.get("variable_description"),
@@ -132,7 +130,7 @@ def edit_character(name: str):
 def remove_character(name: str):
     try:
         from manage_characters import remove_character as _remove
-        _remove(ASSETS_DIR, name)
+        _remove(assets_dir(), name)
         return jsonify({"message": f"Character '{name}' removed"})
     except KeyError:
         return jsonify({"error": f"Character '{name}' not found"}), 404
@@ -144,7 +142,7 @@ def remove_character(name: str):
 def generate_character_art(name: str):
     try:
         from manage_characters import generate_character_art as _gen
-        run_job("assets", f"char_art_{name}", _gen, ASSETS_DIR, name)
+        run_job("assets", f"char_art_{name}", _gen, assets_dir(), name)
         return jsonify({"message": f"Art generation started for '{name}'"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -171,7 +169,7 @@ def upload_character_reference(name: str):
             return jsonify({"error": "Uploaded file is empty"}), 400
 
         from manage_characters import save_reference_image
-        rel_path = save_reference_image(ASSETS_DIR, name, image_bytes, ext)
+        rel_path = save_reference_image(assets_dir(), name, image_bytes, ext)
         return jsonify({"message": "Reference drawing saved", "file_path": rel_path})
     except KeyError as e:
         return jsonify({"error": str(e)}), 404
@@ -187,7 +185,7 @@ def upload_character_reference(name: str):
 def list_locations():
     try:
         from utils_config import get_new_locations_flat
-        return jsonify(get_new_locations_flat(ASSETS_DIR))
+        return jsonify(get_new_locations_flat(assets_dir()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -205,7 +203,7 @@ def add_location():
             return jsonify({"error": "key, description, creation_prompt required"}), 400
 
         from manage_locations import add_location as _add
-        _add(ASSETS_DIR, key, description, creation_prompt, eligible_chars)
+        _add(assets_dir(), key, description, creation_prompt, eligible_chars)
         return jsonify({"message": f"Location '{key}' added"})
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
@@ -219,7 +217,7 @@ def edit_location(key: str):
         data = request.get_json() or {}
         from manage_locations import edit_location as _edit
         _edit(
-            ASSETS_DIR, key,
+            assets_dir(), key,
             description     = data.get("description"),
             creation_prompt = data.get("creation_prompt"),
         )
@@ -234,7 +232,7 @@ def edit_location(key: str):
 def remove_location(key: str):
     try:
         from manage_locations import remove_location as _remove
-        _remove(ASSETS_DIR, key)
+        _remove(assets_dir(), key)
         return jsonify({"message": f"Location '{key}' removed"})
     except KeyError:
         return jsonify({"error": f"Location '{key}' not found"}), 404
@@ -246,7 +244,7 @@ def remove_location(key: str):
 def generate_location_art(key: str):
     try:
         from manage_locations import generate_location_art as _gen
-        run_job("assets", f"loc_art_{key}", _gen, ASSETS_DIR, key)
+        run_job("assets", f"loc_art_{key}", _gen, assets_dir(), key)
         return jsonify({"message": f"Art generation started for location '{key}'"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -260,7 +258,7 @@ def generate_location_art(key: str):
 def list_project_types():
     try:
         from utils_config import load_project_types
-        return jsonify(load_project_types(ASSETS_DIR))
+        return jsonify(load_project_types(assets_dir()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -274,7 +272,7 @@ def add_project_type():
             return jsonify({"error": "key required"}), 400
 
         from manage_project_types import add_project_type as _add
-        _add(ASSETS_DIR, key, data)
+        _add(assets_dir(), key, data)
         return jsonify({"message": f"Project type '{key}' added"})
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
@@ -287,7 +285,7 @@ def edit_project_type(key: str):
     try:
         data = request.get_json() or {}
         from manage_project_types import edit_project_type as _edit
-        _edit(ASSETS_DIR, key, data)
+        _edit(assets_dir(), key, data)
         return jsonify({"message": f"Project type '{key}' updated"})
     except KeyError:
         return jsonify({"error": f"Project type '{key}' not found"}), 404
@@ -299,7 +297,7 @@ def edit_project_type(key: str):
 def remove_project_type(key: str):
     try:
         from manage_project_types import remove_project_type as _remove
-        _remove(ASSETS_DIR, key)
+        _remove(assets_dir(), key)
         return jsonify({"message": f"Project type '{key}' removed"})
     except KeyError:
         return jsonify({"error": f"Project type '{key}' not found"}), 404
@@ -315,7 +313,7 @@ def remove_project_type(key: str):
 def list_video_clips():
     try:
         from utils_config import load_video_clips
-        return jsonify(load_video_clips(ASSETS_DIR))
+        return jsonify(load_video_clips(assets_dir()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -328,7 +326,7 @@ def add_video_clip():
         if not key:
             return jsonify({"error": "key required"}), 400
         from manage_video_clips import add_video_clip as _add
-        _add(ASSETS_DIR, key, data)
+        _add(assets_dir(), key, data)
         return jsonify({"message": f"Video clip '{key}' added"})
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
@@ -341,7 +339,7 @@ def edit_video_clip(key: str):
     try:
         data = request.get_json() or {}
         from manage_video_clips import edit_video_clip as _edit
-        _edit(ASSETS_DIR, key, data)
+        _edit(assets_dir(), key, data)
         return jsonify({"message": f"Video clip '{key}' updated"})
     except KeyError:
         return jsonify({"error": f"Video clip '{key}' not found"}), 404
@@ -353,7 +351,7 @@ def edit_video_clip(key: str):
 def remove_video_clip(key: str):
     try:
         from manage_video_clips import remove_video_clip as _remove
-        _remove(ASSETS_DIR, key)
+        _remove(assets_dir(), key)
         return jsonify({"message": f"Video clip '{key}' removed"})
     except KeyError:
         return jsonify({"error": f"Video clip '{key}' not found"}), 404
@@ -369,7 +367,7 @@ def remove_video_clip(key: str):
 def list_background_audio():
     try:
         from utils_config import load_background_audio_index
-        return jsonify(load_background_audio_index(ASSETS_DIR))
+        return jsonify(load_background_audio_index(assets_dir()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -382,7 +380,7 @@ def add_background_audio():
         if not key:
             return jsonify({"error": "key required"}), 400
         from manage_background_audio import add_background_audio as _add
-        _add(ASSETS_DIR, key, data)
+        _add(assets_dir(), key, data)
         return jsonify({"message": f"Background audio '{key}' added"})
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
@@ -395,7 +393,7 @@ def edit_background_audio(key: str):
     try:
         data = request.get_json() or {}
         from manage_background_audio import edit_background_audio as _edit
-        _edit(ASSETS_DIR, key, data)
+        _edit(assets_dir(), key, data)
         return jsonify({"message": f"Background audio '{key}' updated"})
     except KeyError:
         return jsonify({"error": f"Background audio '{key}' not found"}), 404
@@ -407,7 +405,7 @@ def edit_background_audio(key: str):
 def remove_background_audio(key: str):
     try:
         from manage_background_audio import remove_background_audio as _remove
-        _remove(ASSETS_DIR, key)
+        _remove(assets_dir(), key)
         return jsonify({"message": f"Background audio '{key}' removed"})
     except KeyError:
         return jsonify({"error": f"Background audio '{key}' not found"}), 404
@@ -423,7 +421,7 @@ def remove_background_audio(key: str):
 def list_sfx():
     try:
         from utils_config import load_sfx_index
-        return jsonify(load_sfx_index(ASSETS_DIR))
+        return jsonify(load_sfx_index(assets_dir()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -436,7 +434,7 @@ def add_sfx():
         if not key:
             return jsonify({"error": "key required"}), 400
         from manage_sfx import add_sfx as _add
-        _add(ASSETS_DIR, key, data)
+        _add(assets_dir(), key, data)
         return jsonify({"message": f"SFX '{key}' added"})
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
@@ -449,7 +447,7 @@ def edit_sfx(key: str):
     try:
         data = request.get_json() or {}
         from manage_sfx import edit_sfx as _edit
-        _edit(ASSETS_DIR, key, data)
+        _edit(assets_dir(), key, data)
         return jsonify({"message": f"SFX '{key}' updated"})
     except KeyError:
         return jsonify({"error": f"SFX '{key}' not found"}), 404
@@ -461,7 +459,7 @@ def edit_sfx(key: str):
 def remove_sfx(key: str):
     try:
         from manage_sfx import remove_sfx as _remove
-        _remove(ASSETS_DIR, key)
+        _remove(assets_dir(), key)
         return jsonify({"message": f"SFX '{key}' removed"})
     except KeyError:
         return jsonify({"error": f"SFX '{key}' not found"}), 404

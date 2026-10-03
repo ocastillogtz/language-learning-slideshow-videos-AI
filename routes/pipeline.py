@@ -1,6 +1,6 @@
 import json
 from flask import Blueprint, request, jsonify
-from core import run_job, get_job, PROJECTS_DIR
+from core import run_job, get_job, projects_dir, assets_dir
 from platform_audio import parse_bg_tracks, find_variant, META_PREFER
 
 bp = Blueprint("pipeline", __name__, url_prefix="")
@@ -14,7 +14,7 @@ def _save_render_settings(name, section, settings):
     Drops None values so a blank field doesn't wipe a previously saved choice.
     Best-effort: never raises into the request path."""
     try:
-        mp = PROJECTS_DIR / name / "project_manifest.json"
+        mp = projects_dir() / name / "project_manifest.json"
         if not mp.exists():
             return
         with open(mp, encoding="utf-8") as f:
@@ -360,7 +360,7 @@ def update_pauses(name):
         if ms < 0 or ms > 10000:
             return jsonify({"error": "duration_ms must be between 0 and 10000"}), 400
 
-        mp = PROJECTS_DIR / name / "project_manifest.json"
+        mp = projects_dir() / name / "project_manifest.json"
         if not mp.exists():
             return jsonify({"error": "Project not found"}), 404
         with open(mp, encoding="utf-8") as f:
@@ -412,7 +412,7 @@ def reset_annotations(name):
     try:
         data     = request.get_json(silent=True) or {}
         scene_id = (data.get("scene_id") or "").strip()
-        videos   = PROJECTS_DIR / name / "videos"
+        videos   = projects_dir() / name / "videos"
         removed_cache = 0
         removed_clips = 0
         if videos.exists():
@@ -783,11 +783,7 @@ def run_upload_instagram(name):
         def _do():
             from upload_instagram import upload_instagram, _read_manifest, _build_caption
             from pathlib import Path
-            import configparser
-            cfg = configparser.ConfigParser()
-            cfg.read("config.ini")
-            projects_dir = Path(cfg.get("paths", "projects_dir", fallback="projects"))
-            file_path = find_variant(projects_dir / name / ("final_" + name + ".mp4"),
+            file_path = find_variant(projects_dir() / name / ("final_" + name + ".mp4"),
                                      META_PREFER)
             manifest  = _read_manifest(name)
             caption   = caption_override or _build_caption(manifest)
@@ -811,7 +807,7 @@ def run_upload_instagram(name):
 def _first_scene_image_path(name, manifest):
     """Absolute path to the first scene illustration that exists on disk (used as a
     Facebook feed-video thumbnail), or None if none is found."""
-    proj = PROJECTS_DIR / name
+    proj = projects_dir() / name
     for scene in manifest.get("scenes", []):
         rel = (scene.get("image") or {}).get("file_path")
         if rel:
@@ -952,12 +948,7 @@ def instagram_auth_debug():
 @bp.route("/assets/branding/list", methods=["GET"])
 def list_branding_files():
     try:
-        import configparser
-        from pathlib import Path
-        cfg = configparser.ConfigParser()
-        cfg.read("config.ini")
-        assets_dir   = Path(cfg.get("paths", "assets_dir", fallback="assets"))
-        branding_dir = assets_dir / "branding"
+        branding_dir = assets_dir() / "branding"
         if not branding_dir.exists():
             return jsonify({"files": []})
         files = sorted(

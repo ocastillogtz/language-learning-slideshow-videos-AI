@@ -3,7 +3,7 @@ Subtitle / overlay styling routes.
 
 Backs the top-level "Subtitles" page: read the current style parameters, render a
 live preview over a sample frame (reflecting UNSAVED edits), and persist changes
-back to config.ini (comments preserved).
+back to the active workspace's settings (data/pipeline.db).
 
 STYLE_SCHEMA is the single source of truth. Each field carries:
   key   — the flat cfg key the renderer reads (e.g. "sub_fontsize"); also what the
@@ -20,33 +20,26 @@ import json
 import re
 from flask import Blueprint, request, send_file, jsonify
 
+import db
 from utils_config import load_config, apply_video_format
 
 bp = Blueprint("styling", __name__, url_prefix="/style")
 
 # Named style snapshots ("looks"). Each profile stores the full editor state —
 # every schema key for BOTH orientations — so applying one restores an exact look.
-_PROFILES_FILE = "subtitle_profiles.json"
-
-
-def _profiles_path():
-    return load_config()["assets_dir"] / _PROFILES_FILE
-
-
+# Stored per workspace in data/pipeline.db (asset kind "subtitle_profiles").
 def _read_profiles() -> dict:
-    p = _profiles_path()
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return db.load_assets("subtitle_profiles")
 
 
 def _write_profiles(data: dict) -> None:
-    p = _profiles_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    db.save_assets("subtitle_profiles", data)
+
+
+def update_config_values(updates: dict) -> None:
+    """Style edits are saved as overrides of the ACTIVE workspace (config.ini keeps
+    the defaults every workspace starts from)."""
+    db.set_settings(db.active_workspace_slug(), updates)
 
 # fmt: off
 STYLE_SCHEMA = [
@@ -147,7 +140,6 @@ def save():
     Per-orientation keys are written to the [orientation] section; everything else to
     its shared section. Only the keys present in `changed` are touched."""
     try:
-        from config_writer import update_config_values
         data        = request.get_json(force=True) or {}
         orientation = data.get("orientation", "vertical")
         if orientation not in ("vertical", "horizontal"):
@@ -248,10 +240,9 @@ def profiles_save():
 
 @bp.route("/profiles/apply", methods=["POST"])
 def profiles_apply():
-    """Write a profile's values to config.ini (both orientations) and return the
+    """Write a profile's values to the workspace settings (both orientations) and return the
     resulting current values so the editor can refresh. Body: {name}."""
     try:
-        from config_writer import update_config_values
         data = request.get_json(force=True) or {}
         name = _clean_profile_name(data.get("name", ""))
         profiles = _read_profiles()

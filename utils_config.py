@@ -7,10 +7,12 @@ All other modules import from here — no module reads config.ini directly.
 """
 
 import configparser
-import json
 import logging
 from pathlib import Path
 from typing import Any
+
+import db
+from languages import language
 
 # moviepy 1.0.3 (pinned, see requirements.txt) calls Image.ANTIALIAS, which
 # Pillow 10+ removed in favour of Image.LANCZOS (the same filter). Restore the
@@ -35,7 +37,22 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
     # only counts as a comment when preceded by whitespace, so values that embed
     # ";" without a leading space (e.g. the image style_tokens) are left intact.
     cfg = configparser.RawConfigParser(inline_comment_prefixes=(";",))
-    cfg.read(config_path)
+    cfg.read(config_path, encoding="utf-8")
+
+    # Layer the active workspace on top of config.ini: its own assets/projects
+    # folders and its per-workspace setting overrides (edited in the Settings view).
+    ws = _active_workspace()
+    ws_settings = {}
+    if ws:
+        ws_settings = db.get_settings(ws["slug"])
+        for section, kv in ws_settings.items():
+            if not cfg.has_section(section):
+                cfg.add_section(section)
+            for key, value in kv.items():
+                cfg.set(section, key, value)
+        cfg.set("paths", "projects_dir", ws["projects_dir"])
+        cfg.set("paths", "assets_dir", ws["assets_dir"])
+    lang = language(ws["language_code"] if ws else None)
 
     def _p(section: str, key: str, fallback=None):
         return cfg.get(section, key, fallback=fallback)
@@ -48,6 +65,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
 
     projects_dir = Path(_p("paths", "projects_dir", "projects"))
     assets_dir   = Path(_p("paths", "assets_dir",   "assets"))
+    # Shared by every workspace: background music + SFX.
+    library_dir  = Path(_p("paths", "library_dir",  "library"))
 
     # [fal_models] lists the image (edit) models selectable in the UI dropdown
     # (key = fal endpoint id). [fal] model is the default and may be either a key
@@ -56,18 +75,27 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
     raw_fal_model = _p("fal", "model", "fal-ai/bytedance/seedream/v4.5/edit")
 
     return {
+        # Workspace (language / channel) — see db.py
+        "workspace":        ws["slug"] if ws else None,
+        "workspace_name":   ws["name"] if ws else "",
+        "channel_name":     (ws or {}).get("channel_name") or "",
+        "language_code":    lang["code"],
+        "language_name":    lang["name"],      # English name, used in prompts ({LANGUAGE})
+        "language_native":  lang["native"],
+
         # Directories
         "projects_dir":   projects_dir,
         "assets_dir":     assets_dir,
+        "library_dir":    library_dir,
 
-        # Subdirectory shortcuts — all derived from assets_dir
-        "background_audio_dir": assets_dir / "background_audio",
+        # Subdirectory shortcuts — see ASSET_LAYOUT below
+        "background_audio_dir": library_dir / "music",
+        "sfx_dir":              library_dir / "sfx",
         "branding_dir":         assets_dir / "branding",
-        "character_art_dir":    assets_dir / "character_art",
-        "character_art_cache_dir": assets_dir / "character_art_cache",
-        "location_dir":         assets_dir / "location",
-        "sfx_dir":              assets_dir / "sfx",
-        "audio_cache_dir":      assets_dir / "audio_cache",
+        "characters_dir":       assets_dir / "characters",
+        "locations_dir":        assets_dir / "locations",
+        "studios_dir":          assets_dir / "studios",
+        "cache_dir":            assets_dir / "cache",
 
         # Tools
         "imagemagick": _p("tools", "imagemagick"),
@@ -226,7 +254,9 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         # word-level timestamps. line_gap / max_line_chars group words into subtitle lines.
         "song_image_interval_ms": int(_f("song", "image_interval_seconds", 5.0) * 1000),
         "song_stt_model":         _p("song", "stt_model",       "scribe_v1"),
-        "song_stt_language":      _p("song", "stt_language",    "deu"),
+        # A workspace that did not override it transcribes in its own language.
+        "song_stt_language":      ((ws_settings.get("song") or {}).get("stt_language")
+                                   or (lang["stt"] if ws else _p("song", "stt_language", "deu"))),
         "song_line_gap_s":        _f("song", "line_gap_seconds", 0.6),
         "song_max_line_chars":    _i("song", "max_line_chars",   42),
 
@@ -328,94 +358,65 @@ def apply_video_format(cfg: dict, video_format: str) -> dict:
     return cfg
 
 
-def load_characters(assets_dir: Path) -> dict[str, Any]:
-    """Load and return the characters.json dict."""
-    path = assets_dir / "characters.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def load_locations(assets_dir: Path) -> dict[str, Any]:
-    """Load and return the locations.json dict (top-level locations only)."""
-    path = assets_dir / "locations.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def get_all_locations_flat(locations: dict[str, Any]) -> dict[str, Any]:
-    """
-    Return a flat dict of all location keys including sub_locations,
-    so callers can look up any key without knowing the nesting level.
-
-    Example: {"cafe": {...}, "cafe_single_1": {...}, "cafe_single_2": {...}, ...}
-    """
-    flat: dict[str, Any] = {}
-    for key, loc in locations.items():
-        flat[key] = loc
-        for sub_key, sub_loc in loc.get("sub_locations", {}).items():
-            flat[sub_key] = sub_loc
-    return flat
-
-
 # =============================================================================
-# New asset loaders (new architecture)
+# Asset catalog loaders (backed by data/pipeline.db — see db.py)
 # =============================================================================
+# `assets_dir` picks the workspace whose assets folder it is (the active one when
+# it matches none), so callers keep passing cfg["assets_dir"] as before.
 
-def load_assets_registry(assets_dir: Path) -> dict[str, Any]:
-    """Load and return assets/assets.json — the master asset registry."""
-    path = assets_dir / "assets.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def _active_workspace() -> dict | None:
+    try:
+        return db.active_workspace()
+    except Exception as e:                      # unreadable DB → plain config.ini
+        logger.warning("Workspace DB unavailable (%s) — using config.ini only", e)
+        return None
+
+
+def workspace_for_assets_dir(assets_dir: Path | None) -> str | None:
+    if assets_dir is not None:
+        target = Path(assets_dir).resolve()
+        for ws in db.list_workspaces():
+            if Path(ws["assets_dir"]).resolve() == target:
+                return ws["slug"]
+    return db.active_workspace_slug()
 
 
 def load_new_characters(assets_dir: Path) -> dict[str, Any]:
-    """Load assets/characters/characters.json (new schema with fixed/variable descriptions)."""
-    path = assets_dir / "characters" / "characters.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Characters of the workspace (fixed/variable descriptions, art paths, voice)."""
+    return db.load_assets("characters", workspace_for_assets_dir(assets_dir))
 
 
 def load_new_locations(assets_dir: Path) -> dict[str, Any]:
-    """Load assets/locations/locations.json (new schema with creation_prompt)."""
-    path = assets_dir / "locations" / "locations.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Locations of the workspace (description, creation_prompt, art path)."""
+    return db.load_assets("locations", workspace_for_assets_dir(assets_dir))
 
 
 def load_project_types(assets_dir: Path) -> dict[str, Any]:
-    """Load assets/project_types/project_types.json."""
-    path = assets_dir / "project_types" / "project_types.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Project types (prompts + scene builder rules) of the workspace."""
+    return db.load_assets("project_types", workspace_for_assets_dir(assets_dir))
 
 
 def load_video_clips(assets_dir: Path) -> dict[str, Any]:
-    """Load assets/video_clips/video_clips.json."""
-    path = assets_dir / "video_clips" / "video_clips.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Branding video clips (intros/outros) of the workspace."""
+    return db.load_assets("video_clips", workspace_for_assets_dir(assets_dir))
 
 
-def load_background_audio_index(assets_dir: Path) -> dict[str, Any]:
-    """Load assets/background_audio/background_audio.json."""
-    path = assets_dir / "background_audio" / "background_audio.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_background_audio_index(assets_dir: Path | None = None) -> dict[str, Any]:
+    """Shared background-music library; full_path is relative to library_dir."""
+    return db.load_assets("background_audio")
 
 
-def load_sfx_index(assets_dir: Path) -> dict[str, Any]:
-    """Load assets/sfx/sfx.json."""
-    path = assets_dir / "sfx" / "sfx.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_sfx_index(assets_dir: Path | None = None) -> dict[str, Any]:
+    """Shared SFX library; full_path is relative to library_dir."""
+    return db.load_assets("sfx")
 
 
 def resolve_asset_path(assets_dir: Path, relative_path: str) -> Path:
     """
-    Resolve a relative asset path (as stored in JSON) to an absolute Path.
+    Resolve a relative asset path (as stored in the catalog) to a Path.
 
-    Example: resolve_asset_path(assets_dir, "sfx/bell.mp3")
-             → Path("assets/sfx/bell.mp3")
+    Example: resolve_asset_path(assets_dir, "characters/Zahra/art.png")
+             → Path("assets/characters/Zahra/art.png")
     """
     return assets_dir / relative_path
 
@@ -423,7 +424,6 @@ def resolve_asset_path(assets_dir: Path, relative_path: str) -> Path:
 def get_new_locations_flat(assets_dir: Path) -> dict[str, Any]:
     """
     Return a flat dict of all location keys including sub_locations.
-    Uses the new locations.json schema.
 
     Example: {"cafe": {...}, "cafe_single_1": {...}, ...}
     """
