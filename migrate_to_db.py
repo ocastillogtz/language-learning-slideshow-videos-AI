@@ -248,6 +248,24 @@ def cleanup(backup_dir: Path) -> None:
                 d.rmdir()
 
 
+def bootstrap_fresh_install() -> str | None:
+    """First start without any data: create the default workspace with the shipped
+    project types. Returns None (does nothing) if a workspace exists or legacy JSON
+    registries are waiting to be migrated — those need an explicit `migrate_to_db.py`."""
+    if db.db_exists() and db.list_workspaces():
+        return None
+    if any((OLD / rel).exists() for rel in REGISTRIES.values()):
+        return None
+    db.create_workspace("german", "German", "de", "assets", "projects")
+    db.set_active_workspace("german")
+    seed = ROOT / "defaults" / "project_types.json"
+    if seed.exists():
+        db.save_assets("project_types", json.loads(seed.read_text(encoding="utf-8")), "german")
+    for d in ("assets", "projects", "library/music", "library/sfx"):
+        (ROOT / d).mkdir(parents=True, exist_ok=True)
+    return "german"
+
+
 def export() -> None:
     dest = ROOT / "data" / "exports" / datetime.now().strftime("%Y%m%d_%H%M%S")
     dest.mkdir(parents=True, exist_ok=True)

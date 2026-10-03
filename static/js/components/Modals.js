@@ -1,39 +1,61 @@
 // Modals.js
-const { useState } = React;
+const { useState, useEffect } = React;
 
-const NEW_PROJ_TYPES = {
-  vertical: [
-    { value: "shadowing",        label: "Shadowing (with repetitions)"            },
-    { value: "story",            label: "Story (no repetitions)"                  },
-    { value: "word_learning",    label: "Word Learning (vocabulary)"              },
-    { value: "register_phrases", label: "Register Phrases (formal / slang / ...)" },
-    { value: "grammar_pairs",    label: "Grammar Pairs (base → transformed)"      },
-  ],
-  horizontal: [
-    { value: "shadowing_long",        label: "Shadowing — Long (with repetitions)"            },
-    { value: "story_long",            label: "Story — Long (no repetitions)"                  },
-    { value: "word_learning_long",    label: "Word Learning — Long (vocabulary)"              },
-    { value: "register_phrases_long", label: "Register Phrases — Long (formal / slang / ...)" },
-    { value: "grammar_pairs_long",    label: "Grammar Pairs — Long (base → transformed)"      },
-  ],
-  reading: [
-    { value: "reading_together", label: "Reading Together (story → annotated parts + long)" },
-  ],
-  promotional: [
-    { value: "promotional", label: "Promotional (character speaks → IG story)" },
-  ],
-  song: [
-    { value: "song", label: "Song (audio file → synced lyric video)" },
-  ],
-  podcast: [
-    { value: "podcast", label: "Podcast (episode + Shorts)" },
-  ],
+// Project types come from the active workspace (Settings → Project types), so a
+// type added or edited there shows up here and in the Script step.
+const TYPE_LABELS = {
+  shadowing: "Shadowing (with repetitions)", story: "Story (no repetitions)",
+  word_learning: "Word Learning (vocabulary)", register_phrases: "Register Phrases (formal / slang / ...)",
+  grammar_pairs: "Grammar Pairs (base → transformed)", song_quiz: "Song Quiz (guess the song)",
+  preposition_quiz: "Preposition Quiz", blank_quiz: "Fill-in-the-blank Quiz",
+  reading_together: "Reading Together (story → parts + long video)",
+  promotional: "Promotional (character speaks → IG story)", song: "Song (audio file → lyric video)",
+  podcast: "Podcast (episode + vertical Shorts)",
 };
+// Types with their own creation flow (Build step) instead of a generated script.
+const SPECIAL_TYPES = ["reading_together", "promotional", "song"];
+
+function typeLabel(key, t) {
+  if (TYPE_LABELS[key]) return TYPE_LABELS[key];
+  if (t && t.base_type && TYPE_LABELS[t.base_type]) return TYPE_LABELS[t.base_type].replace(/ \(/, " — Long (");
+  return key.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+}
+
+function useProjectTypes(active = true) {
+  const [types, setTypes] = useState(null);
+  useEffect(() => {
+    if (!active) return;
+    fetch("/settings/project-types").then(r => r.json()).then(d => setTypes(d.types || {})).catch(() => setTypes({}));
+  }, [active]);
+  return types;
+}
+
+// <optgroup>s for a project-type <select>: Vertical / Horizontal (+ special flows).
+function ProjectTypeOptions({ types: loaded, current, includeSpecial }) {
+  const types = loaded || {};
+  const keys = Object.keys(types);
+  if (current && !keys.includes(current)) keys.push(current);   // never hide the project's own type
+  const groups = [
+    ["▸ Vertical — 1080×1920 (Shorts / Reels)", k => !SPECIAL_TYPES.includes(k) && (types[k] || {}).format !== "horizontal"],
+    ["▸ Horizontal — 1920×1080 Full HD (YouTube)", k => !SPECIAL_TYPES.includes(k) && (types[k] || {}).format === "horizontal"],
+  ];
+  if (includeSpecial) groups.push(["▸ Special flows — built in their own step", k => SPECIAL_TYPES.includes(k)]);
+  return groups.map(([label, test]) => {
+    const ks = keys.filter(test).sort((x, y) => typeLabel(x, types[x]).localeCompare(typeLabel(y, types[y])));
+    if (!ks.length) return null;
+    return (
+      <optgroup key={label} label={label}>
+        {ks.map(k => <option key={k} value={k}>{typeLabel(k, types[k])}</option>)}
+      </optgroup>
+    );
+  });
+}
 
 const LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"];
 
 function NewProjectModal({ open, onClose }) {
   const { toast, refreshSidebar, setCurrentProject, reloadManifest } = useApp();
+  const types = useProjectTypes(open);
   const [name,     setName]     = useState("");
   const [projType, setProjType] = useState("shadowing");
   const [level,    setLevel]    = useState("B1");
@@ -43,8 +65,9 @@ function NewProjectModal({ open, onClose }) {
   const [err,      setErr]      = useState("");
   const [saving,   setSaving]   = useState(false);
 
-  const isWordLearning = projType === "word_learning" || projType === "word_learning_long";
-  const isHorizontal   = projType.endsWith("_long") || projType === "podcast";
+  const curType        = (types || {})[projType] || {};
+  const isWordLearning = (curType.base_type || projType) === "word_learning";
+  const isHorizontal   = curType.format === "horizontal";
   const isReading      = projType === "reading_together";
   const isPromotional  = projType === "promotional";
   const isSong         = projType === "song";
@@ -112,25 +135,11 @@ function NewProjectModal({ open, onClose }) {
                 }
               </label>
               <select value={projType} onChange={e=>setProjType(e.target.value)}>
-                <optgroup label="▸ Vertical — 1080×1920 (Shorts / Reels)">
-                  {NEW_PROJ_TYPES.vertical.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </optgroup>
-                <optgroup label="▸ Horizontal — 1920×1080 Full HD (YouTube)">
-                  {NEW_PROJ_TYPES.horizontal.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </optgroup>
-                <optgroup label="▸ Reading — story → vertical parts + horizontal long">
-                  {NEW_PROJ_TYPES.reading.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </optgroup>
-                <optgroup label="▸ Promotional — single image, character speaks (IG story)">
-                  {NEW_PROJ_TYPES.promotional.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </optgroup>
-                <optgroup label="▸ Song — audio file → synced lyric video">
-                  {NEW_PROJ_TYPES.song.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </optgroup>
-                <optgroup label="▸ Podcast — horizontal episode + vertical Shorts">
-                  {NEW_PROJ_TYPES.podcast.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </optgroup>
+                <ProjectTypeOptions types={types} current={projType} includeSpecial/>
               </select>
+              {curType.self_description && (
+                <span style={{fontSize:"0.78rem",color:"var(--muted)",lineHeight:1.45}}>{curType.self_description}</span>
+              )}
             </div>
             <div className="field" style={{flex:1}}>
               <label>Language Level</label>
@@ -152,7 +161,7 @@ function NewProjectModal({ open, onClose }) {
                 : isSong
                 ? "Optional note. You'll pick the audio file (and costume) in the Build Song Source step."
                 : projType === "podcast"
-                ? "Episode topic, e.g. How to order at a German bakery — polite phrases, what to say when you don't know the name of a pastry…"
+                ? "Episode topic, e.g. How to order at a bakery — polite phrases, what to say when you don't know the name of a pastry…"
                 : "Describe the scene setting and topic…"}/>
           </div>
           {!isReading && !isPromotional && !isSong && <div className="field">

@@ -17,6 +17,15 @@ print(f"Python interpreter: {sys.executable}", flush=True)
 
 app = Flask(__name__)
 
+# First start: create the default workspace (or explain how to migrate old JSON data).
+import db
+from migrate_to_db import REGISTRIES, OLD, bootstrap_fresh_install
+if bootstrap_fresh_install():
+    print("Created the default workspace — set its language and branding in Settings.", flush=True)
+elif not (db.db_exists() and db.list_workspaces()) and any((OLD / r).exists() for r in REGISTRIES.values()):
+    print("Found asset JSON files from an older version — run `python migrate_to_db.py` once "
+          "(add --dry-run to preview).", flush=True)
+
 
 @app.route("/")
 def index():

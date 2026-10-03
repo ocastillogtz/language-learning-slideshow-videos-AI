@@ -1,6 +1,6 @@
-# AI-Powered Language Learning Video Generator
+# Language Pipeline — AI-Powered Language Learning Video Generator
 
-An automated pipeline for creating educational German language learning videos. Provide characters, a scene description with optional **visual guidelines**, and a learning objective — the system writes the script, generates voiced audio, illustrates every scene with AI art, renders subtitled clips, and assembles a finished video ready for upload. By default no pre-made location is used: the setting and the characters' attire come straight from your scene description and visual guidelines (a location from the library is an opt-in override).
+An automated pipeline for creating language learning videos — for any of 20 languages, each in its own **workspace** (the original German channel is the first one). Provide characters, a scene description with optional **visual guidelines**, and a learning objective — the system writes the script, generates voiced audio, illustrates every scene with AI art, renders subtitled clips, and assembles a finished video ready for upload. By default no pre-made location is used: the setting and the characters' attire come straight from your scene description and visual guidelines (a location from the library is an opt-in override).
 
 Two output formats are supported:
 
@@ -11,12 +11,57 @@ The output format is determined by the project type chosen at creation time. No 
 
 A third, specialised project type — **Reading Together** (`reading_together`) — turns a pasted public-domain short story into a sentence-by-sentence "read along" video with **grammar-annotated** on-screen text (TEKAMOLO boxes, separable-verb colouring, Nebensatz + verb-position markers, case/gender). It outputs several vertical 6-sentence **parts** plus one **long horizontal** video, and can create reusable single-image characters such as talking animals. See [Reading Together](#reading-together-reading_together).
 
-A **Podcast** type (`podcast`) produces a horizontal *"Brezel Podcast"* episode. Two hosts talk in a
+A **Podcast** type (`podcast`) produces a horizontal podcast episode (the German workspace's *"Brezel Podcast"*). Two hosts talk in a
 fixed studio (one cached studio image reused by every studio line), and the video cuts away to
 illustrations whenever they act out an example. The best moments are re-cut as **vertical Shorts** that
 link back to the episode. See [Podcast](#podcast-podcast).
 
 A **web-based control panel** (`app.py`) lets you manage every project and asset and run every pipeline step from a browser with no command-line work required.
+
+---
+
+## Workspaces, Settings & Storage
+
+**Workspaces.** Each language / channel is a workspace with its own language, channel name, icon,
+mascot, settings, characters, locations, project types and projects. Switch with the pill next to the
+logo; create, clone or remove workspaces in **Settings → Workspace**. The web UI, the CLI scripts and
+the MCP server all work in the *active* workspace. Background music and SFX are a shared library.
+
+**Settings.** Every value of `config.ini` is editable in **Settings** (art-style prompts, on-screen
+labels, channel/upload metadata, AI models, subtitle styling, …) with its help text. `config.ini`
+keeps the defaults; edits are stored as overrides of the active workspace, and "reset" returns a value
+to the default. Project-type prompts are edited in **Settings → Project types**; they use
+`{LANGUAGE}` (plus `{LANGUAGE_NATIVE}`, `{CHANNEL}`, `{HASHTAGS}`) wherever they name the language, so
+a cloned workspace starts with working prompts — review their examples, which are written for the
+source language. The shipped prompts live in `defaults/project_types.json`.
+
+**Storage.** `data/pipeline.db` (SQLite) holds workspaces, setting overrides, the asset catalog and a
+project index (which project uses which asset). Each project's `project_manifest.json` stays a file in
+its folder and remains the source of truth. Back up `data/` with the media folders, or export the
+catalogs as JSON with `python migrate_to_db.py --export`.
+
+```
+assets/                     German workspace (new workspaces: workspaces/<slug>/assets)
+  branding/                 icon, mascot, intro/outro clips
+  characters/<name>/        art.png, 34left.png, thumbnail.png, ref.png …
+  locations/<key>/          background.png
+  studios/podcast/          cached podcast studio images
+  icons/  samples/          overlay icons, subtitle-preview backgrounds
+  cache/                    regenerable caches
+  _unsorted/                files no catalog entry referenced (review, then delete)
+library/                    shared by every workspace
+  music/                    background music (+ originals/ kept for volume changes)
+  sfx/
+projects/                   German workspace projects (new workspaces: workspaces/<slug>/projects)
+data/pipeline.db
+```
+
+**Background music volume.** In **Assets → Music → Volume** you can raise or lower a track, listen to a
+15-second slice from the middle (also mixed under a spoken line at the video's background level) and
+save it. The original upload is kept, so the gain can be changed again without quality loss.
+
+Upgrading from the JSON registries: `python migrate_to_db.py --dry-run`, then `python migrate_to_db.py`
+(backs up to `data/backups/`, imports, reorganises the files; project folders are not touched).
 
 ---
 
@@ -56,7 +101,7 @@ Every pipeline step is a collapsible card showing its status (`idle` / `running`
 </p>
 
 ### Generated Items tab
-Every scene is shown as a card with its German text, image/audio status badges, and an Edit button. Expand any card to see the generated illustration, play the audio, edit the image prompt, and re-generate image or audio individually without re-running the full pipeline.
+Every scene is shown as a card with its text, image/audio status badges, and an Edit button. Expand any card to see the generated illustration, play the audio, edit the image prompt, and re-generate image or audio individually without re-running the full pipeline.
 
 <p align="center">
   <img src="readme_resources/generated_items.png" width="580" alt="Generated items list">
@@ -112,7 +157,7 @@ Manifest sections created:
 
 Calls GPT to generate structured dialogue, narration, and (for `shadowing` projects) repetition sentences. Converts the GPT response into a flat `scenes[]` array of universal scene objects.
 
-**Project types** are defined entirely in `assets/project_types/project_types.json` — adding a new video format requires no Python changes.
+**Project types** are data, not code — edit or add them in **Settings → Project types** (stored per workspace; shipped defaults in `defaults/project_types.json`). Adding a new video format requires no Python changes.
 
 #### Vertical types (1080×1920, 9:16 — Shorts / Reels)
 
@@ -414,7 +459,7 @@ humans) drawn in the project art style.
 
 1. **Build Reading Source** (`create_reading_source.py` → `build_reading_project`)
    GPT **modernizes** the pasted story (fixes archaic spelling/grammar, lightly
-   rephrases into contemporary German at the chosen level — which also keeps the
+   rephrases into contemporary language at the chosen level — which also keeps the
    result clear of edition-specific copyright), then **splits** it into short,
    slide-sized sentences (`max_words` soft cap). A second GPT pass (`analyze_story`)
    **casts ALL characters — humans included, not only animals** (unnamed ones get a
@@ -457,14 +502,14 @@ on disk but missing from the manifest.
 
 ### Notes
 
-- Narration uses a single **Narrator** voice (`characters.json` → `Narrator.voice_id`).
+- Narration uses a single **Narrator** voice (the `Narrator` character's voice id, Assets → Characters).
   This entry must exist or narration audio will be empty.
 - `default_sentences_per_part` (6) and `default_max_words` (16) are on the
   `reading_together` entry in `project_types.json`; both are overridable per run
   (max_words on Build, sentences-per-part on Assemble).
 - **Background music** for the assembled parts + long video defaults to the
-  `[reading]` section of `config.ini` — `bg_audio_name` (a file in
-  `assets/background_audio`, default `dustymagic`) and `bg_audio_gain_db`
+  `[reading]` section of `config.ini` — `bg_audio_name` (a track of the
+  shared music library, default `dustymagic`) and `bg_audio_gain_db`
   (default `20`, applied on top of `[assembly] bg_audio_volume`). Leave the
   Assemble step's audio field / the `--bg-audio` CLI flag blank to use these,
   or set them to override per run.
@@ -546,7 +591,7 @@ A horizontal 16:9 **"Brezel Podcast"** episode in which two hosts (Character A +
 - **Studio art.** Every studio line points to one shared image (`reference_type: "podcast_studio"`). It shows
   the two hosts with headphones, boom microphones with pop filters, acoustic foam panels, and a neon sign
   with a cartoon pretzel and the words "Brezel Podcast".
-  - It is generated **once per host pair and orientation** and cached in `assets/podcast_studio/`, so
+  - It is generated **once per host pair and orientation** and cached in `assets/studios/podcast/`, so
     later episodes with the same hosts reuse it for free.
   - The cache file name includes a hash of the prompt, so editing the prompt creates a new image instead
     of reusing a stale one.
@@ -564,7 +609,7 @@ A horizontal 16:9 **"Brezel Podcast"** episode in which two hosts (Character A +
   - A Short that starts mid-example still shows that example's image.
   - Assembly reuses `assemble_reading._finalize`, which adds the corner label, the end card, optional
     background music, speed and branding.
-- **Language.** The whole episode is in German: the hosts explain, react and joke in German, and there are no English glosses. The type prompt enforces this.
+- **Language.** The whole episode is in the workspace's language: the hosts explain, react and joke in it, and there are no English glosses. The type prompt enforces this.
 - **Hand-written episodes.** To use an exact script (for example, one modelled on a sample episode), build the dialog list yourself. Each item has `text`, `speaker`, `setting`, `example_id`, `scene_visual` and `scene_characters`. Pass it to `create_script.build_scene_list(...)` and store the Shorts with `podcast.save_shorts(...)`. Neither makes an API call. Setting some example lines to `studio` reduces the number of illustrations, since the studio shot is free after the first episode.
 - **Visual guidelines** only art-direct the example cut-aways. For this type they do not pin one fixed
   location, because each example happens somewhere else.
@@ -652,7 +697,7 @@ Full CRUD for all asset types:
 |---|---|
 | Characters | Name, fixed/variable description, voice ID, art paths, reference drawing upload |
 | Locations | Key, description, artwork file path |
-| Project Types | Read-only display of `project_types.json` entries |
+| Project Types | Moved to Settings → Project types (full prompt editor) |
 | Background Audio | Audio tracks for assembly |
 | SFX | Sound effect assets |
 | Subtitle Preview | Render a still preview of narration/subtitle/footnote text over a sample background, using the live per-orientation config styling (matches the real render). Pick orientation + style (dialogue/narration), type text, optionally add a footnote or the centered "repeat" overlay |
@@ -927,31 +972,7 @@ Powering the [Connections](#connecting-your-accounts-youtube--instagram--faceboo
 
 ## Asset Directory Structure
 
-```
-assets/
-├── characters/
-│   ├── characters.json               ← all character definitions
-│   └── <CharacterName>/              ← per-character folder
-│       ├── art.png                   ← full turnaround sheet
-│       └── 34left.png                ← 3/4-left view (used as reference for scene compositing)
-├── locations/
-│   ├── locations.json                ← all location definitions
-│   └── <location_key>.png            ← location background images
-├── project_types/
-│   └── project_types.json            ← vertical: shadowing / story / word_learning / register_phrases / grammar_pairs
-│                                        horizontal: shadowing_long / story_long / word_learning_long / register_phrases_long / grammar_pairs_long / podcast
-├── background_audio/
-│   ├── background_audio.json
-│   └── *.mp3
-├── sfx/
-│   ├── sfx.json
-│   ├── bell.mp3
-│   └── bitte_wiederholen.mp3
-├── branding/                         ← intro/outro video clips (.mp4 / .mov / .webm)
-├── podcast_studio/                   ← cached shared podcast studio art: <A>__<B>__<orientation>_<prompt-hash>.png
-├── samples/                          ← vertical.png / horizontal.png backgrounds for the Subtitle Preview
-└── video_clips/                      ← other raw .mp4 clips
-```
+See [Workspaces, Settings & Storage](#workspaces-settings--storage) for the folder layout.
 
 ---
 
@@ -1076,27 +1097,12 @@ At minimum set `projects_dir` and `assets_dir` under `[paths]`. All other values
 
 ### 4. Populate asset data
 
-The `assets/` directory ships with `.example.json` template files that show the expected schema for every asset type. Copy them and fill in your own characters, locations, and audio files:
+On the first start the app creates a default workspace with the shipped project types
+(`defaults/project_types.json`). Set its language, channel, icon and mascot in **Settings → Workspace**,
+then add characters, music and branding clips in the **Assets** view. Upgrading an install that still
+has the old `assets/**/*.json` registries? Run `python migrate_to_db.py` once (see above).
 
-| Template file | Real file | What it defines |
-|---|---|---|
-| `assets/assets.example.json` | `assets/assets.json` | Master registry (links to all other JSONs) |
-| `assets/characters/characters.example.json` | `assets/characters/characters.json` | Characters with voice IDs and art paths |
-| `assets/locations/locations.example.json` | `assets/locations/locations.json` | Location keys, descriptions, and artwork paths |
-| `assets/background_audio/background_audio.example.json` | `assets/background_audio/background_audio.json` | Ambient audio tracks |
-| `assets/sfx/sfx.example.json` | `assets/sfx/sfx.json` | Sound effect assets |
-| `assets/video_clips/video_clips.example.json` | `assets/video_clips/video_clips.json` | Intro/outro branding clips |
-
-```bash
-cp assets/assets.example.json assets/assets.json
-cp assets/characters/characters.example.json assets/characters/characters.json
-cp assets/locations/locations.example.json assets/locations/locations.json
-cp assets/background_audio/background_audio.example.json assets/background_audio/background_audio.json
-cp assets/sfx/sfx.example.json assets/sfx/sfx.json
-cp assets/video_clips/video_clips.example.json assets/video_clips/video_clips.json
-```
-
-You can then manage all of this through the web UI (Assets tab) without editing JSON directly.
+Everything is managed through the web UI — no JSON editing needed.
 
 ---
 
@@ -1339,7 +1345,7 @@ python upload_instagram.py --setup \
 
 ## Extending with New Video Types
 
-New project types are defined entirely in `assets/project_types/project_types.json` — no Python changes required.
+New project types are defined entirely as data (Settings → Project types) — no Python changes required.
 
 > **Exception:** `reading_together` is a built-in special type. It is registered in `project_types.json` (with `"reading": true` and a `scene_builder_rules.mode` of `"reading"`) but is driven by `create_reading_source.py` / `assemble_reading.py` rather than the standard dialog prompt + `build_scene_list()` flow, so it does not use `description_for_prompt` or `output_json_schema`.
 

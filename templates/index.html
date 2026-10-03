@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root"><div class="boot">Loading…</div></div>
 
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
@@ -20,19 +20,46 @@
        emits `import { jsx } from "react/jsx-runtime"` and breaks the no-build setup. -->
   <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
 
-  <script type="text/babel" src="/static/js/AppContext.js"></script>
-  <script type="text/babel" src="/static/js/api.js"></script>
-  <script type="text/babel" src="/static/js/components/Sidebar.js"></script>
-  <script type="text/babel" src="/static/js/components/Modals.js"></script>
-  <script type="text/babel" src="/static/js/components/PipelineTab.js"></script>
-  <script type="text/babel" src="/static/js/components/ItemsTab.js"></script>
-  <script type="text/babel" src="/static/js/components/ManifestTab.js"></script>
-  <script type="text/babel" src="/static/js/components/ProjectView.js"></script>
-  <script type="text/babel" src="/static/js/components/AssetsTab.js"></script>
-  <script type="text/babel" src="/static/js/components/SubtitlesTab.js"></script>
-  <script type="text/babel" src="/static/js/components/ConnectionsTab.js"></script>
-  <script type="text/babel" src="/static/js/components/SettingsView.js"></script>
-  <script type="text/babel" src="/static/js/App.js"></script>
-  <script type="text/babel" src="/static/js/index.js"></script>
+  <!-- JSX loader: each file is compiled once with Babel and cached in localStorage
+       under a hash of its source, so later loads skip compiling (only changed files
+       are recompiled). Files run in order in the global scope, exactly like the
+       old <script type="text/babel"> tags. -->
+  <script>
+  (async function () {
+    const FILES = [
+      "/static/js/AppContext.js",
+      "/static/js/api.js",
+      "/static/js/components/Sidebar.js",
+      "/static/js/components/Modals.js",
+      "/static/js/components/PipelineTab.js",
+      "/static/js/components/ItemsTab.js",
+      "/static/js/components/ManifestTab.js",
+      "/static/js/components/ProjectView.js",
+      "/static/js/components/AssetsTab.js",
+      "/static/js/components/SubtitlesTab.js",
+      "/static/js/components/ConnectionsTab.js",
+      "/static/js/components/SettingsView.js",
+      "/static/js/App.js",
+      "/static/js/index.js"
+    ];
+    const OPTS = { presets: ["react"], plugins: ["transform-block-scoping"] };
+    async function hash(text) {
+      const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text));
+      return Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, "0")).join("");
+    }
+    const sources = await Promise.all(FILES.map(f => fetch(f, { cache: "no-cache" }).then(r => r.text())));
+    for (let i = 0; i < FILES.length; i++) {
+      const f = FILES[i], src = sources[i], key = "jsx:" + f, h = await hash(src + Babel.version);
+      let code = null;
+      try { const c = JSON.parse(localStorage.getItem(key) || "null"); if (c && c.h === h) code = c.code; } catch (e) {}
+      if (code === null) {
+        try { code = Babel.transform(src, { ...OPTS, filename: f }).code; }
+        catch (e) { console.error("JSX compile error in " + f, e); document.getElementById("root").textContent = "Compile error in " + f + ": " + e.message; return; }
+        try { localStorage.setItem(key, JSON.stringify({ h, code })); } catch (e) {}
+      }
+      (0, eval)(code + "\n//# sourceURL=" + location.origin + f);
+    }
+  })();
+  </script>
 </body>
 </html>

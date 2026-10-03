@@ -443,7 +443,7 @@ function SceneEditZone({ scene, projectName, onSaved, speakerOptions }) {
           </div>
         ) : (
           <div className="edit-f">
-            <label>Text (German)</label>
+            <label>Text</label>
             <textarea rows={3} value={text} onChange={e => setText(e.target.value)}/>
           </div>
         )}

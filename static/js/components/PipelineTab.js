@@ -2,23 +2,6 @@
 const { useState, useEffect } = React;
 
 const SHOT_TYPES    = ["both", "over_shoulder_A", "over_shoulder_B"];
-const PROJECT_TYPES = {
-  vertical: [
-    { value: "shadowing",        label: "Shadowing (with repetitions)"            },
-    { value: "story",            label: "Story (no repetitions)"                  },
-    { value: "word_learning",    label: "Word Learning (vocabulary)"              },
-    { value: "register_phrases", label: "Register Phrases (formal / slang / ...)" },
-    { value: "grammar_pairs",    label: "Grammar Pairs (base → transformed)"      },
-  ],
-  horizontal: [
-    { value: "shadowing_long",        label: "Shadowing — Long (with repetitions)"            },
-    { value: "story_long",            label: "Story — Long (no repetitions)"                  },
-    { value: "word_learning_long",    label: "Word Learning — Long (vocabulary)"              },
-    { value: "register_phrases_long", label: "Register Phrases — Long (formal / slang / ...)" },
-    { value: "grammar_pairs_long",    label: "Grammar Pairs — Long (base → transformed)"      },
-    { value: "podcast",               label: "Podcast (+ vertical Shorts)"   },
-  ],
-};
 
 // Helper: does this project type key use a word list?
 const isWordLearningType = t => t === "word_learning" || t === "word_learning_long";
@@ -144,6 +127,7 @@ function ScriptFields({ projectName }) {
   const meta= m.project_metadata  || {};
 
   const [projType,     setProjType]     = useState(meta.project_type_key || gen.project_type_key || "story");
+  const projectTypes = useProjectTypes();
   const [charA,        setCharA]        = useState((gen.characters||[])[0] || "");
   const [charB,        setCharB]        = useState((gen.characters||[])[1] || "");
   // Extra cast beyond A and B (multi-character conversational types).
@@ -295,12 +279,7 @@ function ScriptFields({ projectName }) {
         <div className="field" style={{flex:2}}>
           <label>Project Type</label>
           <select value={projType} onChange={e=>setProjType(e.target.value)}>
-            <optgroup label="▸ Vertical — 1080×1920 (Shorts / Reels)">
-              {PROJECT_TYPES.vertical.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </optgroup>
-            <optgroup label="▸ Horizontal — 1920×1080 Full HD (YouTube)">
-              {PROJECT_TYPES.horizontal.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </optgroup>
+            <ProjectTypeOptions types={projectTypes} current={projType}/>
           </select>
         </div>
         <div className="field" style={{flex:1}}>
@@ -930,7 +909,7 @@ function UploadFields({ projectName }) {
       <div className="field">
         <label>Tags <span style={{color:"var(--muted)",fontWeight:300}}>(comma-separated)</span></label>
         <textarea rows={2} value={tags} onChange={e=>setTags(e.target.value)}
-          placeholder="german, deutschlernen, shorts"/>
+          placeholder="e.g. languagelearning, shorts"/>
       </div>
 
       <div className="field-row">
@@ -1288,7 +1267,7 @@ function PromoBuildFields() {
           <span style={{color:"var(--muted)",fontWeight:300,marginLeft:".3rem"}}>(spoken + subtitle)</span>
         </label>
         <textarea rows={3} value={text} onChange={e=>setText(e.target.value)}
-          placeholder="e.g. Willst du dein Deutsch verbessern? Schau dir mein neues Video an!"/>
+          placeholder="e.g. a short teaser line for the story"/>
       </div>
       <div style={{fontSize:".78rem",color:"var(--muted)"}}>
         Builds one vertical 9:16 scene: the character image, their voice, and the subtitle.
@@ -1779,7 +1758,7 @@ function makeDefaultSteps(projectName, igDisabled) {
     {
       id:"review", num:2,
       title:"Review Script (GPT)",
-      desc:"GPT proofreads the German script for grammar, naturalness, and level.",
+      desc:"GPT proofreads the script for grammar, naturalness, and level.",
       Fields: ReviewFields,
       payload: () => ReviewFields._getPayload?.() || {},
       endpoint: n => `/projects/${n}/run/review`,
