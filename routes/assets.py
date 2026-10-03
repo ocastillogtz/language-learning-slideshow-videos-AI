@@ -156,6 +156,85 @@ def generate_character_art(name: str):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Styled character art: drawing + existing cast as style sample → fal edit ──
+
+@bp.route("/assets/characters/<name>/styled-art")
+def styled_art_setup(name: str):
+    """Everything the 'Generate in series style' panel needs (free, no fal call):
+    the default prompt, the characters usable as style sample, the drawing, models."""
+    try:
+        import character_art as ca
+        from manage_characters import load_characters
+        c = load_characters(assets_dir()).get(name)
+        if c is None:
+            return jsonify({"error": f"Character '{name}' not found"}), 404
+        drawing = ca.drawing_path(assets_dir(), c)
+        return jsonify({
+            "style_candidates": ca.style_candidates(assets_dir(), exclude=name),
+            "drawing": drawing.relative_to(assets_dir()).as_posix() if drawing else None,
+            "prompt": ca.default_prompt(c, bool(drawing)),
+            "targets": list(ca.TARGETS),
+            "in_use": {t: c.get(f) for t, f in ca.TARGETS.items()},
+            "candidates": c.get("art_candidates", []),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/assets/characters/<name>/style-sample.png")
+def styled_art_sample(name: str):
+    """The style-sample image exactly as it would be sent (free preview)."""
+    try:
+        import io
+        import character_art as ca
+        names = [n for n in (request.args.get("chars") or "").split(",") if n]
+        buf = io.BytesIO()
+        ca.build_style_sample(assets_dir(), names).save(buf, format="PNG")
+        return Response(buf.getvalue(), mimetype="image/png", headers={"Cache-Control": "no-store"})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/assets/characters/<name>/styled-art", methods=["POST"])
+def styled_art_generate(name: str):
+    """PAID: run the fal edit model in the background. Body: {model, prompt, chars,
+    image_size}. Poll /projects/assets/status/char_art_<name>."""
+    try:
+        import character_art as ca
+        data = request.get_json() or {}
+        prompt = (data.get("prompt") or "").strip()
+        chars = [n for n in data.get("chars") or [] if n]
+        if not prompt or not chars:
+            return jsonify({"error": "A prompt and at least one style-sample character are required"}), 400
+        step = f"char_art_{name}"
+        run_job("assets", step, ca.generate, assets_dir(), name, data.get("model") or None,
+                prompt, chars, data.get("image_size") or "portrait_4_3")
+        return jsonify({"message": "Generating", "step_key": step})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/assets/characters/<name>/candidates/accept", methods=["POST"])
+def styled_art_accept(name: str):
+    try:
+        import character_art as ca
+        data = request.get_json() or {}
+        return jsonify({"character": ca.accept(assets_dir(), name, data.get("path", ""), data.get("target", "scene_reference"))})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@bp.route("/assets/characters/<name>/candidates/discard", methods=["POST"])
+def styled_art_discard(name: str):
+    try:
+        import character_art as ca
+        return jsonify({"character": ca.discard(assets_dir(), name, (request.get_json() or {}).get("path", ""))})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @bp.route("/assets/characters/<name>/upload-reference", methods=["POST"])
 def upload_character_reference(name: str):
     """

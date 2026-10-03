@@ -56,6 +56,12 @@ projects/                   German workspace projects (new workspaces: workspace
 data/pipeline.db
 ```
 
+**Character art in the series style.** In **Assets → Characters → (character) → Generate art in the
+series style** the fal edit model receives (1) the character's hand-made drawing, (2) one image of the
+existing characters side by side as the style sample (you pick who is in it — preview shown before
+paying) and (3) an editable prompt; you choose the model (Settings → `[fal_models]`) and size. Each
+result is kept as a candidate until you accept it as scene reference, thumbnail or turnaround.
+
 **Background music volume.** In **Assets → Music → Volume** you can raise or lower a track, listen to a
 15-second slice from the middle (also mixed under a spoken line at the video's background level) and
 save it. The original upload is kept, so the gain can be changed again without quality loss.

@@ -239,12 +239,6 @@ function CharacterDrawer({ name, c, usage, isNew, onClose, reload, onCreated, bu
     try { await apiPostForm(`/assets/characters/${encodeURIComponent(name)}/upload-reference`, fd); toast("Uploaded", "Reference drawing saved.", "ok"); await reload(); }
     catch (e) { toast("Error", e.message, "err"); }
   }
-  async function genArt() {
-    if (!confirm(`Generate art for “${name}”?\n\n${PAID_NOTE}`)) return;
-    try { await apiPost(`/assets/characters/${encodeURIComponent(name)}/generate-art`, {}); toast("Started", "Art generation runs in the background — reopen in a minute.", "ok"); }
-    catch (e) { toast("Error", e.message, "err"); }
-  }
-
   const images = isNew ? [] : CHAR_IMAGES.filter(([k]) => c[k]);
   return (
     <AsDrawer title={isNew ? "New character" : name} subtitle={!isNew && <UsedBy list={usage}/>} onClose={onClose}
@@ -267,12 +261,13 @@ function CharacterDrawer({ name, c, usage, isNew, onClose, reload, onCreated, bu
       )}
       {!isNew && (
         <div className="edit-actions" style={{marginTop:0}}>
-          <button className="btn-ghost" onClick={() => fileRef.current.click()}>Upload reference drawing</button>
-          <button className="btn-ghost" onClick={genArt} title={PAID_NOTE}>Generate art (paid)</button>
+          <button className="btn-ghost" onClick={() => fileRef.current.click()}>
+            {c.ref_drawing_file_path ? "Replace hand-made drawing" : "Upload hand-made drawing"}</button>
           <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
             onChange={e => { if (e.target.files[0]) uploadRef(e.target.files[0]); e.target.value = ""; }}/>
         </div>
       )}
+      {!isNew && <StyledArtPanel name={name} bust={bust} reload={reload}/>}
       <div className="fields">
         {isNew && <AsField label="Name"><input value={f.name} onChange={set("name")} placeholder="e.g. Zahra"/></AsField>}
         <AsField label="Fixed description" hint="Identity — never changes (age, origin, face, hair).">
@@ -287,6 +282,149 @@ function CharacterDrawer({ name, c, usage, isNew, onClose, reload, onCreated, bu
           <input value={f.ref_desc} onChange={set("ref_desc")}/></AsField>
       </div>
     </AsDrawer>
+  );
+}
+
+// Generate the character "in the series style": fal edit model gets the hand-made
+// drawing + one image of the chosen existing characters side by side + the prompt.
+// Results land as candidates; nothing is replaced until one is accepted.
+const STYLED_SIZES = [["portrait_4_3", "Portrait 3:4"], ["portrait_16_9", "Portrait 9:16"],
+                      ["square_hd", "Square"], ["landscape_16_9", "Landscape 16:9 (turnaround)"]];
+const TARGET_LABELS = { scene_reference: "Use as scene reference", thumbnail: "Use as thumbnail", turnaround: "Use as turnaround" };
+
+function StyledArtPanel({ name, bust, reload }) {
+  const { toast, startPoll } = useApp();
+  const [open, setOpen]     = useState(false);
+  const [setup, setSetup]   = useState(null);
+  const [models, setModels] = useState({ models: [], default_key: null });
+  const [chosen, setChosen] = useState([]);
+  const [model, setModel]   = useState("");
+  const [size, setSize]     = useState("portrait_4_3");
+  const [prompt, setPrompt] = useState("");
+  const [running, setRunning] = useState(false);
+  const [sampleKey, setSampleKey] = useState("");
+  const enc = encodeURIComponent(name);
+
+  const load = useCallback(async (keepChoices) => {
+    const d = await apiGet(`/assets/characters/${enc}/styled-art`);
+    setSetup(d);
+    if (!keepChoices) {
+      setChosen(d.style_candidates.filter(x => x.default).map(x => x.name));
+      setPrompt(d.prompt);
+    }
+  }, [enc]);
+  useEffect(() => {
+    if (!open || setup) return;
+    load(false).catch(e => toast("Error", e.message, "err"));
+    fetchImageModels().then(m => { setModels(m); setModel(m.default_key || (m.models[0] || {}).key || ""); });
+  }, [open]);
+  // Debounce the sample preview so ticking several characters renders it once.
+  useEffect(() => { const t = setTimeout(() => setSampleKey(chosen.join(",")), 400); return () => clearTimeout(t); }, [chosen]);
+
+  function toggle(n) { setChosen(p => p.includes(n) ? p.filter(x => x !== n) : [...p, n]); }
+
+  async function generate() {
+    const ep = (models.models.find(m => m.key === model) || {}).endpoint || model;
+    if (!confirm(`Generate “${name}” with ${model}?\n\nSends ${setup.drawing ? "the drawing + " : ""}a style sample of ${chosen.length} character(s) to ${ep}.\n${PAID_NOTE}`)) return;
+    setRunning(true);
+    try {
+      const d = await apiPost(`/assets/characters/${enc}/styled-art`, { model, prompt, chars: chosen, image_size: size });
+      startPoll("assets", d.step_key, async st => {
+        setRunning(false);
+        if (st.status === "error") toast("Generation failed", st.log || "", "err");
+        else { toast("Done", "New candidate below — accept it to use it.", "ok"); await load(true); await reload(); }
+      });
+    } catch (e) { setRunning(false); toast("Error", e.message, "err"); }
+  }
+  async function accept(path, target) {
+    try { await apiPost(`/assets/characters/${enc}/candidates/accept`, { path, target }); await load(true); await reload(); toast("Saved", TARGET_LABELS[target].replace("Use as ", "") + " updated.", "ok"); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+  async function discard(path) {
+    if (!confirm("Discard this candidate?")) return;
+    try { await apiPost(`/assets/characters/${enc}/candidates/discard`, { path }); await load(true); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+
+  if (!open) {
+    return <button className="btn-ghost sa-open" onClick={() => setOpen(true)}>✦ Generate art in the series style…</button>;
+  }
+  if (!setup) return <div className="sa-panel"><div className="as-empty">Loading…</div></div>;
+
+  const current = setup.style_candidates;
+  return (
+    <div className="sa-panel">
+      <div className="sa-head">
+        <strong>Generate in the series style</strong>
+        <button className="modal-close" onClick={() => setOpen(false)}>✕</button>
+      </div>
+
+      <div className="sa-sent">
+        <div className="sa-slot">
+          <label>1 · Hand-made drawing</label>
+          {setup.drawing ? <img src={assetUrl(setup.drawing, bust)} alt="drawing"/>
+                         : <div className="sa-missing">No drawing yet — upload one above for the best result (otherwise the model works from the description).</div>}
+        </div>
+        <div className="sa-slot wide">
+          <label>2 · Style sample ({chosen.length} characters)</label>
+          {sampleKey ? <img src={`/assets/characters/${enc}/style-sample.png?chars=${encodeURIComponent(sampleKey)}`} alt="style sample"/>
+                     : <div className="sa-missing">Pick at least one character below.</div>}
+        </div>
+      </div>
+
+      <div className="sa-chips">
+        {current.map(x => (
+          <button key={x.name} className={"sa-chip" + (chosen.includes(x.name) ? " on" : "")} onClick={() => toggle(x.name)} title={x.name}>
+            <img src={assetUrl(x.path, bust)} alt=""/><span>{x.name}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="field-row" style={{marginTop:".7rem"}}>
+        <AsField label="Model">
+          <select value={model} onChange={e => setModel(e.target.value)}>
+            {models.models.map(m => <option key={m.key} value={m.key}>{m.key}</option>)}
+          </select>
+        </AsField>
+        <AsField label="Image size">
+          <select value={size} onChange={e => setSize(e.target.value)}>
+            {STYLED_SIZES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </AsField>
+      </div>
+      <AsField label="3 · Prompt" hint={<>Models come from Settings → All settings → [fal_models]. <a href="#" onClick={e => { e.preventDefault(); setPrompt(setup.prompt); }}>Reset prompt</a></>}>
+        <textarea rows={7} value={prompt} onChange={e => setPrompt(e.target.value)}/>
+      </AsField>
+      <div className="edit-actions">
+        <button className="btn-primary" disabled={running || !chosen.length || !prompt.trim()} onClick={generate}>
+          {running ? "Generating… (≈20–60 s)" : "Generate (paid)"}
+        </button>
+      </div>
+
+      {setup.candidates.length > 0 && (
+        <div className="sa-cands">
+          <label>Candidates</label>
+          {setup.candidates.map(cd => {
+            const inUse = Object.keys(TARGET_LABELS).filter(t => (setup.in_use || {})[t] === cd.path);
+            return (
+              <div key={cd.path} className="sa-cand">
+                <a href={assetUrl(cd.path)} target="_blank" rel="noreferrer"><img src={assetUrl(cd.path)} alt=""/></a>
+                <div className="sa-cand-info">
+                  <div className="set-help">{cd.model} · {cd.created.replace("_", " ")} · {cd.style_sample.length} style refs{cd.used_drawing ? " + drawing" : ""}</div>
+                  <div className="sa-cand-btns">
+                    {Object.keys(TARGET_LABELS).map(t => inUse.includes(t)
+                      ? <span key={t} className="as-used">✓ {t.replace("_", " ")}</span>
+                      : <button key={t} className="btn-edit" onClick={() => accept(cd.path, t)}>{TARGET_LABELS[t]}</button>)}
+                    <button className="btn-edit" onClick={() => discard(cd.path)}>Discard</button>
+                    <button className="btn-edit" onClick={() => setPrompt(cd.prompt)} title="Load the prompt used for this candidate">Reuse prompt</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

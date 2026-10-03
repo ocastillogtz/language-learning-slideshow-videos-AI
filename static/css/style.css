@@ -447,3 +447,22 @@ img.as-hero { background:#f4f1ea; }
 .gain-sug { align-self:flex-start; margin-top:.25rem; background:rgba(74,222,128,.1); border:1px solid rgba(74,222,128,.3); color:var(--green); border-radius:20px; font-family:'DM Sans',sans-serif; font-size:.7rem; padding:.12rem .6rem; cursor:pointer; }
 .gain-sug:hover { background:rgba(74,222,128,.2); }
 .gain-sug.same { background:transparent; border-color:transparent; color:var(--muted); cursor:default; }
+
+/* Styled character art panel (character drawer) */
+.sa-open { align-self:flex-start; color:var(--accent); border-color:rgba(232,200,74,.35); }
+.sa-panel { background:var(--s2); border:1px solid rgba(232,200,74,.25); border-radius:12px; padding:.9rem 1rem; display:flex; flex-direction:column; gap:.6rem; }
+.sa-head { display:flex; align-items:center; justify-content:space-between; font-size:.9rem; }
+.sa-sent { display:grid; grid-template-columns:1fr 2.2fr; gap:.6rem; }
+.sa-slot { display:flex; flex-direction:column; gap:.3rem; min-width:0; }
+.sa-slot label, .sa-cands label { font-size:.64rem; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.sa-slot img { width:100%; max-height:220px; object-fit:contain; background:#fff; border-radius:8px; border:1px solid var(--border); }
+.sa-missing { font-size:.74rem; color:var(--orange); background:rgba(251,146,60,.07); border:1px dashed rgba(251,146,60,.3); border-radius:8px; padding:.6rem; min-height:80px; }
+.sa-chips { display:flex; flex-wrap:wrap; gap:.3rem; }
+.sa-chip { display:flex; align-items:center; gap:.3rem; background:var(--s1); border:1px solid var(--border); border-radius:20px; padding:.15rem .55rem .15rem .2rem; color:var(--muted); font-family:'DM Sans',sans-serif; font-size:.72rem; cursor:pointer; opacity:.55; }
+.sa-chip img { width:22px; height:22px; border-radius:50%; object-fit:cover; object-position:top; background:#fff; }
+.sa-chip.on { opacity:1; color:var(--text); border-color:var(--accent); }
+.sa-cands { display:flex; flex-direction:column; gap:.5rem; border-top:1px solid var(--border); padding-top:.7rem; }
+.sa-cand { display:flex; gap:.7rem; align-items:flex-start; }
+.sa-cand img { width:110px; aspect-ratio:3/4; object-fit:contain; background:#fff; border-radius:8px; border:1px solid var(--border); }
+.sa-cand-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:.35rem; }
+.sa-cand-btns { display:flex; flex-wrap:wrap; gap:.3rem; }
