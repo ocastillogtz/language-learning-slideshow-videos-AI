@@ -1,660 +1,819 @@
-// AssetsTab.js — global asset management panel
-// Tabs: Characters · Locations · Project Types · Background Audio · SFX
-const { useState, useEffect, useCallback } = React;
+// AssetsTab.js — the Assets view: everything videos are built from.
+//
+//   Characters · Locations   per workspace (art lives in assets/characters, assets/locations)
+//   Music · SFX              shared library used by every workspace (library/music, library/sfx)
+//   Branding                 intro/outro clips + branding images of the workspace
+//
+// Cards show the artwork / play the media inline; clicking one opens a side drawer
+// to edit it. "Used by" counts come from the project index (GET /assets/usage).
+const { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } = React;
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
+// ── One shared audio player (only one track plays at a time) ──────────────────
 
-function Section({ title, children }) {
+const AsAudioCtx = createContext(null);
+
+function AsAudioProvider({ children }) {
+  const audioRef = useRef(null);
+  const [cur, setCur]   = useState(null);           // id of the playing item
+  const [prog, setProg] = useState({ t: 0, d: 0 });
+
+  useEffect(() => {
+    const a = new Audio();
+    a.preload = "none";
+    a.addEventListener("timeupdate", () => setProg({ t: a.currentTime, d: a.duration || 0 }));
+    a.addEventListener("ended", () => setCur(null));
+    audioRef.current = a;
+    return () => { a.pause(); a.src = ""; };
+  }, []);
+
+  const toggle = useCallback((id, src) => {
+    const a = audioRef.current;
+    if (cur === id) { a.pause(); setCur(null); return; }
+    a.src = src;
+    a.currentTime = 0;
+    setProg({ t: 0, d: 0 });
+    a.play().catch(() => setCur(null));
+    setCur(id);
+  }, [cur]);
+  const stop = useCallback(() => { audioRef.current && audioRef.current.pause(); setCur(null); }, []);
+  const seek = useCallback(frac => {
+    const a = audioRef.current;
+    if (a && a.duration) a.currentTime = frac * a.duration;
+  }, []);
+
+  return <AsAudioCtx.Provider value={{ cur, prog, toggle, stop, seek }}>{children}</AsAudioCtx.Provider>;
+}
+
+function AsPlayButton({ id, src, size }) {
+  const { cur, toggle } = useContext(AsAudioCtx);
+  const on = cur === id;
   return (
-    <div style={{marginBottom:"2rem"}}>
-      <div style={{
-        fontSize:".7rem",fontWeight:600,letterSpacing:".08em",
-        textTransform:"uppercase",color:"var(--muted)",marginBottom:".75rem"
-      }}>{title}</div>
-      {children}
-    </div>
+    <button className={"as-play" + (on ? " on" : "")} style={size ? { width: size, height: size } : null}
+      title={on ? "Stop" : "Play"} onClick={e => { e.stopPropagation(); toggle(id, src); }}>
+      {on
+        ? <svg viewBox="0 0 12 12" width="11" height="11"><rect x="2" y="2" width="3" height="8" fill="currentColor"/><rect x="7" y="2" width="3" height="8" fill="currentColor"/></svg>
+        : <svg viewBox="0 0 12 12" width="11" height="11"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor"/></svg>}
+    </button>
   );
 }
 
-function AssetRow({ label, meta, onEdit, onRemove, onAction, actionLabel }) {
+function AsProgress({ id }) {
+  const { cur, prog, seek } = useContext(AsAudioCtx);
+  if (cur !== id) return null;
+  const pct = prog.d ? (prog.t / prog.d) * 100 : 0;
   return (
-    <div style={{
-      display:"flex",alignItems:"center",gap:".6rem",
-      padding:".55rem .75rem",borderRadius:6,
-      background:"var(--surface)",border:"1px solid var(--border)",
-      marginBottom:".4rem",
+    <div className="as-prog" onClick={e => {
+      const r = e.currentTarget.getBoundingClientRect();
+      seek((e.clientX - r.left) / r.width);
     }}>
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{fontWeight:500,fontSize:".88rem"}}>{label}</div>
-        {meta && <div style={{fontSize:".76rem",color:"var(--muted)",marginTop:".15rem",
-          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{meta}</div>}
-      </div>
-      {onAction && actionLabel && (
-        <button className="btn-ghost" style={{fontSize:".74rem",padding:".25rem .6rem"}}
-          onClick={onAction}>{actionLabel}</button>
-      )}
-      {onEdit && (
-        <button className="btn-ghost" style={{fontSize:".74rem",padding:".25rem .6rem"}}
-          onClick={onEdit}>Edit</button>
-      )}
-      {onRemove && (
-        <button className="btn-ghost" style={{fontSize:".74rem",padding:".25rem .6rem",color:"var(--err,#e55)"}}
-          onClick={onRemove}>Remove</button>
-      )}
+      <div className="as-prog-fill" style={{ width: pct + "%" }}/>
+      <span className="as-prog-time">{fmtTime(prog.t)} / {fmtTime(prog.d)}</span>
     </div>
   );
 }
 
-function FieldRow({ label, children }) {
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtTime(s) {
+  if (!s || !isFinite(s)) return "0:00";
+  const m = Math.floor(s / 60), r = Math.floor(s % 60);
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+function assetUrl(rel, bust)   { return rel ? `/asset-files/${rel}${bust ? `?v=${bust}` : ""}` : null; }
+function libraryUrl(rel, bust) { return rel ? `/library-files/${rel}${bust ? `?v=${bust}` : ""}` : null; }
+
+function UsedBy({ list }) {
+  const n = (list || []).length;
   return (
-    <div className="field" style={{marginBottom:".6rem"}}>
+    <span className={"as-used" + (n ? "" : " none")} title={n ? list.join("\n") : "Not used by any project yet"}>
+      {n ? `${n} project${n === 1 ? "" : "s"}` : "unused"}
+    </span>
+  );
+}
+
+function AsDrawer({ title, subtitle, onClose, children, footer }) {
+  useEffect(() => {
+    const k = e => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  }, [onClose]);
+  return (
+    <div className="as-drawer-bg" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <aside className="as-drawer">
+        <div className="as-drawer-hdr">
+          <div style={{minWidth:0}}>
+            <h3>{title}</h3>
+            {subtitle && <div className="as-drawer-sub">{subtitle}</div>}
+          </div>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="as-drawer-body">{children}</div>
+        {footer && <div className="as-drawer-foot">{footer}</div>}
+      </aside>
+    </div>
+  );
+}
+
+function AsField({ label, hint, children }) {
+  return (
+    <div className="field">
       <label>{label}</label>
       {children}
+      {hint && <div className="set-help">{hint}</div>}
     </div>
   );
 }
 
-function FormPanel({ title, onSave, onCancel, saving, children }) {
+function AsFilePick({ accept, label, file, onFile }) {
+  const ref = useRef(null);
+  const [over, setOver] = useState(false);
   return (
-    <div style={{
-      border:"1px solid var(--border)",borderRadius:8,padding:"1rem",
-      marginBottom:"1rem",background:"var(--surface)"
-    }}>
-      <div style={{fontWeight:600,marginBottom:".75rem"}}>{title}</div>
-      {children}
-      <div style={{display:"flex",gap:".5rem",marginTop:".75rem"}}>
-        <button className="btn-primary" onClick={onSave} disabled={saving}>
-          {saving ? "Saving…" : "Save"}
-        </button>
-        <button className="btn-cancel" onClick={onCancel}>Cancel</button>
+    <div className={"sample-drop" + (over ? " dragover" : "")}
+      onClick={() => ref.current.click()}
+      onDragOver={e => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={e => { e.preventDefault(); setOver(false); if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); }}>
+      <div className="sample-drop-text">
+        {file ? <><strong>{file.name}</strong> · {(file.size / 1048576).toFixed(1)} MB — click to change</>
+              : <>Drop a file here or <strong>browse</strong> · {label}</>}
       </div>
+      <input ref={ref} type="file" accept={accept} style={{display:"none"}}
+        onChange={e => { if (e.target.files[0]) onFile(e.target.files[0]); e.target.value = ""; }}/>
     </div>
   );
 }
 
-// ── Reference image upload helper ────────────────────────────────────────────
-
-function RefImagePicker({ name, existingPath, onUploaded }) {
-  // Used both inline (during add, before the character exists) and standalone
-  // (for an already-saved character).
-  const { toast }                     = useApp();
-  const [file,      setFile]          = useState(null);
-  const [preview,   setPreview]       = useState(null);
-  const [uploading, setUploading]     = useState(false);
-  const inputRef = React.useRef(null);
-
-  function pickFile(e) {
-    const f = e.target.files[0];
-    if (!f) return;
-    setFile(f);
-    const reader = new FileReader();
-    reader.onload = ev => setPreview(ev.target.result);
-    reader.readAsDataURL(f);
-  }
-
-  async function upload() {
-    if (!file || !name) return;
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const d = await apiPostForm(`/assets/characters/${name}/upload-reference`, fd);
-      toast("Saved", "Reference drawing uploaded.", "ok");
-      setFile(null); setPreview(null);
-      if (onUploaded) onUploaded(d.file_path);
-    } catch(e) { toast("Error", e.message, "err"); }
-    finally { setUploading(false); }
-  }
-
-  const currentImg = preview
-    ? preview
-    : existingPath ? `/asset-files/${existingPath}` : null;
-
-  return (
-    <div style={{display:"flex",gap:"1rem",alignItems:"flex-start",flexWrap:"wrap"}}>
-      {currentImg && (
-        <img src={currentImg} alt="reference"
-          style={{width:96,height:96,objectFit:"cover",borderRadius:6,
-            border:"1px solid var(--border)",flexShrink:0}}/>
-      )}
-      <div style={{flex:1,minWidth:160}}>
-        <div style={{fontSize:".78rem",color:"var(--muted)",marginBottom:".35rem"}}>
-          {existingPath && !preview ? "Current reference drawing" : "Upload a reference drawing (PNG, JPG, WEBP)"}
-        </div>
-        <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp"
-          style={{display:"none"}} onChange={pickFile}/>
-        <div style={{display:"flex",gap:".4rem",alignItems:"center",flexWrap:"wrap"}}>
-          <button className="btn-ghost" style={{fontSize:".78rem",padding:".3rem .6rem"}}
-            onClick={() => inputRef.current.click()}>
-            {existingPath && !preview ? "Change Drawing" : "Choose File"}
-          </button>
-          {file && (
-            <>
-              <span style={{fontSize:".75rem",color:"var(--muted)",maxWidth:160,
-                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{file.name}</span>
-              {name && (
-                <button className="btn-primary" style={{fontSize:".78rem",padding:".3rem .65rem"}}
-                  onClick={upload} disabled={uploading}>
-                  {uploading ? "Uploading…" : "Upload"}
-                </button>
-              )}
-            </>
-          )}
-        </div>
-        {file && !name && (
-          <div style={{fontSize:".73rem",color:"var(--muted)",marginTop:".3rem"}}>
-            Save the character first — then upload the drawing.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+const PAID_NOTE = "This calls fal.ai and costs credits.";
 
 // ── Characters ────────────────────────────────────────────────────────────────
 
-function CharactersPane() {
-  const { toast, loadAssets } = useApp();
-  const [data,    setData]    = useState({});
-  const [adding,  setAdding]  = useState(false);
-  const [editing, setEditing] = useState(null); // key being edited
-  const [saving,  setSaving]  = useState(false);
-  const [genKey,  setGenKey]  = useState(null);
-  const [form,    setForm]    = useState({
-    name:"", voice_id:"", fixed_description:"",
-    variable_description:"", height_cm:"", ref_desc:""
-  });
-  // Pending file for upload right after character creation
-  const pendingFileRef = React.useRef(null);
+const CHAR_IMAGES = [
+  ["thumbnail_file_path",   "Thumbnail"],
+  ["art_34left_file_path",  "3/4 left (scene reference)"],
+  ["ref_image_file_path",   "Reference"],
+  ["ref_drawing_file_path", "Reference drawing"],
+  ["artwork_file_path",     "Turnaround art"],
+  ["concept_art_file_path", "Concept art"],
+];
 
-  const load = useCallback(async () => {
-    try { setData(await apiGet("/assets/characters")); } catch {}
-  }, []);
+// Card cover: full-body art first so the grid looks consistent.
+const COVER_ORDER = ["art_34left_file_path", "ref_image_file_path", "ref_drawing_file_path",
+                     "thumbnail_file_path", "artwork_file_path", "concept_art_file_path"];
+function charCover(c) {
+  for (const f of COVER_ORDER) if (c[f]) return c[f];
+  return null;
+}
 
-  useEffect(() => { load(); }, []);
-
-  function startAdd() {
-    setForm({ name:"", voice_id:"", fixed_description:"", variable_description:"", height_cm:"", ref_desc:"" });
-    pendingFileRef.current = null;
-    setEditing(null); setAdding(true);
-  }
-  function startEdit(key) {
-    const c = data[key] || {};
-    setForm({
-      name: key,
-      voice_id: c.voice_id || "",
-      fixed_description: c.fixed_description || "",
-      variable_description: c.variable_description || "",
-      height_cm: c.height_cm ? String(c.height_cm) : "",
-      ref_desc: c.ref_desc || "",
-    });
-    setAdding(false); setEditing(key);
-  }
-
-  async function saveAdd() {
-    if (!form.name || !form.voice_id || !form.fixed_description || !form.variable_description) {
-      toast("Error","Name, Voice ID, Fixed Description and Variable Description are required.","err"); return;
-    }
-    setSaving(true);
-    try {
-      await apiPost("/assets/characters", {
-        ...form,
-        height_cm: form.height_cm ? Number(form.height_cm) : null
-      });
-      // Upload pending reference drawing if the user selected one
-      if (pendingFileRef.current) {
-        try {
-          const fd = new FormData();
-          fd.append("file", pendingFileRef.current);
-          await apiPostForm(`/assets/characters/${form.name}/upload-reference`, fd);
-        } catch(e) {
-          toast("Warning", `Character saved but drawing upload failed: ${e.message}`, "err");
-        }
-      }
-      toast("Saved", `Character "${form.name}" added.`, "ok");
-      setAdding(false); pendingFileRef.current = null;
-      await load(); await loadAssets();
-    } catch(e) { toast("Error", e.message, "err"); }
-    finally { setSaving(false); }
-  }
-
-  async function saveEdit() {
-    setSaving(true);
-    try {
-      await apiPut(`/assets/characters/${editing}`, {
-        ...form,
-        height_cm: form.height_cm ? Number(form.height_cm) : null
-      });
-      toast("Saved", `Character "${editing}" updated.`, "ok");
-      setEditing(null); await load(); await loadAssets();
-    } catch(e) { toast("Error", e.message, "err"); }
-    finally { setSaving(false); }
-  }
-
-  async function remove(key) {
-    if (!confirm(`Remove character "${key}"?`)) return;
-    try {
-      await apiDelete(`/assets/characters/${key}`);
-      toast("Removed", `"${key}" removed.`, "ok"); await load(); await loadAssets();
-    } catch(e) { toast("Error", e.message, "err"); }
-  }
-
-  async function genArt(key) {
-    const hasRef = !!data[key]?.ref_drawing_file_path;
-    const msg = hasRef
-      ? `Generate artwork for "${key}" using the reference drawing? This will call fal.ai.`
-      : `Generate artwork for "${key}" via fal.ai? No reference drawing — will use text description only.`;
-    if (!confirm(msg)) return;
-    setGenKey(key);
-    try {
-      await apiPost(`/assets/characters/${key}/generate-art`, {});
-      toast("Started", `Art generation queued for "${key}".`, "ok");
-    } catch(e) { toast("Error", e.message, "err"); }
-    finally { setGenKey(null); }
-  }
-
-  const f  = (k) => <input value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))}/>;
-  const fa = (k, r) => <textarea rows={r||2} value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))}/>;
-
-  // Inline file picker that stores the file in pendingFileRef without uploading yet
-  function InlineFilePicker() {
-    const [preview, setPreview] = useState(null);
-    const [fname,   setFname]   = useState("");
-    const inputRef = React.useRef(null);
-    function pick(e) {
-      const f = e.target.files[0];
-      if (!f) return;
-      pendingFileRef.current = f;
-      setFname(f.name);
-      const reader = new FileReader();
-      reader.onload = ev => setPreview(ev.target.result);
-      reader.readAsDataURL(f);
-    }
-    return (
-      <div style={{display:"flex",gap:"1rem",alignItems:"flex-start"}}>
-        {preview && (
-          <img src={preview} alt="preview"
-            style={{width:80,height:80,objectFit:"cover",borderRadius:6,
-              border:"1px solid var(--border)",flexShrink:0}}/>
-        )}
-        <div>
-          <div style={{fontSize:".78rem",color:"var(--muted)",marginBottom:".35rem"}}>
-            Optional reference drawing — uploaded together with the character.
-          </div>
-          <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp"
-            style={{display:"none"}} onChange={pick}/>
-          <div style={{display:"flex",gap:".4rem",alignItems:"center"}}>
-            <button type="button" className="btn-ghost"
-              style={{fontSize:".78rem",padding:".3rem .6rem"}}
-              onClick={()=>inputRef.current.click()}>Choose Drawing</button>
-            {fname && <span style={{fontSize:".75rem",color:"var(--muted)"}}>{fname}</span>}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+function CharactersPane({ q, usage, adding, setAdding, reload, data, bust }) {
+  const [sel, setSel] = useState(null);
+  const keys = Object.keys(data).sort((a, b) => a.localeCompare(b))
+    .filter(k => !q || `${k} ${data[k].fixed_description || ""} ${data[k].description || ""}`.toLowerCase().includes(q));
   return (
-    <div>
-      {(adding || editing) && (
-        <FormPanel
-          title={adding ? "Add Character" : `Edit: ${editing}`}
-          onSave={adding ? saveAdd : saveEdit}
-          onCancel={() => { setAdding(false); setEditing(null); }}
-          saving={saving}
-        >
-          {adding && <FieldRow label="Name">{f("name")}</FieldRow>}
-          <FieldRow label="ElevenLabs Voice ID">{f("voice_id")}</FieldRow>
-          <FieldRow label="Fixed Description (ethnicity, face, build — never changes)">{fa("fixed_description", 2)}</FieldRow>
-          <FieldRow label="Variable Description (clothing, hair — GPT may adjust)">{fa("variable_description", 2)}</FieldRow>
-          <FieldRow label="Height (cm, optional)">{f("height_cm")}</FieldRow>
-          <FieldRow label="Ref Description (optional, for image prompts)">{fa("ref_desc", 2)}</FieldRow>
-          {adding && (
-            <FieldRow label="Reference Drawing (optional — used to guide art generation)">
-              <InlineFilePicker/>
-            </FieldRow>
-          )}
-        </FormPanel>
-      )}
-
-      {!adding && (
-        <button className="btn-primary" style={{marginBottom:"1rem",fontSize:".83rem"}}
-          onClick={startAdd}>+ Add Character</button>
-      )}
-
-      {Object.keys(data).length === 0 && (
-        <div style={{color:"var(--muted)",fontSize:".83rem"}}>No characters yet.</div>
-      )}
-      {Object.entries(data).map(([key, c]) => (
-        <div key={key} style={{marginBottom:".75rem"}}>
-          <AssetRow
-            label={key}
-            meta={c.fixed_description}
-            onEdit={() => startEdit(key)}
-            onRemove={() => remove(key)}
-            onAction={() => genArt(key)}
-            actionLabel={genKey===key ? "Generating…" : "🎨 Gen Art"}
-          />
-          {/* Reference drawing row — shown below the character card */}
-          {editing !== key && (
-            <div style={{
-              padding:".6rem .75rem .75rem",
-              borderLeft:"1px solid var(--border)",
-              borderRight:"1px solid var(--border)",
-              borderBottom:"1px solid var(--border)",
-              borderRadius:"0 0 6px 6px",
-              background:"var(--bg)",
-              marginTop:"-4px",
-            }}>
-              <div style={{fontSize:".72rem",fontWeight:600,color:"var(--muted)",
-                letterSpacing:".06em",textTransform:"uppercase",marginBottom:".45rem"}}>
-                Reference Drawing
+    <>
+      <div className="as-grid">
+        {keys.map(k => {
+          const c = data[k];
+          const cover = charCover(c);
+          return (
+            <div key={k} className="as-card" onClick={() => setSel(k)}>
+              <div className="as-thumb char">
+                {cover ? <img src={assetUrl(cover, bust)} alt={k} loading="lazy"/>
+                       : <span className="as-initial">{k.slice(0, 1)}</span>}
               </div>
-              <RefImagePicker
-                name={key}
-                existingPath={c.ref_drawing_file_path}
-                onUploaded={() => load()}
-              />
+              <div className="as-card-body">
+                <div className="as-card-title">{k}</div>
+                <div className="as-card-sub">{c.fixed_description || c.description || "—"}</div>
+                <div className="as-card-meta">
+                  <UsedBy list={usage[k]}/>
+                  {!c.voice_id && <span className="as-warn" title="No ElevenLabs voice id">no voice</span>}
+                </div>
+              </div>
             </div>
-          )}
+          );
+        })}
+        {!keys.length && <div className="as-empty">No characters{q ? " match" : " yet"}.</div>}
+      </div>
+      {sel && data[sel] && <CharacterDrawer name={sel} c={data[sel]} usage={usage[sel]} bust={bust}
+                              onClose={() => setSel(null)} reload={reload}/>}
+      {adding && <CharacterDrawer isNew onClose={() => setAdding(false)} reload={reload}
+                   onCreated={n => { setAdding(false); setSel(n); }}/>}
+    </>
+  );
+}
+
+function CharacterDrawer({ name, c, usage, isNew, onClose, reload, onCreated, bust }) {
+  const { toast, loadAssets } = useApp();
+  const blank = { name: "", voice_id: "", fixed_description: "", variable_description: "", height_cm: "", ref_desc: "" };
+  const [f, setF] = useState(isNew ? blank : {
+    voice_id: c.voice_id || "", fixed_description: c.fixed_description || "",
+    variable_description: c.variable_description || "", height_cm: c.height_cm || "", ref_desc: c.ref_desc || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+  const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  async function save() {
+    setBusy(true);
+    try {
+      const body = { ...f, height_cm: f.height_cm ? parseInt(f.height_cm, 10) : null };
+      if (isNew) {
+        await apiPost("/assets/characters", body);
+        toast("Added", f.name, "ok");
+        await reload(); loadAssets();
+        onCreated(f.name.trim());
+      } else {
+        await apiPut(`/assets/characters/${encodeURIComponent(name)}`, body);
+        toast("Saved", name, "ok");
+        await reload(); loadAssets();
+      }
+    } catch (e) { toast("Error", e.message, "err"); }
+    setBusy(false);
+  }
+  async function remove() {
+    if (!confirm(`Delete character “${name}”? Its art files stay on disk.`)) return;
+    try { await apiDelete(`/assets/characters/${encodeURIComponent(name)}`); await reload(); loadAssets(); onClose(); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+  async function uploadRef(file) {
+    const fd = new FormData(); fd.append("file", file);
+    try { await apiPostForm(`/assets/characters/${encodeURIComponent(name)}/upload-reference`, fd); toast("Uploaded", "Reference drawing saved.", "ok"); await reload(); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+  async function genArt() {
+    if (!confirm(`Generate art for “${name}”?\n\n${PAID_NOTE}`)) return;
+    try { await apiPost(`/assets/characters/${encodeURIComponent(name)}/generate-art`, {}); toast("Started", "Art generation runs in the background — reopen in a minute.", "ok"); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+
+  const images = isNew ? [] : CHAR_IMAGES.filter(([k]) => c[k]);
+  return (
+    <AsDrawer title={isNew ? "New character" : name} subtitle={!isNew && <UsedBy list={usage}/>} onClose={onClose}
+      footer={<>
+        {!isNew && <button className="btn-edit" onClick={remove}>Delete</button>}
+        <div style={{flex:1}}/>
+        <button className="btn-cancel" onClick={onClose}>Close</button>
+        <button className="btn-primary" disabled={busy || (isNew && !f.name.trim())} onClick={save}>{busy ? "Saving…" : isNew ? "Create" : "Save"}</button>
+      </>}>
+      {!isNew && (
+        <div className="as-gallery">
+          {images.map(([k, label]) => (
+            <a key={k} className="as-gallery-item" href={assetUrl(c[k], bust)} target="_blank" rel="noreferrer">
+              <img src={assetUrl(c[k], bust)} alt={label}/>
+              <span>{label}</span>
+            </a>
+          ))}
+          {!images.length && <div className="as-empty">No artwork yet.</div>}
         </div>
-      ))}
-    </div>
+      )}
+      {!isNew && (
+        <div className="edit-actions" style={{marginTop:0}}>
+          <button className="btn-ghost" onClick={() => fileRef.current.click()}>Upload reference drawing</button>
+          <button className="btn-ghost" onClick={genArt} title={PAID_NOTE}>Generate art (paid)</button>
+          <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
+            onChange={e => { if (e.target.files[0]) uploadRef(e.target.files[0]); e.target.value = ""; }}/>
+        </div>
+      )}
+      <div className="fields">
+        {isNew && <AsField label="Name"><input value={f.name} onChange={set("name")} placeholder="e.g. Zahra"/></AsField>}
+        <AsField label="Fixed description" hint="Identity — never changes (age, origin, face, hair).">
+          <textarea rows={3} value={f.fixed_description} onChange={set("fixed_description")}/></AsField>
+        <AsField label="Default outfit" hint="What they wear unless a scene says otherwise.">
+          <textarea rows={2} value={f.variable_description} onChange={set("variable_description")}/></AsField>
+        <div className="field-row">
+          <AsField label="ElevenLabs voice id"><input value={f.voice_id} onChange={set("voice_id")}/></AsField>
+          <AsField label="Height (cm)"><input type="number" value={f.height_cm} onChange={set("height_cm")}/></AsField>
+        </div>
+        <AsField label="Short reference note" hint="Distinctive cue used in prompts, e.g. “teal blouse, wavy hair”.">
+          <input value={f.ref_desc} onChange={set("ref_desc")}/></AsField>
+      </div>
+    </AsDrawer>
   );
 }
 
 // ── Locations ─────────────────────────────────────────────────────────────────
 
-function LocationsPane() {
-  const { toast } = useApp();
-  const [data,    setData]    = useState({});
-  const [adding,  setAdding]  = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [saving,  setSaving]  = useState(false);
-  const [genKey,  setGenKey]  = useState(null);
-  const [form,    setForm]    = useState({ key:"", description:"", creation_prompt:"" });
-
-  const load = useCallback(async () => {
-    try { setData(await apiGet("/assets/locations")); } catch {}
-  }, []);
-  useEffect(() => { load(); }, []);
-
-  function startAdd() { setForm({ key:"", description:"", creation_prompt:"" }); setEditing(null); setAdding(true); }
-  function startEdit(key) {
-    const l = data[key] || {};
-    setForm({ key, description: l.description||"", creation_prompt: l.creation_prompt||"" });
-    setAdding(false); setEditing(key);
-  }
-
-  async function saveAdd() {
-    if (!form.key || !form.description || !form.creation_prompt) {
-      toast("Error","Key, description and creation prompt required.","err"); return;
-    }
-    setSaving(true);
-    try {
-      await apiPost("/assets/locations", form);
-      toast("Saved", `Location "${form.key}" added.`, "ok"); setAdding(false); await load();
-    } catch(e) { toast("Error", e.message, "err"); }
-    finally { setSaving(false); }
-  }
-
-  async function saveEdit() {
-    setSaving(true);
-    try {
-      await apiPut(`/assets/locations/${editing}`, { description: form.description, creation_prompt: form.creation_prompt });
-      toast("Saved", `Location "${editing}" updated.`, "ok"); setEditing(null); await load();
-    } catch(e) { toast("Error", e.message, "err"); }
-    finally { setSaving(false); }
-  }
-
-  async function remove(key) {
-    if (!confirm(`Remove location "${key}"?`)) return;
-    try { await apiDelete(`/assets/locations/${key}`); toast("Removed","","ok"); await load(); }
-    catch(e) { toast("Error", e.message, "err"); }
-  }
-
-  async function genArt(key) {
-    if (!confirm(`Generate background art for "${key}" via fal.ai?`)) return;
-    setGenKey(key);
-    try {
-      await apiPost(`/assets/locations/${key}/generate-art`, {});
-      // Poll until the background job finishes, then reload data
-      const stepKey = `loc_art_${key}`;
-      while (true) {
-        await new Promise(r => setTimeout(r, 2000));
-        const s = await fetch(`/projects/assets/status/${stepKey}`).then(r => r.json());
-        if (s.status === "done")  { toast("Done", `Art generated for "${key}".`, "ok"); break; }
-        if (s.status === "error") { toast("Error", s.log || "Art generation failed.", "err"); break; }
-      }
-      await load();
-    } catch(e) { toast("Error", e.message, "err"); }
-    finally { setGenKey(null); }
-  }
-
-  const f  = (k) => <input value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))}/>;
-  const fa = (k, r) => <textarea rows={r||2} value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))}/>;
-
+function LocationsPane({ q, usage, adding, setAdding, reload, data, bust }) {
+  const [sel, setSel] = useState(null);
+  const keys = Object.keys(data).sort()
+    .filter(k => !q || `${k} ${data[k].description || ""}`.toLowerCase().includes(q));
   return (
-    <div>
-      {(adding || editing) && (
-        <FormPanel title={adding?"Add Location":`Edit: ${editing}`}
-          onSave={adding?saveAdd:saveEdit} onCancel={()=>{setAdding(false);setEditing(null);}} saving={saving}>
-          {adding && <FieldRow label="Key (lowercase, underscores)">{f("key")}</FieldRow>}
-          <FieldRow label="Description">{fa("description", 2)}</FieldRow>
-          <FieldRow label="Creation Prompt (for fal.ai image generation)">{fa("creation_prompt", 3)}</FieldRow>
-        </FormPanel>
-      )}
-
-      {!adding && (
-        <button className="btn-primary" style={{marginBottom:"1rem",fontSize:".83rem"}}
-          onClick={startAdd}>+ Add Location</button>
-      )}
-
-      {Object.keys(data).length === 0 && (
-        <div style={{color:"var(--muted)",fontSize:".83rem"}}>No locations yet.</div>
-      )}
-      {Object.entries(data).map(([key, l]) => (
-        <div key={key} style={{
-          background:"var(--surface)",border:"1px solid var(--border)",
-          borderRadius:6,marginBottom:".4rem",overflow:"hidden",
-        }}>
-          <div style={{display:"flex",alignItems:"center",gap:".6rem",padding:".55rem .75rem"}}>
-            {l.artwork_file_path && (
-              <img src={`/asset-files/${l.artwork_file_path}`}
-                style={{width:48,height:64,objectFit:"cover",borderRadius:4,flexShrink:0}}
-                alt={key}/>
-            )}
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:500,fontSize:".88rem"}}>{key}</div>
-              <div style={{fontSize:".76rem",color:"var(--muted)",marginTop:".15rem",
-                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.description}</div>
+    <>
+      <div className="as-grid wide">
+        {keys.map(k => (
+          <div key={k} className="as-card" onClick={() => setSel(k)}>
+            <div className="as-thumb loc">
+              {data[k].artwork_file_path ? <img src={assetUrl(data[k].artwork_file_path, bust)} alt={k} loading="lazy"/>
+                                         : <span className="as-initial">⌂</span>}
             </div>
-            <button className="btn-ghost" style={{fontSize:".74rem",padding:".25rem .6rem"}}
-              onClick={()=>genArt(key)} disabled={genKey===key}>
-              {genKey===key ? "Generating…" : "🎨 Gen Art"}
-            </button>
-            <button className="btn-ghost" style={{fontSize:".74rem",padding:".25rem .6rem"}}
-              onClick={()=>startEdit(key)}>Edit</button>
-            <button className="btn-ghost" style={{fontSize:".74rem",padding:".25rem .6rem",color:"var(--err,#e55)"}}
-              onClick={()=>remove(key)}>Remove</button>
+            <div className="as-card-body">
+              <div className="as-card-title">{k}</div>
+              <div className="as-card-sub">{data[k].description || "—"}</div>
+              <div className="as-card-meta"><UsedBy list={usage[k]}/></div>
+            </div>
           </div>
-        </div>
-      ))}
-    </div>
+        ))}
+        {!keys.length && <div className="as-empty">No locations{q ? " match" : " yet"}. Locations are optional — by default each project describes its own setting.</div>}
+      </div>
+      {sel && data[sel] && <LocationDrawer k={sel} l={data[sel]} usage={usage[sel]} bust={bust} onClose={() => setSel(null)} reload={reload}/>}
+      {adding && <LocationDrawer isNew onClose={() => setAdding(false)} reload={reload} onCreated={k => { setAdding(false); setSel(k); }}/>}
+    </>
   );
 }
 
-// ── Project Types ─────────────────────────────────────────────────────────────
-
-function ProjectTypesPane() {
-  const { toast } = useApp();
-  const [data, setData] = useState({});
-  const [open, setOpen] = useState(null);
-
-  const load = useCallback(async () => {
-    try { setData(await apiGet("/assets/project-types")); } catch {}
-  }, []);
-  useEffect(() => { load(); }, []);
-
+function LocationDrawer({ k, l, usage, isNew, onClose, reload, onCreated, bust }) {
+  const { toast, loadAssets } = useApp();
+  const [f, setF] = useState(isNew ? { key: "", description: "", creation_prompt: "" }
+                                   : { description: l.description || "", creation_prompt: l.creation_prompt || "" });
+  const [busy, setBusy] = useState(false);
+  const set = n => e => setF(p => ({ ...p, [n]: e.target.value }));
+  async function save() {
+    setBusy(true);
+    try {
+      if (isNew) { await apiPost("/assets/locations", f); await reload(); loadAssets(); onCreated(f.key.trim()); }
+      else { await apiPut(`/assets/locations/${k}`, f); toast("Saved", k, "ok"); await reload(); }
+    } catch (e) { toast("Error", e.message, "err"); }
+    setBusy(false);
+  }
+  async function remove() {
+    if (!confirm(`Delete location “${k}”? Its image stays on disk.`)) return;
+    try { await apiDelete(`/assets/locations/${k}`); await reload(); loadAssets(); onClose(); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+  async function genArt() {
+    if (!confirm(`Generate the background for “${k}”?\n\n${PAID_NOTE}`)) return;
+    try { await apiPost(`/assets/locations/${k}/generate-art`, {}); toast("Started", "Generating in the background — reopen in a minute.", "ok"); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
   return (
-    <div>
-      <div style={{fontSize:".82rem",color:"var(--muted)",marginBottom:".75rem"}}>
-        Project types are defined in <code>assets/project_types/project_types.json</code>.
-        Edit the file directly to modify prompts and scene builder rules.
+    <AsDrawer title={isNew ? "New location" : k} subtitle={!isNew && <UsedBy list={usage}/>} onClose={onClose}
+      footer={<>
+        {!isNew && <button className="btn-edit" onClick={remove}>Delete</button>}
+        <div style={{flex:1}}/>
+        <button className="btn-cancel" onClick={onClose}>Close</button>
+        <button className="btn-primary" disabled={busy || (isNew && (!f.key.trim() || !f.description.trim() || !f.creation_prompt.trim()))} onClick={save}>
+          {busy ? "Saving…" : isNew ? "Create" : "Save"}</button>
+      </>}>
+      {!isNew && l.artwork_file_path && <img className="as-hero" src={assetUrl(l.artwork_file_path, bust)} alt={k}/>}
+      {!isNew && <div className="edit-actions" style={{marginTop:0}}>
+        <button className="btn-ghost" onClick={genArt} title={PAID_NOTE}>{l.artwork_file_path ? "Regenerate background (paid)" : "Generate background (paid)"}</button>
+      </div>}
+      <div className="fields">
+        {isNew && <AsField label="Key"><input value={f.key} onChange={set("key")} placeholder="e.g. bakery"/></AsField>}
+        <AsField label="Scene description" hint="Used in script prompts: where the characters are and what they wear.">
+          <textarea rows={4} value={f.description} onChange={set("description")}/></AsField>
+        <AsField label="Background art prompt" hint="Prompt for the empty background image.">
+          <textarea rows={4} value={f.creation_prompt} onChange={set("creation_prompt")}/></AsField>
       </div>
-      {Object.keys(data).length === 0 && (
-        <div style={{color:"var(--muted)",fontSize:".83rem"}}>No project types found.</div>
-      )}
-      {Object.entries(data).map(([key, pt]) => (
-        <div key={key} style={{
-          border:"1px solid var(--border)",borderRadius:6,marginBottom:".5rem",
-          background:"var(--surface)"
-        }}>
-          <div style={{padding:".55rem .75rem",display:"flex",alignItems:"center",gap:".5rem",cursor:"pointer"}}
-            onClick={()=>setOpen(o=>o===key?null:key)}>
-            <div style={{flex:1,fontWeight:500,fontSize:".88rem"}}>{key}</div>
-            <div style={{fontSize:".75rem",color:"var(--muted)"}}>{pt.self_description || ""}</div>
-            <div style={{fontSize:".8rem",color:"var(--muted)"}}>{open===key?"▲":"▼"}</div>
-          </div>
-          {open===key && (
-            <div style={{padding:".5rem .75rem 1rem",borderTop:"1px solid var(--border)"}}>
-              <div style={{fontSize:".78rem",color:"var(--muted)",marginBottom:".4rem"}}>Scene Builder Rules</div>
-              <pre style={{fontSize:".74rem",background:"var(--bg)",padding:".5rem",borderRadius:4,overflow:"auto"}}>
-                {JSON.stringify(pt.scene_builder_rules || {}, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
+    </AsDrawer>
   );
 }
 
-// ── Background Audio ──────────────────────────────────────────────────────────
+// ── Music ─────────────────────────────────────────────────────────────────────
 
-function BackgroundAudioPane() {
+const LICENSES = [
+  { id: "YTsafe",     label: "YouTube" },
+  { id: "Metasafe",   label: "Meta" },
+  { id: "TikToksafe", label: "TikTok" },
+];
+
+function LoudnessBar({ db }) {
+  if (db === undefined || db === null) return <span className="as-loud none">—</span>;
+  // -60 dB (silent) … -10 dB (very loud) mapped to 0…100 %
+  const pct = Math.max(4, Math.min(100, ((db + 60) / 50) * 100));
+  const tone = db < -38 ? "quiet" : db > -16 ? "loud" : "ok";
+  return (
+    <span className={"as-loud " + tone} title={`Average level ${db.toFixed(1)} dB`}>
+      <span className="as-loud-bar"><span style={{ width: pct + "%" }}/></span>
+      {db.toFixed(0)} dB
+    </span>
+  );
+}
+
+function MusicPane({ q, usage, adding, setAdding, reload, data }) {
   const { toast } = useApp();
-  const [data, setData] = useState({});
+  const [lic, setLic]   = useState("all");
+  const [sort, setSort] = useState("name");
+  const [edit, setEdit] = useState(null);
+  const [tool, setTool] = useState(null);
 
-  const load = useCallback(async () => {
-    try { setData(await apiGet("/assets/background-audio")); } catch {}
-  }, []);
-  useEffect(() => { load(); }, []);
+  let keys = Object.keys(data).filter(k => {
+    const t = data[k];
+    if (q && !`${k} ${t.description || ""}`.toLowerCase().includes(q)) return false;
+    if (lic === "none") return !t.license;
+    if (lic !== "all") return t.license === lic;
+    return true;
+  });
+  const used = k => (usage[k] || []).length;
+  keys.sort(sort === "used" ? (a, b) => used(b) - used(a) || a.localeCompare(b)
+          : sort === "loud" ? (a, b) => ((data[a].loudness || {}).mean_db ?? -99) - ((data[b].loudness || {}).mean_db ?? -99)
+          : (a, b) => a.localeCompare(b));
 
-  async function remove(key) {
-    if (!confirm(`Remove background audio "${key}"?`)) return;
-    try { await apiDelete(`/assets/background-audio/${key}`); toast("Removed","","ok"); await load(); }
-    catch(e) { toast("Error", e.message, "err"); }
+  return (
+    <>
+      <div className="as-filters">
+        {[["all", "All"], ...LICENSES.map(l => [l.id, l.label + "-safe"]), ["none", "No license tag"]].map(([id, label]) => (
+          <button key={id} className={"as-chip" + (lic === id ? " on" : "")} onClick={() => setLic(id)}>{label}</button>
+        ))}
+        <select className="as-sort" value={sort} onChange={e => setSort(e.target.value)}>
+          <option value="name">Sort: name</option>
+          <option value="used">Sort: most used</option>
+          <option value="loud">Sort: quietest first</option>
+        </select>
+      </div>
+      <div className="as-list">
+        {keys.map(k => {
+          const t = data[k];
+          return (
+            <div key={k} className="as-row">
+              <AsPlayButton id={`m:${k}`} src={libraryUrl(t.full_path, t.gain_db)}/>
+              <div className="as-row-main">
+                <div className="as-row-title">
+                  {k}
+                  {t.license && <span className={"as-lic " + t.license}>{(LICENSES.find(l => l.id === t.license) || {}).label || t.license}</span>}
+                  {t.gain_db ? <span className="as-gain" title="Volume adjusted relative to the original upload">{t.gain_db > 0 ? "+" : ""}{t.gain_db} dB</span> : null}
+                </div>
+                <div className="as-row-sub">{t.description || <em>No description</em>}</div>
+                <AsProgress id={`m:${k}`}/>
+              </div>
+              <span className="as-dur">{t.loudness ? fmtTime(t.loudness.duration_s) : ""}</span>
+              <LoudnessBar db={t.loudness && t.loudness.mean_db}/>
+              <UsedBy list={usage[k]}/>
+              <button className="btn-ghost as-row-btn" onClick={() => setTool(k)}>Volume</button>
+              <button className="btn-edit" onClick={() => setEdit(k)}>Edit</button>
+            </div>
+          );
+        })}
+        {!keys.length && <div className="as-empty">No tracks match.</div>}
+      </div>
+      {edit && data[edit] && <MusicEditDrawer k={edit} t={data[edit]} usage={usage[edit]} onClose={() => setEdit(null)} reload={reload}/>}
+      {tool && data[tool] && <VolumeTool k={tool} usage={usage[tool]} onClose={() => setTool(null)} reload={reload}/>}
+      {adding && <MusicAddDrawer onClose={() => setAdding(false)} reload={reload}
+                   onAdded={k => { setAdding(false); setTool(k); toast("Added", `Now check its volume.`, "ok"); }}/>}
+    </>
+  );
+}
+
+function MusicEditDrawer({ k, t, usage, onClose, reload }) {
+  const { toast } = useApp();
+  const [f, setF] = useState({ description: t.description || "", license: t.license || "" });
+  async function save() {
+    try { await apiPut(`/assets/background-audio/${k}`, f); toast("Saved", k, "ok"); await reload(); onClose(); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+  async function remove() {
+    const n = (usage || []).length;
+    if (!confirm(`Delete track “${k}” and its file?${n ? `\n\n${n} project(s) use it and would render without music.` : ""}`)) return;
+    try { await apiDelete(`/assets/background-audio/${k}?delete_file=1`); await reload(); onClose(); }
+    catch (e) { toast("Error", e.message, "err"); }
+  }
+  return (
+    <AsDrawer title={k} subtitle={<UsedBy list={usage}/>} onClose={onClose}
+      footer={<><button className="btn-edit" onClick={remove}>Delete</button><div style={{flex:1}}/>
+        <button className="btn-cancel" onClick={onClose}>Close</button><button className="btn-primary" onClick={save}>Save</button></>}>
+      <div className="fields">
+        <AsField label="Description"><textarea rows={3} value={f.description} onChange={e => setF(p => ({ ...p, description: e.target.value }))}/></AsField>
+        <AsField label="Safe to use on" hint="Tracks are picked per platform when assembling (YouTube / Meta / TikTok variants).">
+          <select value={f.license} onChange={e => setF(p => ({ ...p, license: e.target.value }))}>
+            <option value="">— not tagged —</option>
+            {LICENSES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+          </select>
+        </AsField>
+        <div className="set-meta"><span>File: <code>library/{t.full_path}</code></span>{t.original_path && <span>Original: <code>library/{t.original_path}</code></span>}</div>
+        {usage && usage.length > 0 && <div className="as-usedlist"><label>Used by</label>{usage.map(p => <span key={p} className="tag">{p}</span>)}</div>}
+      </div>
+    </AsDrawer>
+  );
+}
+
+function MusicAddDrawer({ onClose, reload, onAdded }) {
+  const { toast } = useApp();
+  const [file, setFile] = useState(null);
+  const [f, setF] = useState({ key: "", description: "", license: "" });
+  const [busy, setBusy] = useState(false);
+  function pick(fl) {
+    setFile(fl);
+    if (!f.key) setF(p => ({ ...p, key: fl.name.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9_-]+/g, "_") }));
+  }
+  async function upload() {
+    const fd = new FormData();
+    fd.append("file", file); Object.entries(f).forEach(([k, v]) => fd.append(k, v));
+    setBusy(true);
+    try { const d = await apiPostForm("/assets/background-audio", fd); await reload(); onAdded(d.track.name); }
+    catch (e) { toast("Error", e.message, "err"); }
+    setBusy(false);
+  }
+  return (
+    <AsDrawer title="Add background music" subtitle="Shared by every workspace" onClose={onClose}
+      footer={<><div style={{flex:1}}/><button className="btn-cancel" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={busy || !file || !f.key.trim()} onClick={upload}>{busy ? "Uploading…" : "Upload"}</button></>}>
+      <div className="fields">
+        <AsFilePick accept=".mp3,.mp4,.m4a,.wav,.ogg,.aac,.flac,.mov,.webm,audio/*,video/mp4" label="MP3, MP4 (audio is extracted), WAV, M4A…"
+          file={file} onFile={pick}/>
+        <AsField label="Name (key)" hint="How projects refer to this track."><input value={f.key} onChange={e => setF(p => ({ ...p, key: e.target.value }))}/></AsField>
+        <AsField label="Description"><textarea rows={2} value={f.description} onChange={e => setF(p => ({ ...p, description: e.target.value }))}/></AsField>
+        <AsField label="Safe to use on">
+          <select value={f.license} onChange={e => setF(p => ({ ...p, license: e.target.value }))}>
+            <option value="">— not tagged —</option>
+            {LICENSES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+          </select>
+        </AsField>
+        <div className="set-help">After uploading you can raise or lower its volume and listen to a slice before saving.</div>
+      </div>
+    </AsDrawer>
+  );
+}
+
+// Listen to a slice from the middle of a track at a new volume (optionally under a
+// spoken line, mixed the way the assembler does), then bake the gain into the file.
+function VolumeTool({ k, usage, onClose, reload }) {
+  const { toast } = useApp();
+  const { stop } = useContext(AsAudioCtx);
+  const [info, setInfo]   = useState(null);
+  const [gain, setGain]   = useState(0);
+  const [voice, setVoice] = useState(false);
+  const [busy, setBusy]   = useState(false);
+  const [playing, setPlaying] = useState(null);     // "before" | "after"
+  const [loading, setLoading] = useState(false);
+  const audioRef = useRef(null);
+
+  useEffect(() => {
+    stop();
+    apiGet(`/assets/background-audio/${k}/analyze`).then(d => { setInfo(d); setGain(d.track.gain_db || 0); })
+      .catch(e => toast("Error", e.message, "err"));
+    return () => { if (audioRef.current) audioRef.current.pause(); };
+  }, [k]);
+
+  if (!info) return <AsDrawer title={`Volume · ${k}`} onClose={onClose}><div className="as-empty">Measuring loudness…</div></AsDrawer>;
+
+  const t = info.track;
+  const baseGain = t.gain_db || 0;
+  const orig = t.original_loudness || t.loudness;            // level of the untouched upload
+  const origMean = t.original_loudness ? orig.mean_db : orig.mean_db - baseGain;
+  const origPeak = t.original_loudness ? orig.peak_db : orig.peak_db - baseGain;
+  const newMean = origMean + gain, newPeak = origPeak + gain;
+  const median = info.library_median_mean_db;
+  const changed = Math.abs(gain - baseGain) > 0.05;
+
+  function play(which) {
+    const a = audioRef.current;
+    if (playing === which) { a.pause(); setPlaying(null); return; }
+    const g = which === "before" ? baseGain : gain;
+    a.src = `/assets/background-audio/${k}/preview?gain_db=${g}&seconds=15${voice ? "&voice=1" : ""}&t=${Date.now()}`;
+    setLoading(true);
+    a.play().then(() => { setPlaying(which); setLoading(false); }).catch(() => { setPlaying(null); setLoading(false); });
+  }
+  async function apply() {
+    setBusy(true);
+    try {
+      await apiPost(`/assets/background-audio/${k}/apply-gain`, { gain_db: gain });
+      toast("Saved", `${k} is now ${gain > 0 ? "+" : ""}${gain.toFixed(1)} dB vs. the original.`, "ok");
+      await reload(); onClose();
+    } catch (e) { toast("Error", e.message, "err"); }
+    setBusy(false);
   }
 
   return (
-    <div>
-      <div style={{fontSize:".82rem",color:"var(--muted)",marginBottom:".75rem"}}>
-        Audio files live in <code>assets/background_audio/</code>. Register them here to use in assembly.
-        <code>license</code> marks where a track is safe: <b>YTsafe</b> (YouTube Audio Library — blocked on
-        long Instagram videos), <b>Metasafe</b> (<code>meta_safe_music/</code>), <b>TikToksafe</b> (reserved).
+    <AsDrawer title={`Volume · ${k}`} subtitle="Preview a 15-second slice from the middle of the track" onClose={onClose}
+      footer={<><div style={{flex:1}}/><button className="btn-cancel" onClick={onClose}>Close</button>
+        <button className="btn-primary" disabled={busy || !changed} onClick={apply}>{busy ? "Saving…" : `Save at ${gain > 0 ? "+" : ""}${gain.toFixed(1)} dB`}</button></>}>
+      <audio ref={audioRef} onEnded={() => setPlaying(null)} style={{display:"none"}}/>
+      <div className="vt-stats">
+        <div><label>Original average</label><strong>{origMean.toFixed(1)} dB</strong></div>
+        <div><label>Saved now</label><strong>{baseGain > 0 ? "+" : ""}{baseGain.toFixed(1)} dB</strong></div>
+        <div><label>Library average</label><strong>{median !== null && median !== undefined ? `${median.toFixed(1)} dB` : "—"}</strong></div>
       </div>
-      {Object.keys(data).length === 0 && (
-        <div style={{color:"var(--muted)",fontSize:".83rem"}}>No background audio registered.</div>
+
+      <div className="vt-slider">
+        <div className="vt-gain">{gain > 0 ? "+" : ""}{gain.toFixed(1)} <span>dB</span></div>
+        <input type="range" min={-20} max={30} step={0.5} value={gain} onChange={e => { setGain(parseFloat(e.target.value)); }}/>
+        <div className="vt-scale"><span>−20</span><span>0</span><span>+30</span></div>
+        <div className="vt-result">
+          New average ≈ <strong>{newMean.toFixed(1)} dB</strong>, peak ≈ <strong>{Math.min(newPeak, -0.3).toFixed(1)} dB</strong>
+          {newPeak > -0.3 && <span className="as-warn"> peaks limited (+{(newPeak + 0.3).toFixed(1)} dB squeezed)</span>}
+        </div>
+        <div className="edit-actions" style={{marginTop:".4rem"}}>
+          {median !== null && median !== undefined && (
+            <button className="btn-edit" onClick={() => setGain(Math.round((median - origMean) * 2) / 2)}>Match library average</button>)}
+          <button className="btn-edit" onClick={() => setGain(baseGain)}>Back to saved</button>
+          <button className="btn-edit" onClick={() => setGain(0)}>Original</button>
+        </div>
+      </div>
+
+      <div className="vt-listen">
+        <button className={"vt-btn" + (playing === "before" ? " on" : "")} onClick={() => play("before")} disabled={loading}>
+          {playing === "before" ? "■" : "▶"} Saved version
+        </button>
+        <button className={"vt-btn accent" + (playing === "after" ? " on" : "")} onClick={() => play("after")} disabled={loading}>
+          {playing === "after" ? "■" : "▶"} With {gain > 0 ? "+" : ""}{gain.toFixed(1)} dB
+        </button>
+        {loading && <span className="set-help">Rendering…</span>}
+      </div>
+      {changed && (usage || []).length > 0 && (
+        <div className="vt-warn">
+          {usage.length} project{usage.length === 1 ? " was" : "s were"} mixed against the saved level — re-assembling
+          {usage.length === 1 ? " it" : " them"} after saving makes the music {Math.abs(gain - baseGain).toFixed(1)} dB {gain > baseGain ? "louder" : "quieter"} there
+          (their own gain setting stays as is).
+        </div>
       )}
-      {Object.entries(data).map(([key, a]) => (
-        <AssetRow key={key} label={key}
-          meta={[a.license, a.full_path || a.file_path,
-                 a.description !== a.license ? a.description : ""].filter(Boolean).join(" · ")}
-          onRemove={()=>remove(key)}/>
-      ))}
-    </div>
+      <label className="toggle-row" title={info.voice_sample ? "" : "No voiced project in this workspace yet"}>
+        <input type="checkbox" checked={voice} disabled={!info.voice_sample} onChange={e => setVoice(e.target.checked)}/>
+        Play under a spoken line (music at the video's background level, {Math.round(info.bg_audio_volume * 100)}%)
+      </label>
+      <div className="set-help" style={{marginTop:".6rem"}}>
+        The gain is applied to the original upload, so you can come back and change it again without quality loss.
+        Projects can still nudge the level per video when assembling.
+      </div>
+    </AsDrawer>
   );
 }
 
 // ── SFX ───────────────────────────────────────────────────────────────────────
 
-function SfxPane() {
+function SfxPane({ q, adding, setAdding, reload, data }) {
   const { toast } = useApp();
-  const [data, setData] = useState({});
-
-  const load = useCallback(async () => {
-    try { setData(await apiGet("/assets/sfx")); } catch {}
-  }, []);
-  useEffect(() => { load(); }, []);
-
-  async function remove(key) {
-    if (!confirm(`Remove SFX "${key}"?`)) return;
-    try { await apiDelete(`/assets/sfx/${key}`); toast("Removed","","ok"); await load(); }
-    catch(e) { toast("Error", e.message, "err"); }
+  const keys = Object.keys(data).sort().filter(k => !q || `${k} ${data[k].description || ""}`.toLowerCase().includes(q));
+  async function remove(k) {
+    if (!confirm(`Delete SFX “${k}” and its file?`)) return;
+    try { await apiDelete(`/assets/sfx/${k}?delete_file=1`); await reload(); } catch (e) { toast("Error", e.message, "err"); }
   }
-
   return (
-    <div>
-      <div style={{fontSize:".82rem",color:"var(--muted)",marginBottom:".75rem"}}>
-        SFX files live in <code>assets/sfx/</code>.
+    <>
+      <div className="as-list">
+        {keys.map(k => (
+          <div key={k} className="as-row">
+            <AsPlayButton id={`s:${k}`} src={libraryUrl(data[k].full_path)}/>
+            <div className="as-row-main">
+              <div className="as-row-title">{k}</div>
+              <div className="as-row-sub">{data[k].description || <em>No description</em>}</div>
+              <AsProgress id={`s:${k}`}/>
+            </div>
+            <button className="btn-edit" onClick={() => remove(k)}>Delete</button>
+          </div>
+        ))}
+        {!keys.length && <div className="as-empty">No sound effects{q ? " match" : " yet"}.</div>}
       </div>
-      {Object.keys(data).length === 0 && (
-        <div style={{color:"var(--muted)",fontSize:".83rem"}}>No SFX registered.</div>
-      )}
-      {Object.entries(data).map(([key, s]) => (
-        <AssetRow key={key} label={key} meta={s.file_path || s.description || ""}
-          onRemove={()=>remove(key)}/>
-      ))}
-    </div>
+      {adding && <SimpleUploadDrawer title="Add sound effect" endpoint="/assets/sfx" accept="audio/*,.mp3,.wav"
+                   label="MP3 or WAV" onClose={() => setAdding(false)} reload={reload}/>}
+    </>
   );
 }
 
-// ── PUT helper (not in api.js yet) ────────────────────────────────────────────
-
-async function apiPut(path, body) {
-  const r = await fetch(path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.error || r.statusText);
-  return d;
+function SimpleUploadDrawer({ title, endpoint, accept, label, onClose, reload }) {
+  const { toast } = useApp();
+  const [file, setFile] = useState(null);
+  const [f, setF] = useState({ key: "", description: "" });
+  const [busy, setBusy] = useState(false);
+  async function upload() {
+    const fd = new FormData(); fd.append("file", file); fd.append("key", f.key); fd.append("description", f.description);
+    setBusy(true);
+    try { await apiPostForm(endpoint, fd); toast("Added", f.key, "ok"); await reload(); onClose(); }
+    catch (e) { toast("Error", e.message, "err"); }
+    setBusy(false);
+  }
+  return (
+    <AsDrawer title={title} onClose={onClose}
+      footer={<><div style={{flex:1}}/><button className="btn-cancel" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={busy || !file || !f.key.trim()} onClick={upload}>{busy ? "Uploading…" : "Upload"}</button></>}>
+      <div className="fields">
+        <AsFilePick accept={accept} label={label} file={file}
+          onFile={fl => { setFile(fl); if (!f.key) setF(p => ({ ...p, key: fl.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "_") })); }}/>
+        <AsField label="Name (key)"><input value={f.key} onChange={e => setF(p => ({ ...p, key: e.target.value }))}/></AsField>
+        <AsField label="Description"><textarea rows={2} value={f.description} onChange={e => setF(p => ({ ...p, description: e.target.value }))}/></AsField>
+      </div>
+    </AsDrawer>
+  );
 }
 
-// ── Top-level tab panel ───────────────────────────────────────────────────────
-// Subtitle/overlay styling + preview now lives on the dedicated top-level
-// "Subtitles" page (SubtitlesTab); the link below jumps there.
+// ── Branding (intro / outro clips) ────────────────────────────────────────────
+
+function BrandingPane({ q, usage, adding, setAdding, reload, clips, files }) {
+  const { toast } = useApp();
+  const [open, setOpen] = useState(null);           // file name playing with sound in the drawer
+  const byFile = {};
+  Object.entries(clips).forEach(([k, c]) => { byFile[(c.video_file_path || "").split("/").pop()] = { key: k, ...c }; });
+  const missing = Object.values(byFile).filter(c => !files.includes((c.video_file_path || "").split("/").pop()));
+  const shown = files.filter(fn => !q || `${fn} ${(byFile[fn] || {}).description || ""}`.toLowerCase().includes(q));
+
+  async function removeClip(c) {
+    if (!confirm(`Remove clip “${c.key}”${files.includes((c.video_file_path || "").split("/").pop()) ? " and delete its file" : ""}?`)) return;
+    try { await apiDelete(`/assets/video-clips/${c.key}?delete_file=1`); await reload(); } catch (e) { toast("Error", e.message, "err"); }
+  }
+  return (
+    <>
+      <p className="set-intro">Clips in <code>assets/branding/</code> can be added as intro / outro when assembling a video.</p>
+      <div className="as-grid wide">
+        {shown.map(fn => {
+          const c = byFile[fn];
+          return (
+            <div key={fn} className="as-card" onClick={() => setOpen(fn)}>
+              <div className="as-thumb vid">
+                <video src={assetUrl(`branding/${fn}`) + "#t=1"} muted preload="metadata" playsInline
+                  onMouseEnter={e => { e.target.play().catch(() => {}); }}
+                  onMouseLeave={e => { e.target.pause(); }}/>
+                <span className="as-vid-badge">▶</span>
+              </div>
+              <div className="as-card-body">
+                <div className="as-card-title">{c ? c.key : fn}</div>
+                <div className="as-card-sub">{c ? (c.description || fn) : fn}</div>
+                <div className="as-card-meta"><UsedBy list={usage[fn]}/></div>
+              </div>
+            </div>
+          );
+        })}
+        {!shown.length && <div className="as-empty">No branding clips{q ? " match" : " yet"}.</div>}
+      </div>
+      {missing.length > 0 && (
+        <div className="as-missing">
+          <strong>Registered clips with a missing file:</strong>
+          {missing.map(c => (
+            <span key={c.key} className="as-missing-item">{c.key} → {c.video_file_path}
+              <button className="btn-edit" onClick={() => removeClip(c)}>Remove entry</button></span>
+          ))}
+        </div>
+      )}
+      {open && (
+        <AsDrawer title={byFile[open] ? byFile[open].key : open} subtitle={open} onClose={() => setOpen(null)}
+          footer={byFile[open] && <><button className="btn-edit" onClick={() => { removeClip(byFile[open]); setOpen(null); }}>Delete</button><div style={{flex:1}}/></>}>
+          <video className="as-hero" src={assetUrl(`branding/${open}`)} controls autoPlay/>
+          {byFile[open] && <div className="set-help">{byFile[open].description}</div>}
+          {(usage[open] || []).length > 0 && <div className="as-usedlist"><label>Used by</label>{usage[open].map(p => <span key={p} className="tag">{p}</span>)}</div>}
+        </AsDrawer>
+      )}
+      {adding && <SimpleUploadDrawer title="Add branding clip" endpoint="/assets/video-clips" accept="video/*,.mp4,.mov,.webm"
+                   label="MP4 intro or outro" onClose={() => setAdding(false)} reload={reload}/>}
+    </>
+  );
+}
+
+// ── The page ──────────────────────────────────────────────────────────────────
 
 const ASSET_TABS = [
-  { id:"characters",  label:"Characters"      },
-  { id:"locations",   label:"Locations"       },
-  { id:"bg_audio",    label:"Background Audio"},
-  { id:"sfx",         label:"SFX"             },
+  { id: "characters", label: "Characters", add: "Character", shared: false },
+  { id: "locations",  label: "Locations",  add: "Location",  shared: false },
+  { id: "music",      label: "Music",      add: "Track",     shared: true  },
+  { id: "sfx",        label: "SFX",        add: "Sound",     shared: true  },
+  { id: "branding",   label: "Branding",   add: "Clip",      shared: false },
 ];
 
-function AssetsTab({ onNavigate }) {
-  const [tab, setTab] = useState("characters");
+function AssetsTab() {
+  const { workspace } = useApp();
+  const [tab, setTab]       = useState(() => { try { return localStorage.getItem("assets.tab") || "characters"; } catch { return "characters"; } });
+  const [q, setQ]           = useState("");
+  const [adding, setAdding] = useState(false);
+  const [usage, setUsage]   = useState({});
+  const [data, setData]     = useState({ characters: {}, locations: {}, music: {}, sfx: {}, clips: {}, files: [] });
+  const [bust, setBust]     = useState(Date.now());
+
+  const reload = useCallback(async () => {
+    const get = u => fetch(u).then(r => r.json()).catch(() => ({}));
+    const [characters, locations, music, sfx, clips, files, use] = await Promise.all([
+      get("/assets/characters"), get("/assets/locations"), get("/assets/background-audio"),
+      get("/assets/sfx"), get("/assets/video-clips"), get("/assets/branding/list"), get("/assets/usage"),
+    ]);
+    setData({ characters, locations, music, sfx, clips, files: files.files || [] });
+    setUsage(use || {});
+    setBust(Date.now());
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { try { localStorage.setItem("assets.tab", tab); } catch {} setQ(""); setAdding(false); }, [tab]);
+
+  const counts = {
+    characters: Object.keys(data.characters).length, locations: Object.keys(data.locations).length,
+    music: Object.keys(data.music).length, sfx: Object.keys(data.sfx).length, branding: data.files.length,
+  };
+  const cur = ASSET_TABS.find(t => t.id === tab);
+  const needle = q.trim().toLowerCase();
+  const common = { q: needle, adding, setAdding, reload };
 
   return (
-    <div style={{maxWidth:720,margin:"0 auto",padding:"1.5rem 1rem"}}>
-      <div style={{marginBottom:"1.5rem"}}>
-        <h2 style={{marginBottom:".25rem"}}>Asset Library</h2>
-        <div style={{fontSize:".83rem",color:"var(--muted)"}}>
-          Manage characters, locations, and other reusable assets.
+    <AsAudioProvider>
+      <div className="as-page">
+        <div className="as-head">
+          <div>
+            <h2>Assets</h2>
+            <div className="as-head-sub">
+              {cur.shared ? "Shared library — available in every workspace"
+                          : <>Workspace <strong>{workspace ? workspace.name : ""}</strong></>}
+            </div>
+          </div>
+          <div className="as-tools">
+            <input className="pt-filter as-search" placeholder={`Search ${cur.label.toLowerCase()}…`} value={q} onChange={e => setQ(e.target.value)}/>
+            <button className="btn-primary" onClick={() => setAdding(true)}>+ {cur.add}</button>
+          </div>
         </div>
+        <div className="tabs">
+          {ASSET_TABS.map(t => (
+            <button key={t.id} className={"tab" + (tab === t.id ? " active" : "")} onClick={() => setTab(t.id)}>
+              {t.label} <span className="as-count">{counts[t.id]}</span>
+            </button>
+          ))}
+        </div>
+        {tab === "characters" && <CharactersPane {...common} data={data.characters} usage={usage.characters || {}} bust={bust}/>}
+        {tab === "locations"  && <LocationsPane  {...common} data={data.locations}  usage={usage.locations || {}} bust={bust}/>}
+        {tab === "music"      && <MusicPane      {...common} data={data.music}      usage={usage.background_audio || {}}/>}
+        {tab === "sfx"        && <SfxPane        {...common} data={data.sfx}/>}
+        {tab === "branding"   && <BrandingPane   {...common} clips={data.clips} files={data.files} usage={usage.branding_files || {}}/>}
       </div>
-
-      <div className="tabs" style={{marginBottom:"1.25rem"}}>
-        {ASSET_TABS.map(t => (
-          <button key={t.id}
-            className={"tab" + (tab===t.id?" active":"")}
-            onClick={()=>setTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
-        <button className="tab" title="Edit subtitle & overlay styles with live preview"
-          style={{marginLeft:"auto",color:"var(--accent)"}}
-          onClick={()=>onNavigate && onNavigate("subtitles")}>
-          Subtitle styling →
-        </button>
-      </div>
-
-      {tab==="characters"  && <CharactersPane/>}
-      {tab==="locations"   && <LocationsPane/>}
-      {tab==="bg_audio"    && <BackgroundAudioPane/>}
-      {tab==="sfx"         && <SfxPane/>}
-    </div>
+    </AsAudioProvider>
   );
 }

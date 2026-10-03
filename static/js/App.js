@@ -110,7 +110,7 @@ function App() {
         <div className="shell" style={{gridTemplateColumns:"1fr"}}>
           <main className="main" key={workspace ? workspace.slug : "none"}>
             {view === "assets"
-              ? <AssetsTab onNavigate={(v) => v === "subtitles" ? openSettings("subtitles") : setView(v)}/>
+              ? <AssetsTab/>
               : <SettingsView tab={settingsTab} onTab={setSettingsTab}/>}
           </main>
         </div>
