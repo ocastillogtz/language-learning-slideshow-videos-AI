@@ -208,6 +208,9 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "bg_audio_fadein_s":  _f("assembly", "bg_audio_fadein_s",  1.0),
         "bg_audio_fadeout_s": _f("assembly", "bg_audio_fadeout_s", 2.0),
         "speed_factor":       _f("assembly", "speed_factor",       1.0),
+        # How far (dB) the background music should sit under the voices — drives the
+        # suggested per-video gain (music_level.py). Project types may override it.
+        "music_below_voice_db": _f("assembly", "music_below_voice_db", 20.0),
 
         # Reading_together part overlays (vertical part shorts)
         # Default background music for reading_together assembly (parts + long).

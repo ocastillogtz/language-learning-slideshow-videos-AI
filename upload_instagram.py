@@ -435,20 +435,27 @@ def _build_caption(manifest: dict) -> str:
         for t in raw_tags.replace(",", " ").split()
         if t.strip()
     )
-    extra = load_config()["channel_hashtags"] + " #shorts"
+    cfg   = load_config()
+    extra = cfg["channel_hashtags"] + " #shorts"
     if level:
         extra += " #" + level.lower()
+    # Script tags + channel tags, each hashtag once (case-insensitive, first wins).
+    seen, tags = set(), []
+    for t in (hashtags + " " + extra).split():
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            tags.append(t)
 
     parts = []
     if title:
         parts.append(title)
     if location:
-        parts.append("Ort: " + location)
+        parts.append(("Ort: " if cfg["language_code"] == "de" else "📍 ") + location)
     if insights:
         parts.append("")
         parts.append(insights[:500])
     parts.append("")
-    parts.append(hashtags + " " + extra if hashtags else extra)
+    parts.append(" ".join(tags))
     return "\n".join(parts).strip()
 
 

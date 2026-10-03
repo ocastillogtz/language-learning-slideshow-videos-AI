@@ -458,6 +458,7 @@ def analyze_background_audio(key: str):
     try:
         import audio_tools
         from manage_background_audio import load_background_audio, save_background_audio
+        from music_level import library_suggestion
         entry, current, original = _track(key)
         music = load_background_audio()
         if request.args.get("refresh") == "1" or not entry.get("loudness"):
@@ -471,6 +472,8 @@ def analyze_background_audio(key: str):
             "library_median_mean_db": means[len(means) // 2] if means else None,
             "measured_tracks": len(means),
             "voice_sample": bool(_voice_sample()),
+            "typical_video_gain_db": library_suggestion(key),
+            "music_below_voice_db": get_cfg()["music_below_voice_db"],
             "bg_audio_volume": get_cfg()["bg_audio_volume"],
         })
     except KeyError:

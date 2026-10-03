@@ -442,3 +442,8 @@ img.as-hero { background:#f4f1ea; }
   .as-search { width:100%; }
   .as-tools { width:100%; }
 }
+
+/* Suggested music gain under the Volume field (Assemble / Reading / Podcast steps) */
+.gain-sug { align-self:flex-start; margin-top:.25rem; background:rgba(74,222,128,.1); border:1px solid rgba(74,222,128,.3); color:var(--green); border-radius:20px; font-family:'DM Sans',sans-serif; font-size:.7rem; padding:.12rem .6rem; cursor:pointer; }
+.gain-sug:hover { background:rgba(74,222,128,.2); }
+.gain-sug.same { background:transparent; border-color:transparent; color:var(--muted); cursor:default; }

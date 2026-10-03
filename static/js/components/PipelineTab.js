@@ -641,7 +641,21 @@ function gainHintText(v) {
 // value/onChange = the {yt, meta, tiktok} state. ytBlankLabel: when set, YouTube may be
 // left blank (e.g. "config default"); otherwise a YouTube track is always selected.
 function PlatformBgAudioFields({ value, onChange, tracks, ytBlankLabel, fileHint }) {
+  const { currentProject } = useApp();
   const set = (pk, key, v) => onChange({ ...value, [pk]: { ...value[pk], [key]: v } });
+  // Suggested gain per chosen track: puts the music the usual distance under this
+  // project's voices (music_level.py, config [assembly] music_below_voice_db).
+  const [level, setLevel] = useState(null);
+  const chosen = BG_PLATFORMS.map(p => (value[p.key] || {}).name).filter(Boolean);
+  const chosenKey = [...new Set(chosen)].sort().join(",");
+  useEffect(() => {
+    if (!currentProject || !chosenKey) { setLevel(null); return; }
+    let live = true;                        // drop answers for a selection that changed meanwhile
+    fetch(`/projects/${currentProject}/music-level?tracks=${encodeURIComponent(chosenKey)}`)
+      .then(r => r.json()).then(d => { if (live) setLevel(d.error ? null : d); })
+      .catch(() => { if (live) setLevel(null); });
+    return () => { live = false; };
+  }, [currentProject, chosenKey]);
   const groups = (license) => {
     // The platform's own safe tracks first, then the others.
     const order = [license, ...["YTsafe", "Metasafe", "TikToksafe"].filter(l => l !== license), ""];
@@ -698,6 +712,18 @@ function PlatformBgAudioFields({ value, onChange, tracks, ytBlankLabel, fileHint
               <input type="number" min="-30" max="30" step="0.5" value={s.gain_db}
                 disabled={disabled || (p.key !== "yt" && !s.name)}
                 onChange={e => set(p.key, "gain_db", e.target.value)} placeholder="0"/>
+              {(() => {
+                const sug = level && s.name && level.tracks[s.name];
+                if (!sug || disabled) return null;
+                const g = sug.suggested_gain_db, same = Math.abs(parseFloat(s.gain_db || 0) - g) < 0.25;
+                return (
+                  <button type="button" className={"gain-sug" + (same ? " same" : "")}
+                    title={`Track ${sug.track_mean_db.toFixed(1)} dB · voices ${level.voice_db.toFixed(1)} dB${level.voice_measured ? "" : " (typical — no audio yet)"} · music ${level.music_below_voice_db} dB under the voices`}
+                    onClick={() => set(p.key, "gain_db", String(g))}>
+                    {same ? "✓ suggested" : `Suggested ${g > 0 ? "+" : ""}${g} dB`}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         );

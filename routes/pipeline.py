@@ -165,6 +165,17 @@ def run_image_scene(name):
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/projects/<name>/music-level")
+def music_level(name):
+    """Suggested background-music gain per track for this project (see music_level.py)."""
+    try:
+        from music_level import project_suggestion
+        tracks = [t for t in (request.args.get("tracks") or "").split(",") if t.strip()]
+        return jsonify(project_suggestion(name, tracks))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/config/image_models", methods=["GET"])
 def list_image_models():
     """Selectable fal.ai image (edit) models for the UI dropdown, plus the config

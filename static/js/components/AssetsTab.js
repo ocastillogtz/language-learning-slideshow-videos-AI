@@ -583,6 +583,13 @@ function VolumeTool({ k, usage, onClose, reload }) {
         <div><label>Library average</label><strong>{median !== null && median !== undefined ? `${median.toFixed(1)} dB` : "—"}</strong></div>
       </div>
 
+      {info.typical_video_gain_db !== null && info.typical_video_gain_db !== undefined && (
+        <div className="set-help">
+          In a video this file needs about <strong style={{color:"var(--text)"}}>{info.typical_video_gain_db > 0 ? "+" : ""}{info.typical_video_gain_db} dB</strong> of
+          project gain to sit {info.music_below_voice_db} dB under typical voices — the Assemble step suggests the exact value per project.
+          Saving a louder/quieter file here lowers/raises that number by the same amount.
+        </div>
+      )}
       <div className="vt-slider">
         <div className="vt-gain">{gain > 0 ? "+" : ""}{gain.toFixed(1)} <span>dB</span></div>
         <input type="range" min={-20} max={30} step={0.5} value={gain} onChange={e => { setGain(parseFloat(e.target.value)); }}/>
