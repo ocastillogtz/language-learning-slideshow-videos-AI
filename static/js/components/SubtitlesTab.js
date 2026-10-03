@@ -1,7 +1,7 @@
 // SubtitlesTab.js — top-level "Subtitles" page.
 // Edit every on-screen text overlay's style (dialogue + narrator subtitles, footnote,
 // shadowing "repeat" message, preposition-quiz option chips + 3-2-1 countdown) and see
-// the change on a sample frame before saving it back to config.ini.
+// the change on a sample frame before saving it to the active workspace's settings.
 //
 // Font size + subtitle bottom-margin are stored PER ORIENTATION (the [vertical]/
 // [horizontal] config sections); everything else is shared. The orientation toggle
@@ -149,7 +149,7 @@ function SubtitlesTab() {
       if (!r.ok || d.error) throw new Error(d.error || r.statusText);
       setWork(jclone(d.values));       // config now matches → editor is clean
       setOriginal(jclone(d.values));
-      toast("Applied", `Profile “${profSel}” written to config.ini`, "ok");
+      toast("Applied", `Profile “${profSel}” applied to this workspace`, "ok");
     } catch (e) { toast("Apply failed", e.message, "err"); }
     finally { setProfBusy(false); }
   }
@@ -275,7 +275,7 @@ function SubtitlesTab() {
           if (!perOrient.current.has(k)) n[other][k] = work[other][k];
         return n;
       });
-      toast("Saved", `${d.saved} value${d.saved === 1 ? "" : "s"} written to config.ini`, "ok");
+      toast("Saved", `${d.saved} value${d.saved === 1 ? "" : "s"} saved for this workspace`, "ok");
     } catch (e) { toast("Save failed", e.message, "err"); }
     finally { setSaving(false); }
   }
@@ -297,7 +297,7 @@ function SubtitlesTab() {
         <div className="sub">
           Tune every on-screen text style and preview it on a sample frame
           (<code>assets/samples/{orient}.png</code>). Size &amp; bottom-margin are saved per
-          orientation; other values are shared. Changes write to <code>config.ini</code>.
+          orientation; other values are shared. Changes are saved for this workspace.
         </div>
       </div>
 
@@ -321,7 +321,7 @@ function SubtitlesTab() {
         <button className="btn-cancel" onClick={reset} disabled={dirtyCount === 0}
           style={{ fontSize: ".8rem" }}>Reset</button>
         <button className="btn-primary" onClick={save} disabled={saving || dirtyCount === 0}>
-          {saving ? "Saving…" : "Save to config"}
+          {saving ? "Saving…" : "Save changes"}
         </button>
       </div>
 
@@ -338,7 +338,7 @@ function SubtitlesTab() {
           {profiles.map(n => <option key={n} value={n}>{n}</option>)}
         </select>
         <button className="btn-ghost" onClick={applyProfile} disabled={!profSel || profBusy}
-          title="Write this profile to config.ini (both orientations) and load it here"
+          title="Apply this profile to the workspace (both orientations) and load it here"
           style={{ fontSize: ".8rem" }}>Apply</button>
         <button className="btn-ghost" onClick={deleteProfile} disabled={!profSel || profBusy}
           style={{ fontSize: ".8rem", color: "#f0857d" }}>Delete</button>
@@ -352,7 +352,7 @@ function SubtitlesTab() {
           style={{ fontSize: ".8rem" }}>Save current as</button>
         <span style={{ flex: 1 }}/>
         <span style={{ fontSize: ".72rem", color: "var(--muted)" }}>
-          Applying overwrites <code>config.ini</code> — snapshot first to keep your current look.
+          Applying overwrites the current style — snapshot first to keep your current look.
         </span>
       </div>
 

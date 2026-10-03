@@ -58,7 +58,7 @@ _EXAMPLE = json.dumps({
 }, ensure_ascii=False, indent=2)
 
 _PROMPT_TEMPLATE = """
-You are a German grammar annotator. Analyse the sentence and return a JSON object
+You are a {LANGUAGE} grammar annotator. Analyse the sentence and return a JSON object
 describing it for a learner-facing grammar overlay.
 
 Return ONLY a JSON object with two keys: "tokens" and "spans".
@@ -117,7 +117,8 @@ Sentence:
 
 
 def _build_prompt(sentence):
-    return _PROMPT_TEMPLATE.replace("__EXAMPLE__", _EXAMPLE).replace("__SENTENCE__", sentence)
+    from utils_config import target_language
+    return _PROMPT_TEMPLATE.replace("{LANGUAGE}", target_language()).replace("__EXAMPLE__", _EXAMPLE).replace("__SENTENCE__", sentence)
 
 
 def _clean_tokens(raw):

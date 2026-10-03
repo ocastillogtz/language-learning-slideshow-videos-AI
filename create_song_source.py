@@ -37,7 +37,7 @@ from pydub import AudioSegment
 from elevenlabs.client import ElevenLabs
 from openai import OpenAI
 
-from utils_config import load_config, load_new_characters
+from utils_config import load_config, load_new_characters, target_language
 from create_script import _action_single_prompt, _relax_clothing
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -51,7 +51,7 @@ _openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # is named in the scene text (see override_wardrobe in project_types.json).
 DEFAULT_SONG_CHARACTER = "Amir"
 DEFAULT_VISUAL_GUIDELINES = (
-    "The character performs as a German hip-hop rapper. He wears baggy streetwear — an "
+    "The character performs as a hip-hop rapper. He wears baggy streetwear — an "
     "oversized hoodie, a snapback cap worn backwards, gold chains and sunglasses — which "
     "REPLACES his usual clothes for this whole video. Urban music-video settings: a moody "
     "recording studio, a neon-lit stage, or a graffiti street backdrop. Energetic performing "
@@ -216,7 +216,7 @@ def _art_direct(slot_texts: list[str], character: str, visual_guidelines: str,
         for i, txt in enumerate(slot_texts)
     )
     prompt = (
-        f"You are art-directing a German language-learning MUSIC VIDEO (level {level}). "
+        f"You are art-directing a {target_language()} language-learning MUSIC VIDEO (level {level}). "
         f"One performer, {character}, performs the whole song. The video shows a new "
         f"illustration for each numbered slot below; each slot lists the lyrics sung during it.\n\n"
         f"ART DIRECTION — costume, instrument, setting, mood and COMPOSITION (keep CONSISTENT "

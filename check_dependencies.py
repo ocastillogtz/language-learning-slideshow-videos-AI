@@ -1,7 +1,7 @@
 """
 check_dependencies.py
 =====================
-Verifies that everything the German Learning Video tool needs is installed
+Verifies that everything the Language Pipeline video tool needs is installed
 (Windows-only tool).
 
 Checks, in order:
@@ -239,7 +239,7 @@ def check_dependencies(verbose: bool = True) -> bool:
     n_fail = n_warn = 0
     if verbose:
         print("=" * 64)
-        print(" Dependency check — German Learning Video tool")
+        print(" Dependency check — Language Pipeline")
         print("=" * 64)
 
     for title, rows in sections:

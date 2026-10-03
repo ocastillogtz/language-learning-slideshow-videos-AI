@@ -9,6 +9,10 @@ function AppProvider({ children }) {
   const [manifest,        setManifest]       = useState(null);
   const [characters,      setCharacters]     = useState([]);
   const [locations,       setLocations]      = useState([]);
+  // Workspaces (one per language / channel) — see routes/workspaces.py
+  const [workspace,       setWorkspace]      = useState(null);   // the active one
+  const [workspaces,      setWorkspaces]     = useState([]);
+  const [languages,       setLanguages]      = useState([]);
   const pollsRef = useRef({});   // { stepKey: intervalId }
 
   // ── API helpers ────────────────────────────────────────────────────────────
@@ -56,6 +60,17 @@ function AppProvider({ children }) {
     } catch {}
   }, []);
 
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      const r = await fetch("/workspaces");
+      const d = await r.json();
+      setWorkspaces(d.workspaces || []);
+      setLanguages(d.languages || []);
+      setWorkspace((d.workspaces || []).find(w => w.slug === d.active) || null);
+      return d;
+    } catch { return null; }
+  }, []);
+
   // Poll a step until it leaves "running" state.
   // onTick (optional) fires on every poll with the raw status (incl. progress),
   // so callers can drive a live progress bar; onDone fires once when finished.
@@ -80,6 +95,19 @@ function AppProvider({ children }) {
     pollsRef.current = {};
   }, []);
 
+  // Switch the whole app (and the CLI / MCP server, which read the same DB) to
+  // another workspace, then reload everything that is workspace-specific.
+  const switchWorkspace = useCallback(async (slug) => {
+    const r = await fetch(`/workspaces/${slug}/activate`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) { toast("Can't switch", d.error || r.statusText, "err"); return false; }
+    stopAllPolls();
+    setCurrentProject(null);
+    setManifest(null);
+    await Promise.all([loadWorkspaces(), refreshSidebar(), loadAssets()]);
+    return true;
+  }, [toast, stopAllPolls, loadWorkspaces, refreshSidebar, loadAssets]);
+
   return (
     <AppCtx.Provider value={{
       projects, setProjects,
@@ -88,6 +116,7 @@ function AppProvider({ children }) {
       characters, locations,
       toast, reloadManifest, refreshSidebar,
       loadAssets, startPoll, stopAllPolls,
+      workspace, workspaces, languages, loadWorkspaces, switchWorkspace,
     }}>
       {children}
     </AppCtx.Provider>

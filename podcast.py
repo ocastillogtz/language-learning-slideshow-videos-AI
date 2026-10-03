@@ -212,7 +212,9 @@ def _dialog_lines(manifest: dict) -> list[dict]:
 def _shorts_prompt(lines: list[dict], count: int, min_lines: int, max_lines: int, level: str) -> str:
     numbered = "\n".join(
         f"{l['index']}. [{l['setting']}] {l['speaker']}: {l['text']}" for l in lines)
-    return f"""You are a social-media editor for the "Brezel Podcast", a German-learning podcast (level {level}).
+    cfg = load_config()
+    lang = cfg["language_name"]
+    return f"""You are a social-media editor for the "{cfg['podcast_short_label']}", a {lang}-learning podcast (level {level}).
 Below is the full episode transcript. Each line is: <index>. [studio|example] <speaker>: <text>.
 
 Pick the {count} BEST moments to publish as standalone vertical Shorts (YouTube Shorts / Reels) that make
@@ -226,10 +228,10 @@ Each moment must:
 - NOT overlap with the other moments. Prefer moments from different parts of the episode.
 
 For each moment also write:
-- "title": a catchy Short title UNDER 90 characters, German or mixed German/English, ending with
-  "({level}) 🥨 #shorts #deutschlernen".
+- "title": a catchy Short title UNDER 90 characters, {lang} or mixed {lang}/English, ending with
+  "({level}) {cfg['channel_title_suffix']}".
 - "description": 2-3 plain-text sentences (no markdown) saying what the viewer learns, then a new line
-  "Ganze Folge: {{LINK}}" (write the literal placeholder {{LINK}}), then a new line with 3-5 hashtags.
+  "{cfg['podcast_full_episode_label']}: {{LINK}}" (write the literal placeholder {{LINK}}), then a new line with 3-5 hashtags.
 - "why": one short sentence on why this moment works as a Short.
 
 Return ONLY this JSON:

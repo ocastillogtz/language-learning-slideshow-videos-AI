@@ -69,6 +69,8 @@ import sys
 import time
 from pathlib import Path
 
+from utils_config import load_config
+
 import requests
 from dotenv import load_dotenv
 
@@ -433,7 +435,7 @@ def _build_caption(manifest: dict) -> str:
         for t in raw_tags.replace(",", " ").split()
         if t.strip()
     )
-    extra = "#germanlearning #deutschlernen #learngerman #shorts #deutsch"
+    extra = load_config()["channel_hashtags"] + " #shorts"
     if level:
         extra += " #" + level.lower()
 

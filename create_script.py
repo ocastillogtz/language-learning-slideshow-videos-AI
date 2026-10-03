@@ -30,10 +30,14 @@ Prompt placeholders
 {WORDS_LIST}               — comma-separated word list (word_learning only)
 {PROVIDED_CONTEXT}         — user-supplied scene description
 {PROVIDED_LEARNING_POINTS} — user-supplied learning objectives
+{LANGUAGE}                 — language being taught, English name (e.g. German)
+{LANGUAGE_NATIVE}          — its own name (e.g. Deutsch)
+{CHANNEL}                  — channel name of the workspace
+{HASHTAGS}                 — the workspace's channel hashtags
 
 Dialog item fields (GPT output)
 --------------------------------
-  text             — German dialog text
+  text             — dialog text in the workspace's language
   speaker          — character name
   scene_visual     — English action description for the illustration
   scene_characters — "speaker_only" | "both"
@@ -56,6 +60,7 @@ from utils_config import (
     load_new_characters,
     load_project_types,
     get_new_locations_flat,
+    target_language,
 )
 from utils_markup import blank_the_answer, gap_reading_for_tts
 
@@ -220,7 +225,7 @@ def _narration_hook_block(level: str, cast: list[str], redefine_text: bool = Tru
 The video opens on the narrator's line over an establishing shot. Build the "narration"
 object with BOTH fields below (not just "text"):
 
-1) "text": a short, DIRECT statement of exactly what this video covers, in German at level
+1) "text": a short, DIRECT statement of exactly what this video covers, in {target_language()} at level
    {level} — a bare topic label, NOT a hook. Just name the subject plainly, no rhetorical
    question, no "Wusstest du ...?", no surprising-claim teaser, no promise or hype. Think of
    it as a chapter title read aloud, e.g. "Wörter aus der Logistik", "Verben mit der Vorsilbe
@@ -230,7 +235,7 @@ object with BOTH fields below (not just "text"):
 2) "scene_visual": {activity_rule}
 
 So the narration object becomes:
-  "narration": {{ "text": "German topic label", "scene_visual": "English shared-activity scene" }}
+  "narration": {{ "text": "{target_language()} topic label", "scene_visual": "English shared-activity scene" }}
 """
 
     return f"""
@@ -313,7 +318,12 @@ def _build_prompt(
         dialog_count_str = project_type.get("default_dialog_count", "4-6")
 
     template = project_type["description_for_prompt"]
+    cfg = load_config()
     prompt = template.format(
+        LANGUAGE                 = cfg["language_name"],
+        LANGUAGE_NATIVE          = cfg["language_native"],
+        CHANNEL                  = cfg["channel_name"],
+        HASHTAGS                 = cfg["channel_hashtags"],
         LEVEL                    = level,
         LEVEL_LOWER              = level.lower(),
         LOCATION_KEY             = location_key or "(model's choice)",
@@ -560,7 +570,7 @@ def _refresh_insights_after_batch(gpt_output: dict, level: str, model: str) -> N
 
     dialog_block = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(lines))
     prompt = f"""
-You wrote a YouTube description for a German learning video (level {level}) after seeing
+You wrote a YouTube description for a {target_language()} learning video (level {level}) after seeing
 only the first part of the dialog. Here is the COMPLETE dialog:
 
 {dialog_block}
@@ -603,7 +613,7 @@ Return ONLY a JSON object of the form {{"insights": "..."}}
 def _build_repetitions_prompt(dialog_texts: list[str], level: str) -> str:
     numbered = "\n".join(f"  {i}. {t}" for i, t in enumerate(dialog_texts))
     return f"""
-You are a German language learning expert selecting sentences for a shadowing exercise.
+You are a {target_language()} language learning expert selecting sentences for a shadowing exercise.
 Level: {level}
 
 Select exactly 3 sentences from the dialog below that are most pedagogically valuable
@@ -611,7 +621,7 @@ for a {level} learner to shadow.
 
 Criteria (in order of priority):
 1. Contains the key grammar structure or vocabulary being taught
-2. Natural spoken German that sounds good when repeated aloud
+2. Natural spoken {target_language()} that sounds good when repeated aloud
 3. Varied sentence structures across the 3 chosen lines
 4. Appropriate length — not too short (trivial) and not too long (hard to repeat)
 
@@ -621,9 +631,9 @@ Dialog lines:
 Return ONLY valid JSON (no markdown, no backticks):
 {{
   "repetitions": [
-    {{"text": "exact German sentence copied from the dialog lines above"}},
-    {{"text": "exact German sentence copied from the dialog lines above"}},
-    {{"text": "exact German sentence copied from the dialog lines above"}}
+    {{"text": "exact {target_language()} sentence copied from the dialog lines above"}},
+    {{"text": "exact {target_language()} sentence copied from the dialog lines above"}},
+    {{"text": "exact {target_language()} sentence copied from the dialog lines above"}}
   ]
 }}
 
@@ -1256,7 +1266,7 @@ def script_prompt(
     if rules.get("include_repetition_section"):
         extras.append(
             '"repetitions": a list of exactly 3 dialog texts, copied EXACTLY, that are the most '
-            "valuable for a learner to shadow (key structure/vocabulary, natural spoken German, "
+            f"valuable for a learner to shadow (key structure/vocabulary, natural spoken {target_language()}, "
             "varied structures, not too short or too long). Do not include \"Bitte wiederholen\".")
     if rules.get("podcast_studio"):
         cfg = ctx["cfg"]
@@ -1265,8 +1275,8 @@ def script_prompt(
             f'vertical Shorts, each {{"start", "end", "title", "description"}} with 0-based inclusive '
             f'dialog indices, {cfg["podcast_short_min_lines"]}-{cfg["podcast_short_max_lines"]} lines long, '
             "self-contained with a strong first line. Title under 90 characters ending with "
-            f'"({ctx["manifest"]["generation_config"].get("level", "")}) 🥨 #shorts #deutschlernen"; '
-            'description = 2-3 sentences, then a line "Ganze Folge: {LINK}", then 3-5 hashtags.')
+            f'"({ctx["manifest"]["generation_config"].get("level", "")}) {cfg["channel_title_suffix"]}"; '
+            f'description = 2-3 sentences, then a line "{cfg["podcast_full_episode_label"]}: {{LINK}}", then 3-5 hashtags.')
     return {
         "project_type_key": ctx["project_type_key"],
         "cast": ctx["cast"],
@@ -1483,9 +1493,9 @@ def _build_evaluation_prompt(dialog_texts: list[str], level: str, offset: int) -
     GLOBAL index (offset + position) so the returned dialog_N keys line up with the
     full dialog regardless of which batch they came from."""
     numbered = "\n".join(f"dialog_{offset + i}: {t}" for i, t in enumerate(dialog_texts))
-    return f"""You are a German language expert evaluating dialog written for a {level} learner.
+    return f"""You are a {target_language()} language expert evaluating dialog written for a {level} learner.
 
-Evaluate EACH line below for grammar correctness and natural spoken German.
+Evaluate EACH line below for grammar correctness and natural spoken {target_language()}.
 Each line is already tagged with its key ("dialog_N"). Use that EXACT key in your answer.
 
 Return ONLY valid JSON (no markdown, no backticks):

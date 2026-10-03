@@ -7,7 +7,7 @@ of the video.
 The scene is created EMPTY but with the full shape of a normal TTS scene, so the
 existing per-scene tools work on it directly from the Generated Items tab:
 
-  * "Edit" — fill in the German text (tts_text) and the visual description.
+  * "Edit" — fill in the text (tts_text) and the visual description.
   * "Re-generate Image" — the image prompt starts as a copy of the neighboring
     scene's prompt (same art style); edit the Action part, then generate.
   * The per-scene audio button synthesizes the line once text has been added.

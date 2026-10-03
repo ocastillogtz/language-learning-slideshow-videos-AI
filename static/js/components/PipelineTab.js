@@ -16,7 +16,7 @@ const PROJECT_TYPES = {
     { value: "word_learning_long",    label: "Word Learning — Long (vocabulary)"              },
     { value: "register_phrases_long", label: "Register Phrases — Long (formal / slang / ...)" },
     { value: "grammar_pairs_long",    label: "Grammar Pairs — Long (base → transformed)"      },
-    { value: "podcast",               label: "Podcast — Brezel Podcast (+ vertical Shorts)"   },
+    { value: "podcast",               label: "Podcast (+ vertical Shorts)"   },
   ],
 };
 

@@ -26,7 +26,7 @@ const NEW_PROJ_TYPES = {
     { value: "song", label: "Song (audio file → synced lyric video)" },
   ],
   podcast: [
-    { value: "podcast", label: "Podcast (Brezel Podcast episode + Shorts)" },
+    { value: "podcast", label: "Podcast (episode + Shorts)" },
   ],
 };
 

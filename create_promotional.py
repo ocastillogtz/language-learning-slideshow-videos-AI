@@ -54,7 +54,7 @@ def build_promotional_project(project_name: str, character: str,
     project_name : existing project folder (created by create_project).
     character    : key of one of your characters (assets/characters/characters.json).
     situation    : English description of the image / setting for the still.
-    text         : the exact German line the character says (TTS + subtitle).
+    text         : the exact line the character says (TTS + subtitle).
     """
     cfg           = load_config()
     project_path  = cfg["projects_dir"] / project_name

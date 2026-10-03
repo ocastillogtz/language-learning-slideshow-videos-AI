@@ -17,11 +17,7 @@ Locations
   DELETE /assets/locations/<key>           → remove location
   POST /assets/locations/<key>/generate-art → generate background art via fal.ai
 
-Project Types
-  GET  /assets/project-types               → list all project types
-  POST /assets/project-types               → add project type
-  PUT  /assets/project-types/<key>         → edit project type
-  DELETE /assets/project-types/<key>       → remove project type
+(Project types live in Settings now — see routes/settings.py.)
 
 Video Clips
   GET  /assets/video-clips                 → list all video clips
@@ -246,61 +242,6 @@ def generate_location_art(key: str):
         from manage_locations import generate_location_art as _gen
         run_job("assets", f"loc_art_{key}", _gen, assets_dir(), key)
         return jsonify({"message": f"Art generation started for location '{key}'"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# =============================================================================
-# PROJECT TYPES
-# =============================================================================
-
-@bp.route("/assets/project-types")
-def list_project_types():
-    try:
-        from utils_config import load_project_types
-        return jsonify(load_project_types(assets_dir()))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@bp.route("/assets/project-types", methods=["POST"])
-def add_project_type():
-    try:
-        data = request.get_json() or {}
-        key  = (data.get("key") or "").strip()
-        if not key:
-            return jsonify({"error": "key required"}), 400
-
-        from manage_project_types import add_project_type as _add
-        _add(assets_dir(), key, data)
-        return jsonify({"message": f"Project type '{key}' added"})
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 409
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@bp.route("/assets/project-types/<key>", methods=["PUT"])
-def edit_project_type(key: str):
-    try:
-        data = request.get_json() or {}
-        from manage_project_types import edit_project_type as _edit
-        _edit(assets_dir(), key, data)
-        return jsonify({"message": f"Project type '{key}' updated"})
-    except KeyError:
-        return jsonify({"error": f"Project type '{key}' not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@bp.route("/assets/project-types/<key>", methods=["DELETE"])
-def remove_project_type(key: str):
-    try:
-        from manage_project_types import remove_project_type as _remove
-        _remove(assets_dir(), key)
-        return jsonify({"message": f"Project type '{key}' removed"})
-    except KeyError:
-        return jsonify({"error": f"Project type '{key}' not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

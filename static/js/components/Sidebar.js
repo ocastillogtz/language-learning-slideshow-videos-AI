@@ -24,7 +24,7 @@ function Sidebar({ onNewProject }) {
         {projects.map(p => {
           const done = p.has_script && p.has_audio && p.has_images;
           const dt = p.created_at
-            ? new Date(p.created_at).toLocaleDateString("de-DE")
+            ? new Date(p.created_at).toLocaleDateString()
             : "—";
           return (
             <div

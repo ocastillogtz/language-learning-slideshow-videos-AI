@@ -11,13 +11,13 @@ function ManifestTab() {
   // ── Derived values ────────────────────────────────────────────────────────
 
   const created = meta.creation_date
-    ? new Date(meta.creation_date).toLocaleString("de-DE", {
+    ? new Date(meta.creation_date).toLocaleString(undefined, {
         dateStyle: "medium", timeStyle: "short"
       })
     : "—";
 
   const updated = meta.update_date
-    ? new Date(meta.update_date).toLocaleString("de-DE", {
+    ? new Date(meta.update_date).toLocaleString(undefined, {
         dateStyle: "medium", timeStyle: "short"
       })
     : "—";

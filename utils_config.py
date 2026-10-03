@@ -319,10 +319,27 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
             "No people, no characters, no text, no watermarks. Vertical 9:16 composition.",
         ),
 
+        # Channel identity used in titles / descriptions / upload metadata
+        "channel_hashtags":     _p("channel", "hashtags", "#germanlearning #deutschlernen #learngerman"),
+        "channel_title_suffix": _p("channel", "title_suffix", "🥨 #shorts #deutschlernen"),
+        "channel_default_title": _p("channel", "default_title", "German Learning Video"),
+        "channel_default_description": _p("channel", "default_description",
+                                          "Learn German naturally through authentic dialogue."),
+        "channel_tags": [t.strip() for t in _p("channel", "tags",
+                         "german, deutsch, learnGerman, deutschlernen, languagelearning, germanlearning"
+                         ).split(",") if t.strip()],
+        "podcast_full_episode_label": _p("podcast", "full_episode_label", "Ganze Folge"),
+
         # ComfyUI (kept for backwards compatibility)
         "comfyui_host": _p("comfyui", "host", "127.0.0.1"),
         "comfyui_port": _i("comfyui", "port", 8000),
     }
+
+
+def target_language() -> str:
+    """English name of the active workspace's language ("German", "Spanish", …) —
+    substituted wherever a prompt names the language being taught."""
+    return load_config()["language_name"]
 
 
 def apply_video_format(cfg: dict, video_format: str) -> dict:

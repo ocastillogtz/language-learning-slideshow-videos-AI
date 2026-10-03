@@ -200,7 +200,7 @@ def create_audio_single(project_name: str, scene_id: str) -> None:
     if not audio or audio.get("type") != "tts":
         raise ValueError(f"Scene '{scene_id}' is not a TTS scene (type={audio.get('type') if audio else None})")
     if not (audio.get("tts_text") or "").strip():
-        raise ValueError(f"Scene '{scene_id}' has no text yet — edit the scene and add its German text first.")
+        raise ValueError(f"Scene '{scene_id}' has no text yet — edit the scene and add its text first.")
 
     # Build the ordered list of TTS texts for prosody context
     tts_scenes = [

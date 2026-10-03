@@ -620,7 +620,6 @@ async function apiPut(path, body) {
 const ASSET_TABS = [
   { id:"characters",  label:"Characters"      },
   { id:"locations",   label:"Locations"       },
-  { id:"proj_types",  label:"Project Types"   },
   { id:"bg_audio",    label:"Background Audio"},
   { id:"sfx",         label:"SFX"             },
 ];
@@ -654,7 +653,6 @@ function AssetsTab({ onNavigate }) {
 
       {tab==="characters"  && <CharactersPane/>}
       {tab==="locations"   && <LocationsPane/>}
-      {tab==="proj_types"  && <ProjectTypesPane/>}
       {tab==="bg_audio"    && <BackgroundAudioPane/>}
       {tab==="sfx"         && <SfxPane/>}
     </div>

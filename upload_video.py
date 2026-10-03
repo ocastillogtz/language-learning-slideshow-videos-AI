@@ -56,6 +56,8 @@ import os
 import sys
 import time
 from pathlib import Path
+
+from utils_config import load_config
 from typing import Optional
 
 from googleapiclient.discovery import build, Resource
@@ -259,7 +261,8 @@ def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
     gc  = manifest.get("generation_config") or {}
 
     # ── field resolution: nested first, fall back to flat legacy keys ────────
-    title    = vi.get("title")    or manifest.get("title")    or "German Learning Video"
+    cfg      = load_config()
+    title    = vi.get("title")    or manifest.get("title")    or cfg["channel_default_title"]
     insights = vi.get("insights") or manifest.get("insights", "") or ""
     location = gc.get("location_key") or manifest.get("location-key", "") or ""
     style    = (manifest.get("project_metadata") or {}).get("project_type_key") \
@@ -287,8 +290,8 @@ def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
 
     desc_parts += [
         "",
-        "Learn German naturally through authentic dialogue.",
-        "#germanlearning #deutschlernen #learnGerman",
+        cfg["channel_default_description"],
+        cfg["channel_hashtags"],
     ]
     description = "\n".join(desc_parts)
 
@@ -296,8 +299,7 @@ def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
     raw_tags = vi.get("tags") or manifest.get("tags", "") or ""
     # raw_tags is like "#germanlearning #deutschlernen ..." — strip # and split
     auto_tags = [t.lstrip("#") for t in raw_tags.split() if t.startswith("#")]
-    extra_tags = ["german", "deutsch", "learnGerman", "deutschlernen", "shorts",
-                  "languagelearning", "germanlearning"]
+    extra_tags = cfg["channel_tags"] + ["shorts"]
     tags = list(dict.fromkeys(auto_tags + extra_tags))   # deduplicate, preserve order
 
     return title, description, tags
@@ -436,9 +438,10 @@ Examples:
         parser.error("Provide --project or --file")
 
     # ---- Resolve file path and metadata ----
-    title       = args.title or "German Learning Video"
+    cfg         = load_config()
+    title       = args.title or cfg["channel_default_title"]
     description = args.description or ""
-    tags: list[str] = ["shorts", "german", "deutschlernen"]
+    tags: list[str] = ["shorts"] + cfg["channel_tags"]
 
     if args.project:
         try:

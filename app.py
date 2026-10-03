@@ -32,6 +32,8 @@ from routes.prompts import bp as prompts_bp
 from routes.preview import bp as preview_bp
 from routes.connections import bp as connections_bp
 from routes.styling import bp as styling_bp
+from routes.settings import bp as settings_bp
+from routes.workspaces import bp as workspaces_bp
 
 app.register_blueprint(projects_bp)
 app.register_blueprint(assets_bp)
@@ -41,6 +43,8 @@ app.register_blueprint(prompts_bp)
 app.register_blueprint(preview_bp)
 app.register_blueprint(connections_bp)
 app.register_blueprint(styling_bp)
+app.register_blueprint(settings_bp)
+app.register_blueprint(workspaces_bp)
 
 if __name__ == "__main__":
     # use_reloader=False: the auto-reloader watches *.py/*.pyc recursively and

@@ -2,7 +2,7 @@
 mcp_server.py
 =============
 MCP bridge between a Claude chat session (Claude Code / Claude Desktop) and the
-German-learning video pipeline.
+language-learning video pipeline (the active workspace's language).
 
 This is the **brief seam**: you refine a video idea in chat, and Claude calls
 these tools to (1) create the project from that refined brief and (2) write its
@@ -57,10 +57,12 @@ from utils_config import (
 from platform_audio import any_variant_exists
 
 mcp = MCPServer(
-    name="german-video-pipeline",
+    name="language-video-pipeline",
     instructions=(
-        "Tools to turn a refined German-learning-video idea into a pipeline "
-        "project. Typical flow: call list_project_types / list_characters to see "
+        "Tools to turn a refined language-learning-video idea into a pipeline "
+        "project in the ACTIVE WORKSPACE (one per language/channel — call get_workspace "
+        "to see which language is being taught; write every learner-facing line in it). "
+        "Typical flow: call list_project_types / list_characters to see "
         "valid options, then create_project with the refined brief (project name, "
         "type, level, scene description, optional learning points, optional visual "
         "guidelines).\n"
@@ -79,10 +81,10 @@ mcp = MCPServer(
         "as an opt-in override to reuse a hand-made location.\n"
         "\n"
         "AUTHORING CONVENTIONS (bake these into context + visual_guidelines):\n"
-        "- Natural, native German: the example sentences must sound like a real speaker in "
-        "that situation, not a textbook or a literal translation. Natural word order, real "
-        "politeness ('Könnten Sie bitte ...?'), factually correct (German school grades are "
-        "1–6, real prices/units/procedures), and phrased from the point of view of whichever "
+        "- Natural, native target language: the example sentences must sound like a real speaker "
+        "in that situation, not a textbook or a literal translation. Natural word order, real "
+        "politeness (German e.g. 'Könnten Sie bitte ...?'), factually correct (e.g. German school "
+        "grades are 1–6, real prices/units/procedures), and phrased from the point of view of whichever "
         "character is speaking (a customer must not utter the provider's line).\n"
         "- Visuals must depict the SENTENCE, not just the word, so the image reinforces meaning. "
         "The speaker is the one performing the action.\n"
@@ -102,14 +104,14 @@ mcp = MCPServer(
         "names it. Avoid relying on readable text/labels on props (the illustrator can't draw "
         "words).\n"
         "\n"
-        "PODCAST TYPE (project_type_key=\"podcast\", the 'Brezel Podcast'):\n"
+        "PODCAST TYPE (project_type_key=\"podcast\", the channel's podcast):\n"
         "- A horizontal episode where char_a and char_b are the two hosts talking in a fixed podcast "
         "studio. context = the episode topic; learning_points = what the episode must teach. "
         "visual_guidelines (optional) only art-direct the EXAMPLE cut-aways, never the studio.\n"
-        "- The WHOLE episode is in German: the hosts explain, react and joke in German, with no "
+        "- The WHOLE episode is in the target language: the hosts explain, react and joke in it, with no "
         "English sentences or translations.\n"
         "- Each line is 'studio' (shared studio image, cached per host pair in "
-        "assets/podcast_studio — free after the first episode) or 'example' (the hosts act out a "
+        "assets/studios/podcast — free after the first episode) or 'example' (the hosts act out a "
         "real situation, which gets its own illustration; each new example_id = one paid image). "
         "Default length 30-40 lines.\n"
         "- Put the best moments for vertical Shorts in the script as podcast_shorts (dialog-line "
@@ -122,6 +124,26 @@ mcp = MCPServer(
 # =============================================================================
 # Discovery tools
 # =============================================================================
+
+@mcp.tool()
+def get_workspace() -> dict:
+    """The active workspace: the language being taught and the channel it is for.
+
+    Every learner-facing line (dialog, narration, titles) must be written in
+    `language`; scene_visual descriptions stay in English. Switch workspaces in the
+    web UI (Settings → Workspaces).
+    """
+    cfg = load_config()
+    return {
+        "workspace":       cfg["workspace"],
+        "name":            cfg["workspace_name"],
+        "language":        cfg["language_name"],
+        "language_native": cfg["language_native"],
+        "language_code":   cfg["language_code"],
+        "channel":         cfg["channel_name"],
+        "default_level":   cfg["level"],
+    }
+
 
 def _resolve_type(project_types: dict, key: str) -> dict:
     """Merge a project type over its base_type, mirroring create_project.py."""
@@ -332,6 +354,7 @@ def get_script_instructions(
         dialog_count=dialog_count or None,
         characters=[c for c in (characters or []) if c] or None,
     )
+    out["language"] = load_config()["language_name"]
     out["next_step"] = ("write the script as ONE JSON object following the prompt (and extra_fields), "
                         "then call submit_script with it")
     return out

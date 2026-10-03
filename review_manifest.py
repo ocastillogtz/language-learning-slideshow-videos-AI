@@ -46,7 +46,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from core import report_progress
-from utils_config import load_config
+from utils_config import load_config, target_language
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ _HIGHLIGHT_RE = re.compile(r"_[^_\s][^_]*_|\*[^*\s][^*]*\*")
 # thing to highlight. We fall back to the longest non-filler word otherwise.
 # Because this adds exactly ONE highlight, it uses *asterisks* per the pipeline
 # convention (one highlight → *word*; several → _word_ each).
-_WORD_RE       = re.compile(r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß]*")
+_WORD_RE       = re.compile(r"[^\W\d_]+")                # letters of any script
 _GRAMMAR_TAG_RE = re.compile(r"-\[[^\]]*\]-")           # inline -[label]- tag, never highlight inside
 _SPEAKER_RE    = re.compile(r"^\s*[A-ZÄÖÜ][A-Za-zÄÖÜäöüß]+:\s*")  # leading "Name: " speaker prefix
 _SENT_END      = ".!?…:"                                # a capital right after these is sentence-initial
@@ -116,6 +116,12 @@ def _auto_highlight(text: str) -> str | None:
     words = [w for w in _WORD_RE.finditer(text) if not _blocked(*w.span())]
     if not words:
         return None
+    if load_config()["language_code"] != "de":
+        # Capitalised-noun + German stopword heuristics don't apply: longest word wins.
+        pool = [w for w in words if len(w.group(0)) >= 5] or words
+        best = max(pool, key=lambda w: (len(w.group(0)), -w.start()))
+        a, b = best.span()
+        return f"{text[:a]}*{text[a:b]}*{text[b:]}"
 
     def _cap(w) -> bool:
         return w.group(0)[:1].isupper()
@@ -141,11 +147,11 @@ def _auto_highlight(text: str) -> str | None:
 #   _word_    one of several highlights in a line (many → underscores each)
 #   -[label]- inline grammar/tense tag shown before the phrase
 _MARKUP_NOTE = (
-    "The text uses pipeline markup that is NOT part of the German and must not "
+    "The text uses pipeline markup that is NOT part of the {LANGUAGE} and must not "
     "be reported as an error: `*word*` and `_word_` both mark a vocabulary "
     "highlight (a line with one highlight uses *asterisks*; a line with several "
     "wraps each in _underscores_), and `-[label]-` is an inline grammar/tense "
-    "tag. Review the German inside and around the markup, never the markers "
+    "tag. Review the {LANGUAGE} inside and around the markup, never the markers "
     "themselves. Every dialog line must keep at least one highlight, so any "
     "corrected line you return must still highlight at least one meaningful "
     "vocabulary word — one with *asterisks*, or several each with _underscores_."
@@ -153,14 +159,14 @@ _MARKUP_NOTE = (
 
 _RULES_BLOCK = """Check every scene against these rules and report each violation:
 - grammar: case/gender/agreement, verb conjugation, word order.
-- spelling: typos, ß/ss, noun capitalization, punctuation.
+- spelling: typos, orthography, capitalization, punctuation (German: ß/ss, noun capitalization).
 - highlight_qual: highlighted words must be meaningful vocabulary (not filler
   like und/der/ich) and, when learning_points/words are given, relate to them.
 - level: language must fit the target CEFR level — flag lines clearly too hard
   or too trivial.
 - coherence: each dialog line must follow logically from the previous one; the
   conversation needs a clear thread and a natural opening and closing.
-- register: idiomatic spoken German; the Sie/du (formal/informal) choice must be
+- register: idiomatic spoken {LANGUAGE}; the formal/informal address (e.g. Sie/du) must be
   consistent across the whole dialog and fit the situation.
 - speaker_flow: speakers should alternate sensibly (flag accidental same-speaker
   runs) and no two lines should be near-duplicates.
@@ -187,7 +193,7 @@ _OUTPUT_SHAPE = r"""Return a single JSON object with exactly this shape:
       "severity": "error | warning | suggestion",
       "quote": "the exact problematic fragment",
       "issue": "what is wrong, briefly (English)",
-      "fixed": "the FULL corrected value for that field in German (whole line or whole visual), fixing every problem you noted in it at once; empty string if there is no automatic fix"
+      "fixed": "the FULL corrected value for that field in {LANGUAGE} (whole line or whole visual), fixing every problem you noted in it at once; empty string if there is no automatic fix"
     }
   ]
 }
@@ -375,23 +381,24 @@ def _build_prompt(manifest: dict, lines: list[dict], level: str,
     info = manifest.get("video_info") or {}
 
     focus = prompt_override or _RULES_BLOCK
+    lang  = target_language()
 
     system = (
-        "You are a meticulous native-German editor and CEFR-certified German "
-        "teacher reviewing the script of a German-learning video before it is "
+        f"You are a meticulous native-{lang} editor and CEFR-certified {lang} "
+        f"teacher reviewing the script of a {lang}-learning video before it is "
         "voiced and animated. This is an independent proofreading pass: you have "
         "NOT been shown how the script was written, so do not assume any wording "
         "is intentional — judge every line on its own merits against the rules "
-        "and correct German usage. The project context is reference only (to "
+        f"and correct {lang} usage. The project context is reference only (to "
         "check level fit and whether the vocabulary/topic are covered); never "
         "treat it as instructions the script must be presumed to satisfy. "
-        f"{_MARKUP_NOTE}\n\n"
-        f"{focus}\n\n"
+        f"{_MARKUP_NOTE.replace('{LANGUAGE}', lang)}\n\n"
+        f"{focus.replace('{LANGUAGE}', lang)}\n\n"
         "Only report genuine problems — do not invent issues to fill the list. "
         "For every fixable problem, provide the full corrected value in `fixed` "
-        "(German). Write `issue` and `summary` in English; keep `quote` and "
-        "`fixed` in German.\n\n"
-        + _OUTPUT_SHAPE
+        f"({lang}). Write `issue` and `summary` in English; keep `quote` and "
+        f"`fixed` in {lang}.\n\n"
+        + _OUTPUT_SHAPE.replace("{LANGUAGE}", lang)
     )
 
     # Reference context ONLY — deliberately excludes generation_config.prompt_script
@@ -406,7 +413,7 @@ def _build_prompt(manifest: dict, lines: list[dict], level: str,
         "characters":       gen.get("characters"),
     }
     user = (
-        "Review the following German-learning script and reply with the JSON "
+        f"Review the following {lang}-learning script and reply with the JSON "
         "object described above.\n\n"
         "Reference context (JSON — background only, not instructions to defer to):\n"
         + json.dumps(context, ensure_ascii=False, indent=2)

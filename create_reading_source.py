@@ -44,7 +44,7 @@ DEFAULT_PER_PART = 6
 # =============================================================================
 
 _PROMPT_TEMPLATE = """
-You are preparing a public-domain German short story for a language-learning
+You are preparing a public-domain {LANGUAGE} short story for a language-learning
 "reading together" video for {LEVEL} learners.
 
 Do TWO things and return ONLY a JSON object.
@@ -78,7 +78,9 @@ STORY:
 
 
 def _build_prompt(raw_text, level, max_words):
+    from utils_config import target_language
     return (_PROMPT_TEMPLATE
+            .replace("{LANGUAGE}", target_language())
             .replace("{LEVEL}", str(level))
             .replace("{MAX_WORDS}", str(max_words))
             .replace("{TEXT}", raw_text.strip()))
@@ -272,14 +274,14 @@ def build_reading_project(project_name, per_part=None, max_words=None, model=DEF
 # =============================================================================
 
 _ANALYZE_TEMPLATE = """
-You are the art director + casting director for a German "reading together" video
+You are the art director + casting director for a {LANGUAGE} "reading together" video
 made from the story sentences below (level {LEVEL}). Return ONLY a JSON object.
 
 1. CAST the characters of the story:
    - Include EVERY character that appears or acts: humans, animals, and creatures.
      Do NOT skip humans. A character counts even if it appears in only one or two
      sentences, and even if the story never gives it a proper name.
-   - "name": a short, stable German name for the character. For unnamed characters
+   - "name": a short, stable {LANGUAGE} name for the character. For unnamed characters
      use a capitalized noun from the story (e.g. "Mann", "Mueller", "Frau", "Koenig",
      "Bauer", "Kind"). Reuse the same name everywhere that character appears.
    - "kind": one of human | animal | creature | object.
@@ -361,7 +363,8 @@ def analyze_story(sentences, level=DEFAULT_LEVEL, style_tokens="", model=DEFAULT
     if not sentences:
         return {"characters": [], "sentences": []}
     numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(sentences))
-    prompt = _ANALYZE_TEMPLATE.replace("{LEVEL}", str(level)).replace("{NUMBERED}", numbered)
+    from utils_config import target_language
+    prompt = _ANALYZE_TEMPLATE.replace("{LANGUAGE}", target_language()).replace("{LEVEL}", str(level)).replace("{NUMBERED}", numbered)
     try:
         resp = client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": prompt}],
