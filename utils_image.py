@@ -5,7 +5,7 @@ PIL image utilities: compositing, padding, blending, character icons.
 import io, logging
 import numpy as np
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 
 logger = logging.getLogger(__name__)
 
@@ -182,19 +182,3 @@ def make_corner_icon_clip(icon_rel_path, assets_dir, size, x, y, duration_s):
     icon = icon.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
     return (ImageClip(np.array(icon), ismask=False)
             .set_duration(duration_s).set_position((x, y)))
-
-
-def make_icon_clip(character, characters_data, assets_dir, duration_s, cfg):
-    from moviepy.editor import ImageClip
-    tr = characters_data.get(character,{}).get("thumbnail")
-    if not tr: return None
-    p = Path(tr)
-    if p.parts[0]=="assets": p=Path(*p.parts[1:])
-    fp = assets_dir/p
-    if not fp.exists(): logger.warning(f"Thumbnail not found: {fp}"); return None
-    sz=cfg["icon_size"]
-    thumb=Image.open(fp).convert("RGBA").resize((sz,sz),Image.LANCZOS)
-    mask=Image.new("L",(sz,sz),0); d=ImageDraw.Draw(mask); d.ellipse((0,0,sz-1,sz-1),fill=255)
-    thumb.putalpha(mask)
-    return (ImageClip(np.array(thumb),ismask=False)
-            .set_duration(duration_s).set_position((cfg["icon_x"],cfg["icon_y"])))

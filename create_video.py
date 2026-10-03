@@ -30,8 +30,8 @@ from moviepy.editor import (
     concatenate_videoclips,
 )
 from moviepy.config import change_settings
-from utils_config import load_config, load_new_characters, apply_video_format
-from utils_image import pad_image_to_frame, pil_to_numpy, make_icon_clip, make_corner_icon_clip
+from utils_config import load_config, apply_video_format
+from utils_image import pad_image_to_frame, pil_to_numpy, make_corner_icon_clip
 from subtitle_render import render_subtitle
 from generate_annotations import generate_annotations
 from html_annotation_renderer import AnnotationBatchRenderer
@@ -62,7 +62,6 @@ def create_videos(
     """scene_ids: render only these scenes (podcast Shorts). A selected scene without its
     own image still shows the latest image before it, even if that scene isn't selected."""
     cfg           = load_config()
-    chars_data    = load_new_characters(cfg["assets_dir"])
     assets_dir    = cfg["assets_dir"]
     project_path  = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
@@ -168,7 +167,7 @@ def create_videos(
         try:
             clip, last_frame_np = _build_clip(
                 scene, project_path, assets_dir,
-                cfg, chars_data, last_frame_np,
+                cfg, last_frame_np,
                 annotated_subtitles=annotated_subtitles,
                 global_footnote=footnote,
                 pause_override_ms=inter_pause_ms,
@@ -222,7 +221,6 @@ def create_video_single(
     existing rendered clip, so the result is consistent with the surrounding video.
     """
     cfg           = load_config()
-    chars_data    = load_new_characters(cfg["assets_dir"])
     assets_dir    = cfg["assets_dir"]
     project_path  = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
@@ -303,7 +301,7 @@ def create_video_single(
         try:
             clip, last_frame_np = _build_clip(
                 scene, project_path, assets_dir,
-                cfg, chars_data, last_frame_np,
+                cfg, last_frame_np,
                 annotated_subtitles=annotated_subtitles,
                 global_footnote=footnote,
                 pause_override_ms=inter_pause_ms,
@@ -351,7 +349,6 @@ def _build_clip(
     project_path: Path,
     assets_dir: Path,
     cfg: dict,
-    chars_data: dict,
     last_frame_np,
     annotated_subtitles: bool = False,
     global_footnote: str = "",
@@ -589,13 +586,6 @@ def _build_clip(
 
         bg     = ImageClip(frame_np).set_duration(dur_s)
         layers = [bg]
-
-        # Character icon — only for single-speaker dialog scenes
-        characters = scene.get("characters", [])
-        if not is_narrator and len(characters) == 1:
-            icon = make_icon_clip(characters[0], chars_data, assets_dir, dur_s, cfg)
-            if icon:
-                layers.append(icon)
 
         # Subtitle
         sub_bg_bottom = None  # tracks bottom edge of subtitle bg for footnote placement

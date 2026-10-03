@@ -396,7 +396,7 @@ def enrich_reading_scenes(scenes, analysis, style_tokens="", framing_tokens=""):
     """
     Attach scene_visual + an image prompt to each reading scene using the story
     analysis.  Characters present are stored in scene["_cast"] (NOT scene["characters"],
-    to avoid triggering the dialog speaker-icon).  reference_type is "none" (text-only)
+    so it is not treated as a dialog speaker scene).  reference_type is "none" (text-only)
     until Phase 4 creates single-image character assets to composite from.
     """
     cast = {c["name"]: c for c in analysis.get("characters", [])}

@@ -263,7 +263,7 @@ Individual scenes can be regenerated via the web UI (Generated Items tab → Re-
 
 Renders one `.mp4` clip per scene by dispatching on `scene.audio.type`.
 
-**Format-aware canvas:** before rendering begins the module reads `video_format` from the manifest and applies the matching `config.ini` section (`[vertical]` or `[horizontal]`) over the base config via `apply_video_format()`. Those sections hold the per-orientation canvas size, subtitle/narrator font size, subtitle bottom margin, and speaker-icon position — so horizontal (1920×1080) and vertical (1080×1920) are each tuned in config rather than hardcoded.
+**Format-aware canvas:** before rendering begins the module reads `video_format` from the manifest and applies the matching `config.ini` section (`[vertical]` or `[horizontal]`) over the base config via `apply_video_format()`. Those sections hold the per-orientation canvas size, subtitle/narrator font size and subtitle bottom margin — so horizontal (1920×1080) and vertical (1080×1920) are each tuned in config rather than hardcoded.
 
 | `audio.type` | Behaviour |
 |---|---|
@@ -1205,8 +1205,6 @@ target_h = 1920
 sub_fontsize = 42            ; dialogue subtitle size
 nar_fontsize = 96            ; narrator/title size
 sub_margin_bottom = 300
-icon_x = 700
-icon_y = 200
 fal_image_size = portrait_16_9
 
 [horizontal]
@@ -1215,8 +1213,6 @@ target_h = 1080
 sub_fontsize = 54
 nar_fontsize = 54
 sub_margin_bottom = 70
-icon_x = 1650
-icon_y = 50
 fal_image_size = landscape_16_9
 
 [footnote]
@@ -1362,7 +1358,7 @@ Each entry defines:
 | `default_dialog_count` | no | Fallback count (e.g. `"4-6"`) used when no explicit count is requested |
 | `base_type` | no | Key of an existing type to inherit `description_for_prompt` and `output_json_schema` from. Fields defined directly on this entry override the inherited values. |
 | `framing_tokens` | no | Overrides the `image_framing_tokens` from `config.ini` when building image prompts for this type. Use to set orientation-appropriate framing (e.g. `"Horizontal 16:9 widescreen composition…"`). |
-| `video_config_overrides` | no | Key–value pairs merged into the pipeline config dict at runtime. Supported keys: `target_w`, `target_h`, `fal_image_size`, `sub_fontsize`, `sub_margin_bottom`, `icon_x`, `icon_y`. Not currently used at runtime — format detection in the pipeline uses `video_format` from the manifest directly. |
+| `video_config_overrides` | no | Key–value pairs merged into the pipeline config dict at runtime. Supported keys: `target_w`, `target_h`, `fal_image_size`, `sub_fontsize`, `sub_margin_bottom`. Not currently used at runtime — format detection in the pipeline uses `video_format` from the manifest directly. |
 
 **Using `base_type` for format variants:** the `_long` horizontal types each reference a vertical base type via `base_type`. At runtime, `create_script.py` merges the base type's `description_for_prompt` and `output_json_schema` with the long type's own fields (long type wins on conflict). This avoids duplicating large prompt templates when creating format variants.
 

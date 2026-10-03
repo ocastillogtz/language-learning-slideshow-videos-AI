@@ -149,11 +149,6 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "nar_stroke_color":  _p("narrator_subtitles", "stroke_color", "black"),
         "nar_stroke_width":  _i("narrator_subtitles", "stroke_width",  4),
 
-        # Character icon overlay
-        "icon_x":    _i("character_icon", "x",    700),
-        "icon_y":    _i("character_icon", "y",    200),
-        "icon_size": _i("character_icon", "size", 200),
-
         # Footnote overlay (optional disclaimer shown below the main subtitle)
         "fn_font":         _p("footnote", "font",         ""),   # empty → falls back to sub_font
         "fn_fontsize":     _i("footnote", "fontsize",     32),
@@ -350,7 +345,7 @@ def apply_video_format(cfg: dict, video_format: str) -> dict:
 
     Orientation sections in config.ini use the same internal key names as the flat cfg
     dict (e.g. target_w, target_h, sub_fontsize, nar_fontsize, sub_margin_bottom,
-    icon_x, icon_y, fal_image_size). Each override is cast to the type of the existing
+    fal_image_size). Each override is cast to the type of the existing
     base value, so a string stays a string and a number stays a number. Unknown keys
     are stored as strings. Returns cfg for chaining.
 

@@ -83,7 +83,7 @@ def build_promotional_project(project_name: str, character: str,
                                      cfg.get("image_framing_tokens"))
 
     # One still scene: image (single character ref) + spoken line + subtitle.
-    # scene["characters"] is left EMPTY so the dialog speaker-icon is NOT overlaid
+    # scene["characters"] is left EMPTY (the narrator-style scene has no speaker)
     # (the whole frame is already the character); image generation uses image.speaker.
     scene = {
         "id": "scene_001",

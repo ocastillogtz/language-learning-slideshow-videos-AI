@@ -516,9 +516,7 @@
       "target_h": 1080,
       "fal_image_size": "landscape_16_9",
       "sub_fontsize": 54,
-      "sub_margin_bottom": 70,
-      "icon_x": 1650,
-      "icon_y": 50
+      "sub_margin_bottom": 70
     },
     "self_description": "Long-form horizontal Full HD (1920×1080) version of shadowing. A longer dialog (10–14 lines) between two characters followed by a shadowing/repetition exercise. Good for YouTube videos and extended listening/pronunciation practice.",
     "scene_builder_rules": {
@@ -541,9 +539,7 @@
       "target_h": 1080,
       "fal_image_size": "landscape_16_9",
       "sub_fontsize": 54,
-      "sub_margin_bottom": 70,
-      "icon_x": 1650,
-      "icon_y": 50
+      "sub_margin_bottom": 70
     },
     "self_description": "Long-form horizontal Full HD (1920×1080) version of story. An extended pure narrative dialog (10–14 lines) with no repetition section. Good for YouTube comprehension and storytelling videos.",
     "scene_builder_rules": {
@@ -566,9 +562,7 @@
       "target_h": 1080,
       "fal_image_size": "landscape_16_9",
       "sub_fontsize": 54,
-      "sub_margin_bottom": 70,
-      "icon_x": 1650,
-      "icon_y": 50
+      "sub_margin_bottom": 70
     },
     "self_description": "Long-form horizontal Full HD (1920×1080) version of word_learning. A vocabulary video covering a larger word set. Each word gets one dialog item with a vivid scene. Good for YouTube vocabulary reference videos.",
     "scene_builder_rules": {
@@ -590,9 +584,7 @@
       "target_h": 1080,
       "fal_image_size": "landscape_16_9",
       "sub_fontsize": 54,
-      "sub_margin_bottom": 70,
-      "icon_x": 1650,
-      "icon_y": 50
+      "sub_margin_bottom": 70
     },
     "self_description": "Long-form horizontal Full HD (1920×1080) version of register_phrases. 6 phrase pairs showing basic vs. register-appropriate alternatives. Good for YouTube style/register contrast videos.",
     "scene_builder_rules": {
@@ -615,9 +607,7 @@
       "target_h": 1080,
       "fal_image_size": "landscape_16_9",
       "sub_fontsize": 54,
-      "sub_margin_bottom": 70,
-      "icon_x": 1650,
-      "icon_y": 50
+      "sub_margin_bottom": 70
     },
     "self_description": "Long-form horizontal Full HD (1920×1080) version of grammar_pairs. 8 base/transformed sentence pairs demonstrating a grammatical construction. Good for YouTube grammar-focused videos.",
     "scene_builder_rules": {

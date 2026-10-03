@@ -91,7 +91,7 @@ def test_enrich_reading_scenes():
     assert tts[0]["_cast"] == ["Fuchs"]
     assert tts[0]["image"] and tts[0]["image"]["reference_type"] == "none"
     assert "red fox upright" in tts[0]["image"]["prompt_to_create"]
-    assert tts[0]["characters"] == [], "must not set characters[] (would add speaker icon)"
+    assert tts[0]["characters"] == [], "must not set characters[] (reading scenes have no speaker)"
     assert tts[1]["image"] is None, "empty scene_visual -> no image"
     _passed("enrich_reading_scenes attaches visuals/prompts, skips empty, keeps characters[] empty")
 
