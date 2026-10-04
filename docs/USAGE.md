@@ -143,7 +143,7 @@ Claude calls `get_workspace` (which language to write in), `list_project_types` 
 script itself and sends it with `submit_script`. No OpenAI credits are used unless you explicitly ask
 for GPT (`generate_script`). Then open the project in the web UI and continue from step 3.
 
-> After updating the code, restart Claude Code so the MCP server reloads.
+> Pipeline code edits are picked up automatically on the next tool call. Only changes to `mcp_server.py` itself need a reconnect of the MCP server.
 
 ---
 

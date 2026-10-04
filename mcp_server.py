@@ -45,16 +45,85 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 os.chdir(ROOT)
 
+import functools
+import importlib
+import sys
+import threading
+
 from mcp.server.mcpserver import MCPServer
 
-from utils_config import (
-    load_config,
-    load_project_types,
-    load_new_characters,
-    load_new_locations,
-    get_new_locations_flat,
-)
-from platform_audio import any_variant_exists
+# Pipeline names used at module level here. They are (re)bound by
+# _refresh_pipeline_modules(), so they always point at the current code on disk.
+_PIPELINE_NAMES = {
+    "utils_config": ("load_config", "load_project_types", "load_new_characters",
+                     "load_new_locations", "get_new_locations_flat"),
+    "platform_audio": ("any_variant_exists",),
+}
+
+# mtime of every pipeline module file when it was last imported.
+_loaded_mtimes: dict[str, float | None] = {}
+_reload_lock = threading.Lock()
+
+
+def _pipeline_modules() -> dict[str, Path]:
+    """Loaded modules that live in this repo (not site-packages / .venv), by name."""
+    out = {}
+    for name, mod in list(sys.modules.items()):
+        f = getattr(mod, "__file__", None)
+        if not f or name == "__main__":
+            continue
+        p = Path(f).resolve()
+        if p == Path(__file__).resolve() or ROOT not in p.parents or ".venv" in p.parts:
+            continue
+        out[name] = p
+    return out
+
+
+def _refresh_pipeline_modules() -> None:
+    """Drop every repo module from sys.modules when any of their files changed on disk.
+
+    The server is a long-lived process, so without this an edit to the pipeline
+    (create_script.py, utils_config.py, ...) is only seen after a restart, and a
+    tool can fail on a mix of old and new code (e.g. a new function that a freshly
+    imported module expects but the cached utils_config lacks). All repo modules
+    are purged together so they re-import as one consistent version.
+    """
+    def mtime(p: Path) -> float | None:
+        return p.stat().st_mtime if p.exists() else None
+
+    mods = _pipeline_modules()
+    # Only a module seen at an earlier check can be stale; one first seen now was
+    # imported (lazily, inside a tool) since then, so it is already current.
+    changed = any(str(p) in _loaded_mtimes and mtime(p) != _loaded_mtimes[str(p)]
+                  for p in mods.values())
+    first_run = not _loaded_mtimes
+    if changed:
+        for name in mods:
+            sys.modules.pop(name, None)
+        importlib.invalidate_caches()
+        _loaded_mtimes.clear()
+    if changed or first_run:
+        g = globals()
+        for mod_name, names in _PIPELINE_NAMES.items():
+            mod = importlib.import_module(mod_name)
+            for n in names:
+                g[n] = getattr(mod, n)
+    for p in _pipeline_modules().values():
+        _loaded_mtimes.setdefault(str(p), mtime(p))
+
+
+_refresh_pipeline_modules()
+
+
+def _tool(fn):
+    """mcp.tool() that first reloads pipeline code edited since the last call."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _reload_lock:
+            _refresh_pipeline_modules()
+        return fn(*args, **kwargs)
+    return mcp.tool()(wrapper)
+
 
 mcp = MCPServer(
     name="language-video-pipeline",
@@ -125,7 +194,7 @@ mcp = MCPServer(
 # Discovery tools
 # =============================================================================
 
-@mcp.tool()
+@_tool
 def get_workspace() -> dict:
     """The active workspace: the language being taught and the channel it is for.
 
@@ -154,7 +223,7 @@ def _resolve_type(project_types: dict, key: str) -> dict:
     return pt
 
 
-@mcp.tool()
+@_tool
 def list_project_types() -> list[dict]:
     """List the available video project types.
 
@@ -184,7 +253,7 @@ def list_project_types() -> list[dict]:
     return out
 
 
-@mcp.tool()
+@_tool
 def list_characters() -> list[dict]:
     """List characters that can be cast as speakers.
 
@@ -202,7 +271,7 @@ def list_characters() -> list[dict]:
     return out
 
 
-@mcp.tool()
+@_tool
 def list_locations() -> list[dict]:
     """List location keys usable as location_key in generate_script.
 
@@ -229,7 +298,7 @@ def list_locations() -> list[dict]:
 # Action tools
 # =============================================================================
 
-@mcp.tool()
+@_tool
 def create_project(
     project_name: str,
     project_type_key: str,
@@ -321,7 +390,7 @@ def _script_summary(project_name: str, manifest: dict, source: str) -> dict:
     }
 
 
-@mcp.tool()
+@_tool
 def get_script_instructions(
     project_name: str,
     char_a: str,
@@ -360,7 +429,7 @@ def get_script_instructions(
     return out
 
 
-@mcp.tool()
+@_tool
 def submit_script(
     project_name: str,
     char_a: str,
@@ -401,7 +470,7 @@ def submit_script(
     return _script_summary(project_name.strip(), manifest, "claude (local, no OpenAI call)")
 
 
-@mcp.tool()
+@_tool
 def generate_script(
     project_name: str,
     char_a: str,
@@ -456,7 +525,7 @@ def generate_script(
     return _script_summary(project_name.strip(), manifest, "gpt (OpenAI)")
 
 
-@mcp.tool()
+@_tool
 def get_project_status(project_name: str) -> dict:
     """Report a project's current pipeline state from its manifest.
 
@@ -520,7 +589,7 @@ def _shorts_summary(manifest: dict) -> list[dict]:
     return out
 
 
-@mcp.tool()
+@_tool
 def pick_podcast_shorts(project_name: str, count: int = 0) -> dict:
     """OPT-IN (podcast type): ask GPT to re-pick the best moments for vertical Shorts.
 
@@ -539,7 +608,7 @@ def pick_podcast_shorts(project_name: str, count: int = 0) -> dict:
     return {"podcast_shorts": _shorts_summary(json.loads(mp.read_text(encoding="utf-8")))}
 
 
-@mcp.tool()
+@_tool
 def set_podcast_shorts(project_name: str, shorts: list[dict]) -> dict:
     """(podcast type) Save hand-chosen Shorts. No API calls.
 

@@ -85,7 +85,9 @@ python -m pip install "mcp[cli]"
 - `generate_script` mirrors the web route `POST /projects/<name>/run/script`
   exactly, so behavior matches the UI. `submit_script` runs the same function with
   `script=...`, so the scenes are built identically.
-- After editing pipeline code, restart the MCP server (reconnect it in Claude):
-  it keeps the modules it loaded at startup.
+- Pipeline code edits are picked up without a restart: before each tool call the
+  server checks the repo modules it has loaded and, if any file changed, re-imports
+  them all together. Only edits to `mcp_server.py` itself (tool list, signatures,
+  instructions) still need a reconnect.
 - Audio, images and final assembly are intentionally **not** exposed — run those
   from the web UI once the script looks right.
