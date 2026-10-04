@@ -162,7 +162,11 @@ shared** by all workspaces. Every asset shows how many projects use it.
 
 1. **+ Character** — name, *fixed description* (identity: age, origin, face, hair — never changes),
    *default outfit*, ElevenLabs voice id and height.
-2. Open the character and **upload a hand-made drawing**.
+2. Open the character. Its image slots — **scene reference**, thumbnail, **hand-made drawing**,
+   turnaround, reference image — can each be filled directly: click an empty slot (or *Replace*) or
+   drop an image file on it. If you already have finished art, upload it as the scene reference and
+   you're done; replaced files are kept in the character's `previous/` folder.
+   Otherwise upload a hand-made drawing and continue with step 3.
 3. **Generate art in the series style…** — the fal edit model receives your drawing, one image of the
    existing characters side by side as a style sample (choose who is in it; the preview is free), and
    an editable prompt. Pick the model and size, press **Generate (paid)**.

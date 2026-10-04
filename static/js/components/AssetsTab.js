@@ -147,14 +147,51 @@ const PAID_NOTE = "This calls fal.ai and costs credits.";
 
 // ── Characters ────────────────────────────────────────────────────────────────
 
-const CHAR_IMAGES = [
-  ["thumbnail_file_path",   "Thumbnail"],
-  ["art_34left_file_path",  "3/4 left (scene reference)"],
-  ["ref_image_file_path",   "Reference"],
-  ["ref_drawing_file_path", "Reference drawing"],
-  ["artwork_file_path",     "Turnaround art"],
-  ["concept_art_file_path", "Concept art"],
+// Image slots of a character — each can be filled by uploading a file
+// (POST /assets/characters/<name>/image/<slot>). The scene reference is the image
+// used to keep the character on-model in every scene.
+const CHAR_SLOTS = [
+  { slot: "scene_reference", field: "art_34left_file_path",  label: "Scene reference", hint: "Full body, 3/4 left — used in every scene image" },
+  { slot: "thumbnail",       field: "thumbnail_file_path",   label: "Thumbnail",       hint: "Small portrait" },
+  { slot: "drawing",         field: "ref_drawing_file_path", label: "Hand-made drawing", hint: "Input for series-style art" },
+  { slot: "turnaround",      field: "artwork_file_path",     label: "Turnaround",      hint: "Front / side / back sheet" },
+  { slot: "reference",       field: "ref_image_file_path",   label: "Reference image", hint: "Single-image reference (animals, story characters)" },
 ];
+
+function CharImageSlot({ name, def, rel, bust, reload }) {
+  const { toast } = useApp();
+  const inputRef = useRef(null);
+  const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  async function upload(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast("Not an image", file.name, "err"); return; }
+    const fd = new FormData(); fd.append("file", file);
+    setBusy(true);
+    try {
+      await apiPostForm(`/assets/characters/${encodeURIComponent(name)}/image/${def.slot}`, fd);
+      toast("Uploaded", `${def.label} of ${name} updated.`, "ok");
+      await reload();
+    } catch (e) { toast("Error", e.message, "err"); }
+    setBusy(false);
+  }
+  return (
+    <div className={"as-slot" + (rel ? "" : " as-slot-empty") + (over ? " over" : "")} title={def.hint}
+      onDragOver={e => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={e => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files[0]); }}>
+      <div className="as-slot-pic" onClick={() => rel ? window.open(assetUrl(rel, bust), "_blank") : inputRef.current.click()}>
+        {rel ? <img src={assetUrl(rel, bust)} alt={def.label}/> : <span>{busy ? "…" : "+ Add"}</span>}
+      </div>
+      <div className="as-slot-foot">
+        <span>{def.label}</span>
+        {rel && <button className="as-slot-btn" disabled={busy} onClick={() => inputRef.current.click()}>{busy ? "…" : "Replace"}</button>}
+      </div>
+      <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{display:"none"}}
+        onChange={e => { upload(e.target.files[0]); e.target.value = ""; }}/>
+    </div>
+  );
+}
 
 // Card cover: full-body art first so the grid looks consistent.
 const COVER_ORDER = ["art_34left_file_path", "ref_image_file_path", "ref_drawing_file_path",
@@ -209,7 +246,6 @@ function CharacterDrawer({ name, c, usage, isNew, onClose, reload, onCreated, bu
     variable_description: c.variable_description || "", height_cm: c.height_cm || "", ref_desc: c.ref_desc || "",
   });
   const [busy, setBusy] = useState(false);
-  const fileRef = useRef(null);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
   async function save() {
@@ -234,12 +270,6 @@ function CharacterDrawer({ name, c, usage, isNew, onClose, reload, onCreated, bu
     try { await apiDelete(`/assets/characters/${encodeURIComponent(name)}`); await reload(); loadAssets(); onClose(); }
     catch (e) { toast("Error", e.message, "err"); }
   }
-  async function uploadRef(file) {
-    const fd = new FormData(); fd.append("file", file);
-    try { await apiPostForm(`/assets/characters/${encodeURIComponent(name)}/upload-reference`, fd); toast("Uploaded", "Reference drawing saved.", "ok"); await reload(); }
-    catch (e) { toast("Error", e.message, "err"); }
-  }
-  const images = isNew ? [] : CHAR_IMAGES.filter(([k]) => c[k]);
   return (
     <AsDrawer title={isNew ? "New character" : name} subtitle={!isNew && <UsedBy list={usage}/>} onClose={onClose}
       footer={<>
@@ -249,24 +279,16 @@ function CharacterDrawer({ name, c, usage, isNew, onClose, reload, onCreated, bu
         <button className="btn-primary" disabled={busy || (isNew && !f.name.trim())} onClick={save}>{busy ? "Saving…" : isNew ? "Create" : "Save"}</button>
       </>}>
       {!isNew && (
-        <div className="as-gallery">
-          {images.map(([k, label]) => (
-            <a key={k} className="as-gallery-item" href={assetUrl(c[k], bust)} target="_blank" rel="noreferrer">
-              <img src={assetUrl(c[k], bust)} alt={label}/>
-              <span>{label}</span>
-            </a>
-          ))}
-          {!images.length && <div className="as-empty">No artwork yet.</div>}
-        </div>
+        <>
+          <div className="as-slots">
+            {CHAR_SLOTS.map(d => <CharImageSlot key={d.slot} name={name} def={d} rel={c[d.field]} bust={bust} reload={reload}/>)}
+          </div>
+          <div className="set-help" style={{marginTop:"-.4rem"}}>
+            Click an empty slot or drop an image on any slot to set it. Replaced files are kept in the character's <code>previous/</code> folder.
+          </div>
+        </>
       )}
-      {!isNew && (
-        <div className="edit-actions" style={{marginTop:0}}>
-          <button className="btn-ghost" onClick={() => fileRef.current.click()}>
-            {c.ref_drawing_file_path ? "Replace hand-made drawing" : "Upload hand-made drawing"}</button>
-          <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
-            onChange={e => { if (e.target.files[0]) uploadRef(e.target.files[0]); e.target.value = ""; }}/>
-        </div>
-      )}
+      {isNew && <div className="set-help">Create the character first — then you can upload its images or generate them.</div>}
       {!isNew && <StyledArtPanel name={name} bust={bust} reload={reload}/>}
       <div className="fields">
         {isNew && <AsField label="Name"><input value={f.name} onChange={set("name")} placeholder="e.g. Zahra"/></AsField>}

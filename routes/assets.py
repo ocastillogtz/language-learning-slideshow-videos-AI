@@ -235,6 +235,63 @@ def styled_art_discard(name: str):
         return jsonify({"error": str(e)}), 400
 
 
+# Image slots of a character that can be uploaded directly: slot → (field, file stem).
+CHARACTER_IMAGE_SLOTS = {
+    "scene_reference": ("art_34left_file_path",  "34left"),
+    "thumbnail":       ("thumbnail_file_path",   "thumbnail"),
+    "turnaround":      ("artwork_file_path",     "art"),
+    "reference":       ("ref_image_file_path",   "ref"),
+    "drawing":         ("ref_drawing_file_path", "ref_drawing"),
+}
+
+
+@bp.route("/assets/characters/<name>/image/<slot>", methods=["POST"])
+def upload_character_image(name: str, slot: str):
+    """Set one of a character's images from an uploaded file (multipart "file").
+    The file is saved as characters/<name>/<stem>.<ext>; whatever file the slot (or
+    that name) held before is moved to characters/<name>/previous/, never deleted."""
+    try:
+        from datetime import datetime
+        from manage_characters import char_folder, load_characters, save_characters
+        if slot not in CHARACTER_IMAGE_SLOTS:
+            return jsonify({"error": f"slot must be one of {list(CHARACTER_IMAGE_SLOTS)}"}), 400
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify({"error": "No file"}), 400
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in ALLOWED_IMAGE_EXTS:
+            return jsonify({"error": f"Unsupported file type '{ext}'. Use PNG, JPG, WEBP or GIF."}), 400
+
+        adir = assets_dir()
+        chars = load_characters(adir)
+        if name not in chars:
+            return jsonify({"error": f"Character '{name}' not found"}), 404
+        field, stem = CHARACTER_IMAGE_SLOTS[slot]
+        folder = adir / "characters" / char_folder(name)
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / f"{stem}{ext}"
+
+        # Keep anything we'd replace: the slot's current file and a file already at dest.
+        still_used = {c.get(k) for n, c in chars.items() for k, _ in CHARACTER_IMAGE_SLOTS.values()
+                      if not (n == name and k == field)}
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if dest.relative_to(adir).as_posix() in still_used:      # another character uses that file
+            dest = folder / f"{stem}_{stamp}{ext}"
+        for old in {adir / chars[name][field] if chars[name].get(field) else None, dest} - {None}:
+            rel_old = old.relative_to(adir).as_posix()
+            if old.exists() and rel_old not in still_used:
+                keep = folder / "previous" / f"{old.stem}_{stamp}{old.suffix}"
+                keep.parent.mkdir(exist_ok=True)
+                shutil.move(str(old), str(keep))
+
+        f.save(dest)
+        chars[name][field] = dest.relative_to(adir).as_posix()
+        save_characters(adir, chars)
+        return jsonify({"message": f"{slot.replace('_', ' ').capitalize()} updated", "file_path": chars[name][field]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/assets/characters/<name>/upload-reference", methods=["POST"])
 def upload_character_reference(name: str):
     """

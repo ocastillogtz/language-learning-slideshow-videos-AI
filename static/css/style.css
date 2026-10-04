@@ -466,3 +466,17 @@ img.as-hero { background:#f4f1ea; }
 .sa-cand img { width:110px; aspect-ratio:3/4; object-fit:contain; background:#fff; border-radius:8px; border:1px solid var(--border); }
 .sa-cand-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:.35rem; }
 .sa-cand-btns { display:flex; flex-wrap:wrap; gap:.3rem; }
+
+/* Character image slots (upload directly) */
+.as-slots { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:.45rem; }
+.as-slot { display:flex; flex-direction:column; gap:.25rem; min-width:0; border-radius:9px; border:1px solid transparent; padding:2px; transition:border-color .15s, background .15s; }
+.as-slot.over { border-color:var(--accent); background:rgba(232,200,74,.06); }
+.as-slot-pic { aspect-ratio:3/4; background:#f4f1ea; border-radius:8px; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:pointer; }
+.as-slot-pic img { width:100%; height:100%; max-width:100%; object-fit:contain; display:block; }
+.as-slot-empty .as-slot-pic { background:var(--s2); border-style:dashed; color:var(--muted); font-size:.74rem; }
+.as-slot-empty .as-slot-pic:hover { border-color:var(--accent); color:var(--accent); }
+.as-slot-foot { display:flex; flex-direction:column; align-items:flex-start; gap:.05rem; font-size:.64rem; color:var(--muted); min-height:30px; line-height:1.3; }
+.as-slot-foot span { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.as-slot-btn { background:none; border:none; color:var(--accent); font-family:'DM Sans',sans-serif; font-size:.64rem; cursor:pointer; padding:0; flex-shrink:0; }
+.as-slot-btn:hover { text-decoration:underline; }
+@media (max-width:600px) { .as-slots { grid-template-columns:repeat(3, minmax(0, 1fr)); } }
