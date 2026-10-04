@@ -129,7 +129,9 @@ function SettingField({ id, label, data, multiline, mono }) {
   const value = data.valueOf(id);
   const edited = id in data.edits;
   const overridden = edited ? (data.edits[id] !== null && data.edits[id] !== item.default) : item.overridden;
-  const long = multiline || String(value).length > 70;
+  // Decide input vs textarea from the SAVED value, not the live one — switching the
+  // element type while typing would remount it and drop the focus.
+  const long = multiline || String(item.value || "").length > 70 || String(item.default || "").length > 70;
   return (
     <div className={"set-field" + (edited ? " edited" : "")}>
       <div className="set-field-hdr">

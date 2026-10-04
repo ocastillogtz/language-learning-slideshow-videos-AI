@@ -88,7 +88,7 @@ _HL_STOPWORDS = {
 }
 
 
-def _auto_highlight(text: str) -> str | None:
+def _auto_highlight(text: str, german: bool = True) -> str | None:
     """Add a vocabulary highlight to a line that has none, by marking one
     meaningful word with `*word*`. Returns the corrected line, or None if the line
     already has a highlight or no suitable word could be chosen (leave it to a human).
@@ -116,7 +116,7 @@ def _auto_highlight(text: str) -> str | None:
     words = [w for w in _WORD_RE.finditer(text) if not _blocked(*w.span())]
     if not words:
         return None
-    if load_config()["language_code"] != "de":
+    if not german:
         # Capitalised-noun + German stopword heuristics don't apply: longest word wins.
         pool = [w for w in words if len(w.group(0)) >= 5] or words
         best = max(pool, key=lambda w: (len(w.group(0)), -w.start()))
@@ -301,6 +301,7 @@ def _deterministic_findings(manifest: dict) -> list[dict]:
     pass supplies the actual corrected wording for the scenes it also flags."""
     out  = []
     cast = (manifest.get("generation_config") or {}).get("characters") or []
+    german = load_config()["language_code"] == "de"     # noun/stopword heuristics
     for scene in manifest.get("scenes", []):
         sid  = scene.get("id")
         role = _scene_role(scene)
@@ -310,7 +311,7 @@ def _deterministic_findings(manifest: dict) -> list[dict]:
         # deterministically by underlining a meaningful word; if no good candidate
         # is found, it stays a flag-only finding for a human to resolve.
         if role == "dialog" and text and not _HIGHLIGHT_RE.search(text):
-            auto = _auto_highlight(text)
+            auto = _auto_highlight(text, german)
             out.append({
                 "scene_id": sid, "field": "subtitle_text", "rule": "highlight",
                 "severity": "warning", "quote": text,

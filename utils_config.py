@@ -41,10 +41,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
 
     # Layer the active workspace on top of config.ini: its own assets/projects
     # folders and its per-workspace setting overrides (edited in the Settings view).
-    ws = _active_workspace()
-    ws_settings = {}
+    ws, ws_settings = _workspace_context()
     if ws:
-        ws_settings = db.get_settings(ws["slug"])
         for section, kv in ws_settings.items():
             if not cfg.has_section(section):
                 cfg.add_section(section)
@@ -379,12 +377,12 @@ def apply_video_format(cfg: dict, video_format: str) -> dict:
 # `assets_dir` picks the workspace whose assets folder it is (the active one when
 # it matches none), so callers keep passing cfg["assets_dir"] as before.
 
-def _active_workspace() -> dict | None:
+def _workspace_context() -> tuple[dict | None, dict]:
     try:
-        return db.active_workspace()
+        return db.workspace_context()
     except Exception as e:                      # unreadable DB → plain config.ini
         logger.warning("Workspace DB unavailable (%s) — using config.ini only", e)
-        return None
+        return None, {}
 
 
 def workspace_for_assets_dir(assets_dir: Path | None) -> str | None:

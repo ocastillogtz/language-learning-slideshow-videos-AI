@@ -185,8 +185,28 @@ def active_workspace_slug() -> str | None:
 
 
 def active_workspace() -> dict | None:
-    slug = active_workspace_slug()
-    return get_workspace(slug) if slug else None
+    return workspace_context()[0]
+
+
+def workspace_context() -> tuple[dict | None, dict[str, dict[str, str]]]:
+    """(active workspace, its setting overrides) read in ONE connection — this runs on
+    every load_config() call, so it avoids the 4–5 separate connections the
+    individual helpers would open."""
+    if not db_exists():
+        return None, {}
+    with connect() as con:
+        row = con.execute("SELECT value FROM meta WHERE key = 'active_workspace'").fetchone()
+        ws = None
+        if row and row["value"]:
+            ws = con.execute("SELECT * FROM workspaces WHERE slug = ?", (row["value"],)).fetchone()
+        if ws is None:
+            ws = con.execute("SELECT * FROM workspaces ORDER BY created_at, slug LIMIT 1").fetchone()
+        if ws is None:
+            return None, {}
+        settings: dict[str, dict[str, str]] = {}
+        for r in con.execute("SELECT section, key, value FROM settings WHERE workspace = ?", (ws["slug"],)):
+            settings.setdefault(r["section"], {})[r["key"]] = r["value"]
+    return dict(ws), settings
 
 
 def set_active_workspace(slug: str) -> None:
@@ -299,6 +319,26 @@ def save_assets(kind: str, data: dict[str, dict], workspace: str | None = None) 
             "INSERT INTO assets (workspace, kind, key, data, position, updated_at) VALUES (?,?,?,?,?,?)",
             [(scope, kind, key, json.dumps(doc, ensure_ascii=False), i, now)
              for i, (key, doc) in enumerate(data.items())])
+
+
+def update_assets(kind: str, mutate, workspace: str | None = None):
+    """Load one catalog, call mutate(data) and save it — all inside ONE write
+    transaction (BEGIN IMMEDIATE), so two requests or jobs changing the same catalog
+    at the same time can't overwrite each other's edits. Returns mutate's result."""
+    scope = _scope(kind, workspace)
+    with connect() as con:
+        con.execute("BEGIN IMMEDIATE")
+        rows = con.execute("SELECT key, data FROM assets WHERE workspace=? AND kind=?"
+                           " ORDER BY position, key", (scope, kind)).fetchall()
+        data = {r["key"]: json.loads(r["data"]) for r in rows}
+        result = mutate(data)
+        now = _now()
+        con.execute("DELETE FROM assets WHERE workspace=? AND kind=?", (scope, kind))
+        con.executemany(
+            "INSERT INTO assets (workspace, kind, key, data, position, updated_at) VALUES (?,?,?,?,?,?)",
+            [(scope, kind, key, json.dumps(doc, ensure_ascii=False), i, now)
+             for i, (key, doc) in enumerate(data.items())])
+    return result
 
 
 def copy_assets(kind: str, src: str, dst: str) -> int:

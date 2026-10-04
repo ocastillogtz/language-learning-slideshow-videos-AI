@@ -38,6 +38,7 @@ from datetime import datetime
 from pathlib import Path
 
 import db
+from manage_characters import char_folder
 
 ROOT = Path(__file__).resolve().parent
 OLD = ROOT / "assets"
@@ -95,10 +96,6 @@ def move(src: Path, dst: Path) -> Path:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
     return dst
-
-
-def char_folder(name: str) -> str:
-    return name.replace(" ", "_")
 
 
 def load_json(rel: str) -> dict | None:

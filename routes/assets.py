@@ -235,16 +235,6 @@ def styled_art_discard(name: str):
         return jsonify({"error": str(e)}), 400
 
 
-# Image slots of a character that can be uploaded directly: slot → (field, file stem).
-CHARACTER_IMAGE_SLOTS = {
-    "scene_reference": ("art_34left_file_path",  "34left"),
-    "thumbnail":       ("thumbnail_file_path",   "thumbnail"),
-    "turnaround":      ("artwork_file_path",     "art"),
-    "reference":       ("ref_image_file_path",   "ref"),
-    "drawing":         ("ref_drawing_file_path", "ref_drawing"),
-}
-
-
 @bp.route("/assets/characters/<name>/image/<slot>", methods=["POST"])
 def upload_character_image(name: str, slot: str):
     """Set one of a character's images from an uploaded file (multipart "file").
@@ -252,9 +242,11 @@ def upload_character_image(name: str, slot: str):
     that name) held before is moved to characters/<name>/previous/, never deleted."""
     try:
         from datetime import datetime
-        from manage_characters import char_folder, load_characters, save_characters
-        if slot not in CHARACTER_IMAGE_SLOTS:
-            return jsonify({"error": f"slot must be one of {list(CHARACTER_IMAGE_SLOTS)}"}), 400
+        from character_art import IMAGE_SLOTS
+        from manage_characters import char_folder, load_characters
+        from utils_config import workspace_for_assets_dir
+        if slot not in IMAGE_SLOTS:
+            return jsonify({"error": f"slot must be one of {list(IMAGE_SLOTS)}"}), 400
         f = request.files.get("file")
         if not f or not f.filename:
             return jsonify({"error": "No file"}), 400
@@ -266,14 +258,16 @@ def upload_character_image(name: str, slot: str):
         chars = load_characters(adir)
         if name not in chars:
             return jsonify({"error": f"Character '{name}' not found"}), 404
-        field, stem = CHARACTER_IMAGE_SLOTS[slot]
+        field, stem = IMAGE_SLOTS[slot]
         folder = adir / "characters" / char_folder(name)
         folder.mkdir(parents=True, exist_ok=True)
         dest = folder / f"{stem}{ext}"
 
-        # Keep anything we'd replace: the slot's current file and a file already at dest.
-        still_used = {c.get(k) for n, c in chars.items() for k, _ in CHARACTER_IMAGE_SLOTS.values()
+        # Files that must stay where they are: other slots / characters using them, and
+        # generated candidates (their gallery still lists them).
+        still_used = {c.get(k) for n, c in chars.items() for k, _ in IMAGE_SLOTS.values()
                       if not (n == name and k == field)}
+        still_used |= {x["path"] for c in chars.values() for x in c.get("art_candidates", [])}
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if dest.relative_to(adir).as_posix() in still_used:      # another character uses that file
             dest = folder / f"{stem}_{stamp}{ext}"
@@ -285,9 +279,13 @@ def upload_character_image(name: str, slot: str):
                 shutil.move(str(old), str(keep))
 
         f.save(dest)
-        chars[name][field] = dest.relative_to(adir).as_posix()
-        save_characters(adir, chars)
-        return jsonify({"message": f"{slot.replace('_', ' ').capitalize()} updated", "file_path": chars[name][field]})
+        rel = dest.relative_to(adir).as_posix()
+
+        def _set(cs):
+            if name in cs:
+                cs[name][field] = rel
+        db.update_assets("characters", _set, workspace_for_assets_dir(adir))
+        return jsonify({"message": f"{slot.replace('_', ' ').capitalize()} updated", "file_path": rel})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -493,7 +491,7 @@ def add_background_audio():
     Non-MP3 uploads are kept as the original and transcoded to MP3."""
     try:
         import audio_tools
-        from manage_background_audio import LICENSES, load_background_audio, save_background_audio
+        from manage_background_audio import LICENSES, load_background_audio
         key = _clean_key(request.form.get("key"))
         f   = request.files.get("file")
         if not key or not f:
@@ -504,21 +502,18 @@ def add_background_audio():
         lic = (request.form.get("license") or "").strip()
         if lic and lic not in LICENSES:
             return jsonify({"error": f"license must be one of {LICENSES}"}), 400
-        music = load_background_audio()
-        if key in music:
+        if key in load_background_audio():
             return jsonify({"error": f"A track named '{key}' already exists"}), 409
 
         lib = library_dir()
         entry = {"name": key, "description": (request.form.get("description") or "").strip()}
+        (lib / "music" / "originals").mkdir(parents=True, exist_ok=True)
+        dest = _free_path(lib / "music" / f"{key}.mp3")
         if ext == ".mp3":
-            dest = lib / "music" / f"{key}.mp3"
-            dest.parent.mkdir(parents=True, exist_ok=True)
             f.save(dest)
         else:
-            orig = lib / "music" / "originals" / f"{key}{ext}"
-            orig.parent.mkdir(parents=True, exist_ok=True)
+            orig = _free_path(lib / "music" / "originals" / f"{key}{ext}")
             f.save(orig)
-            dest = lib / "music" / f"{key}.mp3"
             audio_tools.apply_gain(orig, dest, 0.0)
             entry["original_path"] = orig.relative_to(lib).as_posix()
         entry["full_path"] = dest.relative_to(lib).as_posix()
@@ -526,9 +521,15 @@ def add_background_audio():
         if lic:
             entry["license"] = lic
         entry["loudness"] = audio_tools.measure(dest)
-        music[key] = entry
-        save_background_audio(None, music)
+
+        def _add(music):
+            if key in music:                         # added meanwhile by another request
+                raise ValueError(f"A track named '{key}' already exists")
+            music[key] = entry
+        db.update_assets("background_audio", _add)
         return jsonify({"message": f"Track '{key}' added", "track": entry})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -563,6 +564,19 @@ def remove_background_audio(key: str):
         return jsonify({"error": str(e)}), 500
 
 
+def _free_path(path: Path, own: Path | None = None) -> Path:
+    """`path`, or `<stem>_2<ext>`, `_3`… if a different file already lives there —
+    library files are shared, so one track must never overwrite another's audio."""
+    if not path.exists() or (own is not None and path.resolve() == own.resolve()):
+        return path
+    n = 2
+    while (alt := path.with_name(f"{path.stem}_{n}{path.suffix}")).exists():
+        if own is not None and alt.resolve() == own.resolve():
+            return alt                               # the track's own earlier file
+        n += 1
+    return alt
+
+
 def _track(key: str) -> tuple[dict, Path, Path]:
     """(entry, current file, source the gain is applied to = the original upload)."""
     from manage_background_audio import load_background_audio
@@ -577,15 +591,8 @@ def _track(key: str) -> tuple[dict, Path, Path]:
 
 def _voice_sample() -> Path | None:
     """A spoken line from the most recently changed project of this workspace."""
-    pdir = Path(get_cfg()["projects_dir"])
-    if not pdir.exists():
-        return None
-    manifests = sorted(pdir.glob("*/project_manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for mp in manifests[:15]:
-        for clip in sorted((mp.parent / "audio").glob("scene_*.mp3"))[:12]:
-            if clip.stat().st_size > 30_000:          # a real sentence, not a blip
-                return clip
-    return None
+    from music_level import latest_voice_clip
+    return latest_voice_clip(Path(get_cfg()["projects_dir"]))
 
 
 @bp.route("/assets/background-audio/<key>/analyze")
@@ -593,15 +600,20 @@ def analyze_background_audio(key: str):
     """Loudness of the track (cached in its catalog entry) + the library average."""
     try:
         import audio_tools
-        from manage_background_audio import load_background_audio, save_background_audio
         from music_level import library_suggestion
         entry, current, original = _track(key)
-        music = load_background_audio()
-        if request.args.get("refresh") == "1" or not entry.get("loudness"):
-            music[key]["loudness"] = audio_tools.measure(current)
-        if original != current and (request.args.get("refresh") == "1" or not entry.get("original_loudness")):
-            music[key]["original_loudness"] = audio_tools.measure(original)
-        save_background_audio(None, music)
+        refresh = request.args.get("refresh") == "1"
+        found = {}
+        if refresh or not entry.get("loudness"):
+            found["loudness"] = audio_tools.measure(current)
+        if original != current and (refresh or not entry.get("original_loudness")):
+            found["original_loudness"] = audio_tools.measure(original)
+
+        def _store(music):
+            if key in music:
+                music[key].update(found)
+            return music
+        music = db.update_assets("background_audio", _store) if found else db.load_assets("background_audio")
         means = sorted(t["loudness"]["mean_db"] for t in music.values() if t.get("loudness"))
         return jsonify({
             "track": music[key],
@@ -623,18 +635,22 @@ def analyze_all_background_audio():
     """Measure every track that has no cached loudness yet (≈0.3 s per track)."""
     try:
         import audio_tools
-        from manage_background_audio import load_background_audio, save_background_audio
-        music, done, failed = load_background_audio(), 0, []
-        for key, entry in music.items():
+        found, failed = {}, []
+        for key, entry in db.load_assets("background_audio").items():
             if entry.get("loudness"):
                 continue
             try:
-                entry["loudness"] = audio_tools.measure(library_dir() / entry["full_path"])
-                done += 1
+                found[key] = audio_tools.measure(library_dir() / entry["full_path"])
             except Exception:
                 failed.append(key)
-        save_background_audio(None, music)
-        return jsonify({"measured": done, "failed": failed})
+
+        def _store(music):                           # merge only the measurements
+            for key, loud in found.items():
+                if key in music:
+                    music[key]["loudness"] = loud
+        if found:
+            db.update_assets("background_audio", _store)
+        return jsonify({"measured": len(found), "failed": failed})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -666,28 +682,33 @@ def apply_background_audio_gain(key: str):
     be changed again later without stacking losses."""
     try:
         import audio_tools
-        from manage_background_audio import load_background_audio, save_background_audio
         gain = float((request.get_json() or {}).get("gain_db", 0))
         if not -40 <= gain <= 40:
             return jsonify({"error": "gain_db must be between -40 and 40"}), 400
         entry, current, original = _track(key)
         lib = library_dir()
+        own = current if entry.get("original_path") else None   # this track's own processed file
         if not entry.get("original_path"):
-            keep = lib / "music" / "originals" / current.name
+            keep = _free_path(lib / "music" / "originals" / current.name)
             keep.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(current), str(keep))
             original = keep
-        dest = lib / "music" / f"{key}.mp3"
+        dest = _free_path(lib / "music" / f"{key}.mp3", own=own)
         audio_tools.apply_gain(original, dest, gain)
-        music = load_background_audio()
-        music[key].update({
+        update = {
             "original_path": original.relative_to(lib).as_posix(),
             "full_path": dest.relative_to(lib).as_posix(),
             "gain_db": round(gain, 1),
             "loudness": audio_tools.measure(dest),
-        })
-        save_background_audio(None, music)
-        return jsonify({"message": f"Saved '{key}' at {gain:+.1f} dB", "track": music[key]})
+        }
+
+        def _store(music):
+            music[key].update(update)
+            return music[key]
+        track = db.update_assets("background_audio", _store)
+        if own is not None and own.resolve() != dest.resolve():
+            own.unlink(missing_ok=True)              # previous processed file of THIS track
+        return jsonify({"message": f"Saved '{key}' at {gain:+.1f} dB", "track": track})
     except KeyError:
         return _not_found("Track", key)
     except Exception as e:

@@ -19,20 +19,26 @@ from pathlib import Path
 
 from PIL import Image
 
-from manage_characters import char_folder, load_characters, save_characters
-from utils_config import load_config
+import db
+from manage_characters import char_folder, load_characters
+from utils_config import load_config, workspace_for_assets_dir
 
 logger = logging.getLogger(__name__)
 
 SAMPLE_HEIGHT  = 512      # height of each figure in the style sample
 SAMPLE_PER_ROW = 5        # figures per row before wrapping
 SAMPLE_GAP     = 24
-# Fields a candidate can be accepted into.
-TARGETS = {
-    "scene_reference": "art_34left_file_path",
-    "turnaround":      "artwork_file_path",
-    "thumbnail":       "thumbnail_file_path",
+# Every image slot of a character: slot → (catalog field, file stem). Used by the
+# direct upload route too, so field names live in one place.
+IMAGE_SLOTS = {
+    "scene_reference": ("art_34left_file_path",  "34left"),
+    "thumbnail":       ("thumbnail_file_path",   "thumbnail"),
+    "turnaround":      ("artwork_file_path",     "art"),
+    "reference":       ("ref_image_file_path",   "ref"),
+    "drawing":         ("ref_drawing_file_path", "ref_drawing"),
 }
+# Slots a generated candidate can be accepted into.
+TARGETS = {k: IMAGE_SLOTS[k][0] for k in ("scene_reference", "turnaround", "thumbnail")}
 
 
 def _cover(c: dict) -> str | None:
@@ -139,11 +145,13 @@ def generate(assets_dir: Path, name: str, model: str, prompt: str, style_names: 
     (assets_dir / rel).parent.mkdir(parents=True, exist_ok=True)
     (assets_dir / rel).write_bytes(data)
 
-    chars = load_characters(assets_dir)                  # re-read: the call took a while
     cand = {"path": rel, "model": model or endpoint, "created": stamp,
             "style_sample": style_names, "used_drawing": bool(drawing), "prompt": prompt}
-    chars[name].setdefault("art_candidates", []).insert(0, cand)
-    save_characters(assets_dir, chars)
+
+    def _add(chars):                                     # atomic: the call took a while
+        if name in chars:
+            chars[name].setdefault("art_candidates", []).insert(0, cand)
+    db.update_assets("characters", _add, workspace_for_assets_dir(assets_dir))
     return cand
 
 
@@ -151,23 +159,23 @@ def accept(assets_dir: Path, name: str, rel: str, target: str) -> dict:
     field = TARGETS.get(target)
     if not field:
         raise ValueError(f"target must be one of {list(TARGETS)}")
-    chars = load_characters(assets_dir)
-    c = chars.get(name)
-    if not c or not any(x["path"] == rel for x in c.get("art_candidates", [])):
-        raise ValueError("Unknown candidate")
-    c[field] = rel
-    save_characters(assets_dir, chars)
-    return c
+    def _accept(chars):
+        c = chars.get(name)
+        if not c or not any(x["path"] == rel for x in c.get("art_candidates", [])):
+            raise ValueError("Unknown candidate")
+        c[field] = rel
+        return c
+    return db.update_assets("characters", _accept, workspace_for_assets_dir(assets_dir))
 
 
 def discard(assets_dir: Path, name: str, rel: str) -> dict:
-    chars = load_characters(assets_dir)
-    c = chars.get(name)
-    if not c:
-        raise ValueError(f"Character '{name}' not found.")
-    c["art_candidates"] = [x for x in c.get("art_candidates", []) if x["path"] != rel]
-    in_use = any(c.get(f) == rel for f in TARGETS.values())
-    if not in_use:
+    def _discard(chars):
+        c = chars.get(name)
+        if not c:
+            raise ValueError(f"Character '{name}' not found.")
+        c["art_candidates"] = [x for x in c.get("art_candidates", []) if x["path"] != rel]
+        return c
+    c = db.update_assets("characters", _discard, workspace_for_assets_dir(assets_dir))
+    if not any(c.get(f) == rel for f, _ in IMAGE_SLOTS.values()):
         (assets_dir / rel).unlink(missing_ok=True)
-    save_characters(assets_dir, chars)
     return c

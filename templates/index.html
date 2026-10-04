@@ -57,7 +57,8 @@
         catch (e) { console.error("JSX compile error in " + f, e); document.getElementById("root").textContent = "Compile error in " + f + ": " + e.message; return; }
         try { localStorage.setItem(key, JSON.stringify({ h, code })); } catch (e) {}
       }
-      (0, eval)(code + "\n//# sourceURL=" + location.origin + f);
+      try { (0, eval)(code + "\n//# sourceURL=" + location.origin + f); }
+      catch (e) { console.error("Error running " + f, e); }   // like a failing <script>: keep going
     }
   })();
   </script>

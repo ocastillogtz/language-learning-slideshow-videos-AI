@@ -197,6 +197,7 @@ def _narration_hook_block(level: str, cast: list[str], redefine_text: bool = Tru
     topic label (a spoken "chapter title", not a provocative hook); when False (quiz types that
     already script their own challenge line) the existing text is kept and only the shared-activity
     'scene_visual' is added."""
+    lang = target_language()
     if len(cast) >= 2:
         who = ", ".join(cast[:-1]) + f" and {cast[-1]}"
     elif cast:
@@ -225,7 +226,7 @@ def _narration_hook_block(level: str, cast: list[str], redefine_text: bool = Tru
 The video opens on the narrator's line over an establishing shot. Build the "narration"
 object with BOTH fields below (not just "text"):
 
-1) "text": a short, DIRECT statement of exactly what this video covers, in {target_language()} at level
+1) "text": a short, DIRECT statement of exactly what this video covers, in {lang} at level
    {level} — a bare topic label, NOT a hook. Just name the subject plainly, no rhetorical
    question, no "Wusstest du ...?", no surprising-claim teaser, no promise or hype. Think of
    it as a chapter title read aloud, e.g. "Wörter aus der Logistik", "Verben mit der Vorsilbe
@@ -235,7 +236,7 @@ object with BOTH fields below (not just "text"):
 2) "scene_visual": {activity_rule}
 
 So the narration object becomes:
-  "narration": {{ "text": "{target_language()} topic label", "scene_visual": "English shared-activity scene" }}
+  "narration": {{ "text": "{lang} topic label", "scene_visual": "English shared-activity scene" }}
 """
 
     return f"""
@@ -612,8 +613,9 @@ Return ONLY a JSON object of the form {{"insights": "..."}}
 
 def _build_repetitions_prompt(dialog_texts: list[str], level: str) -> str:
     numbered = "\n".join(f"  {i}. {t}" for i, t in enumerate(dialog_texts))
+    lang = target_language()
     return f"""
-You are a {target_language()} language learning expert selecting sentences for a shadowing exercise.
+You are a {lang} language learning expert selecting sentences for a shadowing exercise.
 Level: {level}
 
 Select exactly 3 sentences from the dialog below that are most pedagogically valuable
@@ -621,7 +623,7 @@ for a {level} learner to shadow.
 
 Criteria (in order of priority):
 1. Contains the key grammar structure or vocabulary being taught
-2. Natural spoken {target_language()} that sounds good when repeated aloud
+2. Natural spoken {lang} that sounds good when repeated aloud
 3. Varied sentence structures across the 3 chosen lines
 4. Appropriate length — not too short (trivial) and not too long (hard to repeat)
 
@@ -631,9 +633,9 @@ Dialog lines:
 Return ONLY valid JSON (no markdown, no backticks):
 {{
   "repetitions": [
-    {{"text": "exact {target_language()} sentence copied from the dialog lines above"}},
-    {{"text": "exact {target_language()} sentence copied from the dialog lines above"}},
-    {{"text": "exact {target_language()} sentence copied from the dialog lines above"}}
+    {{"text": "exact {lang} sentence copied from the dialog lines above"}},
+    {{"text": "exact {lang} sentence copied from the dialog lines above"}},
+    {{"text": "exact {lang} sentence copied from the dialog lines above"}}
   ]
 }}
 
@@ -1493,9 +1495,10 @@ def _build_evaluation_prompt(dialog_texts: list[str], level: str, offset: int) -
     GLOBAL index (offset + position) so the returned dialog_N keys line up with the
     full dialog regardless of which batch they came from."""
     numbered = "\n".join(f"dialog_{offset + i}: {t}" for i, t in enumerate(dialog_texts))
-    return f"""You are a {target_language()} language expert evaluating dialog written for a {level} learner.
+    lang = target_language()
+    return f"""You are a {lang} language expert evaluating dialog written for a {level} learner.
 
-Evaluate EACH line below for grammar correctness and natural spoken {target_language()}.
+Evaluate EACH line below for grammar correctness and natural spoken {lang}.
 Each line is already tagged with its key ("dialog_N"). Use that EXACT key in your answer.
 
 Return ONLY valid JSON (no markdown, no backticks):

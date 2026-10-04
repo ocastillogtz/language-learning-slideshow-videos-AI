@@ -30,16 +30,43 @@ from utils_config import load_config, load_project_types
 TYPICAL_VOICE_DB = -22.0      # median of ElevenLabs lines across the existing projects
 
 
-def voice_level(project_dir: Path, max_clips: int = 8) -> float | None:
-    """Median level (dB) of a project's spoken clips; None before audio exists."""
+def spoken_clips(project_dir: Path, limit: int = 8) -> list[Path]:
+    """A project's voiced scene clips that hold a real sentence (not a short blip)."""
     clips = [c for c in sorted((project_dir / "audio").glob("scene_*.mp3")) if c.stat().st_size > 30_000]
+    return clips[:limit]
+
+
+def latest_voice_clip(projects_dir: Path) -> Path | None:
+    """A spoken line from the most recently changed project (volume-tool previews)."""
+    if not projects_dir.exists():
+        return None
+    manifests = sorted(projects_dir.glob("*/project_manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for mp in manifests[:15]:
+        clips = spoken_clips(mp.parent, 1)
+        if clips:
+            return clips[0]
+    return None
+
+
+_voice_cache: dict[tuple[str, float], float | None] = {}
+
+
+def voice_level(project_dir: Path, max_clips: int = 8) -> float | None:
+    """Median level (dB) of a project's spoken clips; None before audio exists.
+    Cached per project until its audio folder changes (re-voiced lines)."""
+    audio = project_dir / "audio"
+    stamp = audio.stat().st_mtime if audio.exists() else 0.0
+    ck = (str(project_dir.resolve()), stamp)
+    if ck in _voice_cache:
+        return _voice_cache[ck]
     levels = []
-    for c in clips[:max_clips]:
+    for c in spoken_clips(project_dir, max_clips):
         try:
             levels.append(audio_tools.measure(c)["mean_db"])
         except Exception:
             pass
-    return round(statistics.median(levels), 1) if levels else None
+    _voice_cache[ck] = round(statistics.median(levels), 1) if levels else None
+    return _voice_cache[ck]
 
 
 def target_gap(project_type_key: str | None) -> float:
@@ -55,14 +82,18 @@ def target_gap(project_type_key: str | None) -> float:
 
 def track_mean(name: str) -> float | None:
     """Average level of a library track (measured once, cached in its catalog entry)."""
-    from manage_background_audio import load_background_audio, save_background_audio
-    music = load_background_audio()
-    t = music.get(name)
+    import db
+    t = db.load_assets("background_audio").get(name)
     if not t:
         return None
     if not t.get("loudness"):
-        t["loudness"] = audio_tools.measure(load_config()["library_dir"] / t["full_path"])
-        save_background_audio(None, music)
+        loud = audio_tools.measure(load_config()["library_dir"] / t["full_path"])
+
+        def _store(music):
+            if name in music:
+                music[name]["loudness"] = loud
+        db.update_assets("background_audio", _store)
+        return loud["mean_db"]
     return t["loudness"]["mean_db"]
 
 
