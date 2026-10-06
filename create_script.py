@@ -961,11 +961,24 @@ def build_scene_list(
                 options = [answer] + distractors
                 random.Random(i).shuffle(options)
 
-                img_prompt = _action_single_prompt(spk, spk_data, loc_desc, scene_visual, framing_tokens)
+                # Honour scene_characters like the dialog branch below: "both" (or the other
+                # character named in the visual) sends BOTH references; otherwise the
+                # single-speaker prompt tells fal the speaker is alone in the shot.
+                other = char_b if spk == char_a else char_a
+                scene_chars = item.get("scene_characters", "speaker_only")
+                if scene_chars == "both" or _name_in_text(other, scene_visual):
+                    img_prompt = _action_both_prompt(char_a, char_a_data, char_b, char_b_data,
+                                                     loc_desc, scene_visual, framing_tokens)
+                    ref_type, scene_chars = "both", "both"
+                else:
+                    img_prompt = _action_single_prompt(spk, spk_data, loc_desc, scene_visual, framing_tokens)
+                    ref_type = "single_speaker"
+                if override_wardrobe or _scene_overrides_wardrobe(scene_visual):
+                    img_prompt = _relax_clothing(img_prompt)
                 round_image = {
                     "file_path": None,
                     "prompt_to_create": img_prompt,
-                    "reference_type": "single_speaker",
+                    "reference_type": ref_type,
                     "speaker": spk,
                 }
 
@@ -975,6 +988,7 @@ def build_scene_list(
                     "description": f"quiz_{i:03d} gap [{spk}]",
                     "characters": [spk],
                     "scene_visual": scene_visual,
+                    "scene_characters": scene_chars,     # stored for UI display
                     "image": round_image,
                     "audio": {"type": "tts", "file_path": None, "tts_text": gap_tts,
                               "voice_id": _voice(spk), "duration_ms": None},
