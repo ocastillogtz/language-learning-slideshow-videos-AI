@@ -798,18 +798,33 @@ def _quiz_options_layers(options: list, answer: str, reveal: bool,
     def _norm(s: str) -> str:
         return (s or "").strip().lower()
 
+    def _build(sz):
+        chips = []
+        for opt in options:
+            if reveal and _norm(opt) == _norm(answer):
+                col = cfg.get("quiz_opt_color_correct", "#2ecc40")
+            elif reveal:
+                col = cfg.get("quiz_opt_color_dim", "#9aa0a6")
+            else:
+                col = cfg.get("quiz_opt_color", "white")
+            chips.append(TextClip(opt, font=font, fontsize=sz, color=col, stroke_color=scol,
+                                  stroke_width=sw, method="label").set_duration(duration))
+        return chips
+
     # Build the label clips first so we know the total row width, then centre the row.
-    chips = []
-    for opt in options:
-        if reveal and _norm(opt) == _norm(answer):
-            col = cfg.get("quiz_opt_color_correct", "#2ecc40")
-        elif reveal:
-            col = cfg.get("quiz_opt_color_dim", "#9aa0a6")
-        else:
-            col = cfg.get("quiz_opt_color", "white")
-        txt = TextClip(opt, font=font, fontsize=sz, color=col,
-                       stroke_color=scol, stroke_width=sw, method="label").set_duration(duration)
-        chips.append(txt)
+    # Long options (e.g. "obwohl / trotzdem / deshalb") can be wider than the frame:
+    # shrink font, padding and gap together so the row fits inside a side margin.
+    # The scale depends only on the options, so gap/countdown/reveal scenes match.
+    chips   = _build(sz)
+    avail   = W - 2 * cfg.get("quiz_opt_side_margin", 30)
+    total_w = sum(c.w + px * 2 for c in chips) + gap * (len(chips) - 1)
+    if total_w > avail:
+        scale = avail / total_w
+        sz, px, gap = max(int(sz * scale), 10), int(px * scale), int(gap * scale)
+        chips = _build(sz)
+        while sz > 10 and sum(c.w + px * 2 for c in chips) + gap * (len(chips) - 1) > avail:
+            sz -= 2
+            chips = _build(sz)
 
     box_ws    = [c.w + px * 2 for c in chips]
     total_w   = sum(box_ws) + gap * (len(chips) - 1)
