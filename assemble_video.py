@@ -26,25 +26,38 @@ logger = logging.getLogger(__name__)
 
 def assemble_video(
     project_name,
-    bg_audio_name="office",
+    bg_audio_name=None,
     overwrite=False,
     speed_factor=None,
     branding_file=None,
-    branding_mode="none",
-    bg_audio_gain_db=0.0,
+    branding_mode=None,
+    bg_audio_gain_db=None,
     bg_tracks=None,
 ):
     """Assemble final_<project>_<PLATFORM>.mp4 -- one file per platform that has a
     background track (see platform_audio). bg_tracks = {"yt"|"meta"|"tiktok":
-    {"name", "gain_db"}}; without it the legacy bg_audio_name/bg_audio_gain_db
-    become the YouTube track and only final_<project>_YT.mp4 is written."""
+    {"name", "gain_db"}}; without it the YouTube track is bg_audio_name/bg_audio_gain_db
+    and the Meta track is the config default.
+
+    Anything left as None falls back to the [assembly] default_* keys in config.ini,
+    and a track whose gain_db is None gets its suggested gain (music_level.py)."""
     cfg          = load_config()
     assets_dir   = cfg["assets_dir"]
     project_path = cfg["projects_dir"] / project_name
     manifest_path = project_path / "project_manifest.json"
 
+    if bg_audio_name is None:
+        bg_audio_name = cfg["asm_bg_audio_yt"]
+    if branding_mode is None:
+        branding_mode = cfg["asm_branding_mode"]
+        branding_file = branding_file or cfg["asm_branding_file"] or None
+    if bg_tracks is None:
+        bg_tracks = {"yt":   {"name": bg_audio_name, "gain_db": bg_audio_gain_db},
+                     "meta": {"name": cfg["asm_bg_audio_meta"], "gain_db": None}}
+    bg_tracks = fill_suggested_gains(project_name, bg_tracks, bg_audio_name)
+
     if speed_factor is None:
-        speed_factor = cfg.get("speed_factor", 1.0)
+        speed_factor = cfg["asm_speed_factor"]
     speed_factor = float(speed_factor)
 
     if cfg.get("imagemagick"):
@@ -187,6 +200,31 @@ def assemble_video(
             logger.info("Thumbnail offset (first clean pause): %d ms", thumb_ms)
     except Exception as e:
         logger.warning("Could not compute thumbnail offset: %s", e)
+
+
+def fill_suggested_gains(project_name, bg_tracks, default_yt_name=""):
+    """Copy of bg_tracks where every chosen track without a gain_db gets its suggested
+    gain (music the configured distance under this project's voices). A blank YouTube
+    name takes default_yt_name first. Falls back to 0 dB if no suggestion is possible."""
+    specs = {p: dict(s) for p, s in (bg_tracks or {}).items() if isinstance(s, dict)}
+    yt = specs.setdefault("yt", {})
+    if not (yt.get("name") or "").strip():
+        yt["name"] = default_yt_name or ""
+    todo = [s for s in specs.values()
+            if (s.get("name") or "").strip() and s.get("gain_db") in (None, "")]
+    if not todo:
+        return specs
+    try:
+        import music_level
+        sug = music_level.project_suggestion(project_name, [s["name"] for s in todo])["tracks"]
+    except Exception as e:
+        logger.warning("Could not compute suggested music gain (%s) -- using 0 dB", e)
+        sug = {}
+    for s in todo:
+        g = (sug.get(s["name"]) or {}).get("suggested_gain_db")
+        s["gain_db"] = float(g) if g is not None else 0.0
+        logger.info("Background track %s: suggested gain %+.1f dB", s["name"], s["gain_db"])
+    return specs
 
 
 def mix_bg_audio(content, track_name, gain_db, cfg, assets_dir):
@@ -574,23 +612,26 @@ def _resolve_bg_audio(key, assets_dir=None):
 
 
 def main():
+    # Unset options fall back to config.ini [assembly] default_*; unset gains = suggested.
+    cfg = load_config()
     p = argparse.ArgumentParser(description="Assemble per-scene clips into a final video.")
     p.add_argument("project_name")
-    p.add_argument("--bg-audio", default="office", dest="bg_audio_name")
-    p.add_argument("--bg-audio-gain-db", type=float, default=0.0, dest="bg_audio_gain_db",
+    p.add_argument("--bg-audio", default=cfg["asm_bg_audio_yt"], dest="bg_audio_name")
+    p.add_argument("--bg-audio-gain-db", type=float, default=None, dest="bg_audio_gain_db",
                    help="Adjust background audio volume in dB relative to config "
-                        "(positive = louder, negative = quieter, 0 = unchanged)")
-    p.add_argument("--bg-audio-meta", default=None, dest="bg_audio_meta",
-                   help="Meta-safe track -> also writes final_<project>_Meta.mp4")
-    p.add_argument("--bg-audio-meta-gain-db", type=float, default=0.0, dest="bg_audio_meta_gain_db")
+                        "(positive = louder, negative = quieter; omit = suggested gain)")
+    p.add_argument("--bg-audio-meta", default=cfg["asm_bg_audio_meta"] or None, dest="bg_audio_meta",
+                   help="Meta-safe track -> also writes final_<project>_Meta.mp4 "
+                        "(pass an empty string to skip)")
+    p.add_argument("--bg-audio-meta-gain-db", type=float, default=None, dest="bg_audio_meta_gain_db")
     p.add_argument("--bg-audio-tiktok", default=None, dest="bg_audio_tiktok",
                    help="TikTok track -> also writes final_<project>_TikTok.mp4")
-    p.add_argument("--bg-audio-tiktok-gain-db", type=float, default=0.0, dest="bg_audio_tiktok_gain_db")
+    p.add_argument("--bg-audio-tiktok-gain-db", type=float, default=None, dest="bg_audio_tiktok_gain_db")
     p.add_argument("--speed-factor", type=float, default=None, dest="speed_factor",
                    help="Playback speed multiplier (0.95 = 5 percent slower)")
-    p.add_argument("--branding-file", dest="branding_file", default=None,
+    p.add_argument("--branding-file", dest="branding_file", default=cfg["asm_branding_file"] or None,
                    help="Branding video filename from assets/branding/ (e.g. intro.mp4)")
-    p.add_argument("--branding-mode", dest="branding_mode", default="none",
+    p.add_argument("--branding-mode", dest="branding_mode", default=cfg["asm_branding_mode"],
                    choices=["none", "intro", "outro", "both"])
     p.add_argument("--overwrite", action="store_true")
     a = p.parse_args()

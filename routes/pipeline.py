@@ -176,6 +176,21 @@ def music_level(name):
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/config/assemble_defaults", methods=["GET"])
+def assemble_defaults():
+    """Assemble-panel defaults (config.ini [assembly] default_*). Track volumes have no
+    default here: the panel fills in each track's suggested gain."""
+    from utils_config import load_config
+    cfg = load_config()
+    return jsonify({
+        "bg_audio_yt":   cfg["asm_bg_audio_yt"],
+        "bg_audio_meta": cfg["asm_bg_audio_meta"],
+        "speed_factor":  cfg["asm_speed_factor"],
+        "branding_file": cfg["asm_branding_file"],
+        "branding_mode": cfg["asm_branding_mode"],
+    })
+
+
 @bp.route("/config/image_models", methods=["GET"])
 def list_image_models():
     """Selectable fal.ai image (edit) models for the UI dropdown, plus the config
@@ -660,17 +675,19 @@ def run_assemble(name):
     try:
         data          = request.get_json() or {}
         # Use (x or "") so an explicit JSON null (e.g. branding_file when mode is
-        # "none") doesn't blow up on .strip().
-        bg_audio_name = (data.get("bg_audio_name") or "office").strip() or "office"
+        # "none") doesn't blow up on .strip(). Missing values (None) fall back to the
+        # config.ini [assembly] default_* keys inside assemble_video; a missing gain
+        # becomes the suggested gain.
+        bg_audio_name = (data.get("bg_audio_name") or "").strip() or None
         overwrite     = bool(data.get("overwrite", False))
         raw_speed     = data.get("speed_factor")
         speed_factor  = float(raw_speed) if raw_speed not in (None, "") else None
         branding_file = (data.get("branding_file") or "").strip() or None
-        branding_mode = (data.get("branding_mode") or "none").strip() or "none"
-        if branding_mode not in ("none", "intro", "outro", "both"):
-            branding_mode = "none"
+        branding_mode = (data.get("branding_mode") or "").strip() or None
+        if branding_mode not in (None, "none", "intro", "outro", "both"):
+            branding_mode = None
         raw_gain      = data.get("bg_audio_gain_db")
-        bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else 0.0
+        bg_gain_db    = float(raw_gain) if raw_gain not in (None, "") else None
         # Per-platform tracks ({"yt"|"meta"|"tiktok": {"name","gain_db"}}): one
         # final_<p>_<PLATFORM>.mp4 per chosen track; YouTube falls back to the above.
         bg_tracks     = parse_bg_tracks(data.get("bg_tracks"))

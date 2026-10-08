@@ -640,7 +640,8 @@ function gainHintText(v) {
 
 // value/onChange = the {yt, meta, tiktok} state. ytBlankLabel: when set, YouTube may be
 // left blank (e.g. "config default"); otherwise a YouTube track is always selected.
-function PlatformBgAudioFields({ value, onChange, tracks, ytBlankLabel, fileHint }) {
+// autoSuggest: a chosen track whose volume is blank gets its suggested gain filled in.
+function PlatformBgAudioFields({ value, onChange, tracks, ytBlankLabel, fileHint, autoSuggest }) {
   const { currentProject } = useApp();
   const set = (pk, key, v) => onChange({ ...value, [pk]: { ...value[pk], [key]: v } });
   // Suggested gain per chosen track: puts the music the usual distance under this
@@ -656,6 +657,24 @@ function PlatformBgAudioFields({ value, onChange, tracks, ytBlankLabel, fileHint
       .catch(() => { if (live) setLevel(null); });
     return () => { live = false; };
   }, [currentProject, chosenKey]);
+  // Fill each platform+track once only, so clearing the field to type a value (or a
+  // lone "-") isn't immediately overwritten by the suggestion again.
+  const autoFilled = React.useRef({});
+  useEffect(() => {
+    if (!autoSuggest || !level) return;
+    let next = value, changed = false;
+    BG_PLATFORMS.forEach(p => {
+      const s = value[p.key];
+      const key = currentProject + ":" + p.key + ":" + (s && s.name);
+      const sug = s && s.name && s.gain_db === "" && !autoFilled.current[key] && level.tracks[s.name];
+      if (sug) {
+        autoFilled.current[key] = true;
+        next = { ...next, [p.key]: { ...s, gain_db: String(sug.suggested_gain_db) } };
+        changed = true;
+      }
+    });
+    if (changed) onChange(next);
+  }, [autoSuggest, level, value]);
   const groups = (license) => {
     // The platform's own safe tracks first, then the others.
     const order = [license, ...["YTsafe", "Metasafe", "TikToksafe"].filter(l => l !== license), ""];
@@ -747,12 +766,27 @@ function AssembleFields() {
 
   // Pre-fill from the settings saved on the last assemble (manifest.render_settings.assemble)
   // — once per project, so re-assembling doesn't make you re-pick background audio/branding.
+  // A project never assembled gets the config.ini [assembly] default_* values, with each
+  // track's volume left blank so PlatformBgAudioFields fills in its suggested gain.
   const appliedFor = React.useRef(null);
   useEffect(() => {
     if (!manifest || currentProject == null || appliedFor.current === currentProject) return;
     appliedFor.current = currentProject;
     const s = manifest.render_settings && manifest.render_settings.assemble;
-    if (!s) return;
+    if (!s) {
+      fetch("/config/assemble_defaults").then(r => r.json()).then(d => {
+        if (appliedFor.current !== currentProject) return;
+        setBgTracks({
+          yt:     { name: d.bg_audio_yt || "",   gain_db: "" },
+          meta:   { name: d.bg_audio_meta || "", gain_db: "" },
+          tiktok: { name: "",                    gain_db: "0" },
+        });
+        if (d.speed_factor != null) setSpeedFactor(String(d.speed_factor));
+        if (d.branding_file)        setBrandingFile(d.branding_file);
+        if (d.branding_mode)        setBrandingMode(d.branding_mode);
+      }).catch(() => {});
+      return;
+    }
     setBgTracks(bgTracksFromSaved(s.bg_tracks,
       emptyBgTracks(s.bg_audio_name || "office",
                     s.bg_audio_gain_db != null ? String(s.bg_audio_gain_db) : "0")));
@@ -784,7 +818,7 @@ function AssembleFields() {
       .then(d => {
         const files = d.files || [];
         setBrandingFiles(files);
-        if (files.length > 0 && !brandingFile) setBrandingFile(files[0]);
+        if (files.length > 0) setBrandingFile(f => f || files[0]);
       })
       .catch(() => {});
   }, []);
@@ -799,7 +833,7 @@ function AssembleFields() {
 
   return (
     <div className="fields">
-      <PlatformBgAudioFields value={bgTracks} onChange={setBgTracks} tracks={bgAudioTracks}
+      <PlatformBgAudioFields value={bgTracks} onChange={setBgTracks} tracks={bgAudioTracks} autoSuggest
         fileHint="Writes final_<project>_YT.mp4, plus final_<project>_Meta.mp4 when a Meta track is picked."/>
       <div className="field-row">
         <div className="field" style={{flex:1}}>

@@ -204,6 +204,12 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         # How far (dB) the background music should sit under the voices — drives the
         # suggested per-video gain (music_level.py). Project types may override it.
         "music_below_voice_db": _f("assembly", "music_below_voice_db", 20.0),
+        # Assemble-step defaults (blank track volume = suggested gain).
+        "asm_bg_audio_yt":     _p("assembly", "default_bg_audio_yt",   "office"),
+        "asm_bg_audio_meta":   _p("assembly", "default_bg_audio_meta", ""),
+        "asm_speed_factor":    _f("assembly", "default_speed_factor",  1.0),
+        "asm_branding_file":   _p("assembly", "default_branding_file", ""),
+        "asm_branding_mode":   _p("assembly", "default_branding_mode", "none"),
 
         # Reading_together part overlays (vertical part shorts)
         # Default background music for reading_together assembly (parts + long).
