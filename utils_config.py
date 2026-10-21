@@ -209,6 +209,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         "asm_bg_audio_meta":   _p("assembly", "default_bg_audio_meta", ""),
         "asm_speed_factor":    _f("assembly", "default_speed_factor",  1.0),
         "asm_branding_file":   _p("assembly", "default_branding_file", ""),
+        "asm_branding_file_horizontal": _p("assembly", "default_branding_file_horizontal", ""),
         "asm_branding_mode":   _p("assembly", "default_branding_mode", "none"),
 
         # Reading_together part overlays (vertical part shorts)

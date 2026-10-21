@@ -96,6 +96,7 @@ def create_videos(
     # format_override lets reading_together render a horizontal pass for the long video.
     video_format = format_override or manifest.get("video_info", {}).get("video_format", "vertical")
     apply_video_format(cfg, video_format)
+    _apply_type_render_cfg(cfg, manifest)
     logger.info("Render format: %s — canvas %d×%d", video_format, cfg["target_w"], cfg["target_h"])
 
     videos_dir = (project_path / "videos" / out_subdir) if out_subdir else (project_path / "videos")
@@ -245,6 +246,7 @@ def create_video_single(
     # re-render looks identical to the rest of the project.
     video_format = manifest.get("video_info", {}).get("video_format", "vertical")
     apply_video_format(cfg, video_format)
+    _apply_type_render_cfg(cfg, manifest)
 
     videos_dir = project_path / "videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
@@ -334,6 +336,61 @@ def create_video_single(
 # =============================================================================
 # CLIP BUILDER
 # =============================================================================
+
+def _snap_to_pause(audio_path: Path, t_est: float, dur_s: float, window_s: float = 0.9,
+                   first: bool = False) -> float:
+    """Move an estimated cut (seconds) to the middle of the speech pause nearest to it in
+    the TTS file — e.g. the breath after "Genau." — so a frame switch lands between
+    sentences. first=True (the line opens with a short reaction like "Genau."): the
+    first real breath after the speech starts. Otherwise the longest pause within
+    window_s of the estimate. Falls back to the estimate when no clear pause is found."""
+    import subprocess
+    sr = 8000
+    try:   # decode with ffmpeg (MoviePy's reader mis-seeks in some ElevenLabs MP3s)
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(audio_path), "-f", "s16le",
+                              "-ac", "1", "-ar", str(sr), "-"], capture_output=True, check=True).stdout
+    except Exception:
+        return t_est
+    mono = np.abs(np.frombuffer(raw, dtype=np.int16).astype(np.float32))
+    hop = int(sr * 0.02)                                   # 20 ms frames
+    n = len(mono) // hop
+    if n < 3:
+        return t_est
+    env = mono[:n * hop].reshape(n, hop).mean(axis=1)
+    quiet = env < max(env.max() * 0.06, 1e-4)              # ~ -24 dB under the peak
+    lo, hi = int(max(0.0, t_est - window_s) / 0.02), int(min(dur_s, t_est + window_s) / 0.02)
+    # Ignore the leading silence before the first word: only pauses AFTER speech count.
+    onset = int(np.argmax(~quiet)) if (~quiet).any() else 0
+    if first:
+        lo, hi = onset + 1, int(min(dur_s, t_est + 2 * window_s) / 0.02)
+    best, best_len, i = None, 0.0, max(lo, onset + 1)
+    while i < min(hi, n - 1):
+        if quiet[i]:
+            j = i
+            while j < n - 1 and quiet[j]:
+                j += 1
+            length = (j - i) * 0.02
+            if length >= 0.15:                             # a breath, not a stop consonant (Su-p-er)
+                mid = (i + j) / 2 * 0.02
+                # The sentence break is the LONGEST pause near the estimate.
+                if best is None or length > best_len:
+                    best, best_len = mid, length
+                if first and length >= 0.2:
+                    return mid
+            i = j
+        i += 1
+    return best if best is not None else t_est
+
+
+def _apply_type_render_cfg(cfg: dict, manifest: dict) -> None:
+    """Type-specific render settings on top of the orientation overrides (grammar_guide:
+    full-frame subtitles without the Shorts/Reels safe area)."""
+    if manifest.get("grammar_guide"):
+        from grammar_guide import RENDER_CFG
+        cfg.update(RENDER_CFG)
+    # Per-project overrides (e.g. a promo Story: smaller subtitles, no Reels side margin).
+    cfg.update(manifest.get("render_overrides") or {})
+
 
 def _scene_image_rel(img: dict | None, cfg: dict) -> str | None:
     """The scene image for the orientation being rendered: an orientation-specific
@@ -520,6 +577,16 @@ def _build_clip(
         raw_ms = pause_override_ms if pause_override_ms is not None \
                  else scene.get("duration_ms", cfg["inter_pause_ms"])
         dur_s = raw_ms / 1000.0
+        # A silent scene with its OWN image (grammar_guide chapter title card) shows that
+        # image for its duration instead of freezing the previous frame. Plain pauses
+        # carry their own duration_ms, so the UI pause override doesn't stretch the card.
+        img_rel = _scene_image_rel(img, cfg)
+        if img_rel:
+            dur_s    = (scene.get("duration_ms") or raw_ms) / 1000.0
+            pil_img  = Image.open(project_path / img_rel).convert("RGB")
+            frame_np = pil_to_numpy(pad_image_to_frame(pil_img, cfg))
+            clip = (ImageClip(frame_np).set_duration(dur_s).set_audio(_silent(dur_s)))
+            return clip, frame_np
         clip  = _freeze(dur_s)
         clip  = clip.set_audio(_silent(dur_s))
         return clip, last_frame_np
@@ -586,6 +653,18 @@ def _build_clip(
 
         bg     = ImageClip(frame_np).set_duration(dur_s)
         layers = [bg]
+        # grammar_guide mid-line switch: the previous topic's frame until the line reaches
+        # the new topic (scene["_switch_frac"] of the clip), then the scene's own frame.
+        before_rel = (img or {}).get("file_path_before")
+        if before_rel and scene.get("_switch_frac"):
+            t_sw = dur_s * float(scene["_switch_frac"])
+            if audio and audio.get("file_path"):
+                t_sw = _snap_to_pause(project_path / audio["file_path"], t_sw, dur_s,
+                                      first=bool(scene.get("_switch_first")))
+            before_np = pil_to_numpy(pad_image_to_frame(
+                Image.open(project_path / before_rel).convert("RGB"), cfg))
+            layers = [ImageClip(before_np).set_duration(t_sw),
+                      ImageClip(frame_np).set_start(t_sw).set_duration(dur_s - t_sw)]
 
         # Subtitle
         sub_bg_bottom = None  # tracks bottom edge of subtitle bg for footnote placement
@@ -701,7 +780,7 @@ def _subtitle(text: str, duration: float, is_narrator: bool, cfg: dict) -> TextC
 def _sub_layers(sub: TextClip, x: int, y, duration: float, cfg: dict) -> list:
     px, py = cfg["sub_bg_padding_x"], cfg["sub_bg_padding_y"]
     bg = (
-        ColorClip(size=(sub.w + px * 2, sub.h + py * 2), color=(0, 0, 0))
+        ColorClip(size=(sub.w + px * 2, sub.h + py * 2), color=tuple(cfg.get("sub_bg_color") or (0, 0, 0)))
         .set_duration(duration)
         .set_opacity(cfg["sub_bg_opacity"])
     )

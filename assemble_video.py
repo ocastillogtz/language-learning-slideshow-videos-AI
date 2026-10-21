@@ -69,6 +69,15 @@ def assemble_video(
     videos_dir = project_path / "videos"
     base_path  = project_path / ("final_" + project_name + ".mp4")
 
+    # The branding clip must match the video's orientation (the FFmpeg concat needs equal
+    # frame sizes): a vertical intro on a horizontal video swaps to the horizontal default,
+    # or is skipped with a warning when there is none.
+    if branding_file and branding_mode and branding_mode != "none":
+        branding_file = _branding_for_orientation(
+            cfg, branding_file, manifest.get("video_info", {}).get("video_format", "vertical"))
+        if not branding_file:
+            branding_mode = "none"
+
     # Master audio (song video type): a finished audio file is the ONLY soundtrack,
     # so there is nothing per-platform to vary -- render just the YouTube variant.
     master_rel = (manifest.get("project_metadata") or {}).get("master_audio")
@@ -200,6 +209,44 @@ def assemble_video(
             logger.info("Thumbnail offset (first clean pause): %d ms", thumb_ms)
     except Exception as e:
         logger.warning("Could not compute thumbnail offset: %s", e)
+
+    # Chapter timestamps (grammar_guide): where each chapter starts in the FINAL video,
+    # for the YouTube description. Same offsets as above: [intro] + speed(content).
+    if any(s.get("_chapter_start") for s in manifest.get("scenes", [])):
+        try:
+            from grammar_guide import compute_chapters, chapters_text
+            durations = {s["id"]: _probe_duration(videos_dir / (s["id"] + ".mp4"))
+                         for s in manifest["scenes"] if (videos_dir / (s["id"] + ".mp4")).exists()}
+            chapters = compute_chapters(manifest, durations, intro_dur_s, speed_factor)
+            vi = manifest.setdefault("video_info", {})
+            vi["chapters"] = chapters
+            vi["chapters_text"] = chapters_text(chapters)
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+            (project_path / "chapters.txt").write_text(vi["chapters_text"], encoding="utf-8")
+            logger.info("Chapters:\n%s", vi["chapters_text"])
+        except Exception as e:
+            logger.warning("Could not compute chapter timestamps: %s", e)
+
+
+def _branding_for_orientation(cfg, branding_file, video_format):
+    """branding_file if its orientation matches video_format, else the configured
+    default for that orientation (None when there is no usable clip)."""
+    path = cfg["branding_dir"] / branding_file
+    if not path.exists():
+        return branding_file             # the concat step logs the missing file
+    w, h = _probe_video_dims(path)
+    if (w > h) == (video_format == "horizontal"):
+        return branding_file
+    alt = cfg.get("asm_branding_file_horizontal") if video_format == "horizontal" else cfg.get("asm_branding_file")
+    if alt and (cfg["branding_dir"] / alt).exists():
+        aw, ah = _probe_video_dims(cfg["branding_dir"] / alt)
+        if (aw > ah) == (video_format == "horizontal"):
+            logger.info("Branding %s is not %s -- using %s instead", branding_file, video_format, alt)
+            return alt
+    logger.warning("Branding %s does not fit a %s video and no %s default is set -- skipping it",
+                   branding_file, video_format, video_format)
+    return None
 
 
 def fill_suggested_gains(project_name, bg_tracks, default_yt_name=""):

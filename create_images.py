@@ -36,6 +36,7 @@ import io
 import json
 import logging
 import argparse
+import ssl
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -135,8 +136,19 @@ def _call_fal(prompt: str, image_urls: list[str], model: str, image_size: str) -
         with_logs=True,
         on_queue_update=_log_progress,
     )
-    url: str = result["images"][0]["url"]
-    with urllib.request.urlopen(url, timeout=60) as resp:
+    return _download(result["images"][0]["url"])
+
+
+def _download(url: str) -> bytes:
+    """Fetch a generated image. Verifies TLS against certifi's CA bundle: the Windows
+    store can lack the issuer of fal's media CDN (CERTIFICATE_VERIFY_FAILED on
+    v3.fal.media, 2026-10-15), which lost every image after it was generated."""
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ctx = ssl.create_default_context()
+    with urllib.request.urlopen(url, timeout=60, context=ctx) as resp:
         data: bytes = resp.read()
     logger.info(f"  Downloaded {len(data)//1024} KB")
     return data
@@ -175,11 +187,7 @@ def _call_fal_text_only(prompt: str, model: str, image_size: str) -> bytes:
         with_logs=True,
         on_queue_update=_log_progress,
     )
-    url: str = result["images"][0]["url"]
-    with urllib.request.urlopen(url, timeout=60) as resp:
-        data: bytes = resp.read()
-    logger.info(f"  Downloaded {len(data)//1024} KB")
-    return data
+    return _download(result["images"][0]["url"])
 
 
 def _save(data: bytes, path: Path) -> None:
@@ -370,6 +378,15 @@ def create_images(
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
+
+    # grammar_guide: no per-scene fal images. The boards are generated once with
+    # Ideogram (cached in assets/boards/) and every frame is composed locally.
+    if manifest.get("grammar_guide"):
+        from grammar_guide import prepare_images
+        prepare_images(project_name, manifest)
+        _write_manifest(manifest_path, manifest)
+        logger.info("Image generation complete (grammar_guide frames).")
+        return
 
     chars_data = load_new_characters(cfg["assets_dir"])
     all_locs   = get_new_locations_flat(cfg["assets_dir"])
@@ -617,6 +634,13 @@ def create_image_single(
     art_b = _char_ref_path(chars_data[char_b], assets_dir) if char_b and char_b in chars_data else None
 
     img = target["image"]
+
+    # grammar_guide frames are composed locally (free) — just redraw this one.
+    if img.get("reference_type") == "grammar_frame":
+        from grammar_guide import compose_frames
+        compose_frames(project_name, manifest, scene_ids=[scene_id])
+        _write_manifest(manifest_path, manifest)
+        return
 
     if prompt_override:
         img["prompt_to_create"] = prompt_override

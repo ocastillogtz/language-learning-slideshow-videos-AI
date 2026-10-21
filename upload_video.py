@@ -287,6 +287,10 @@ def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
     if insights:
         desc_parts.append("")
         desc_parts.append(insights[:800])   # YouTube description limit is 5000 chars
+    # Chapter timestamps (grammar_guide, filled at assembly) — YouTube turns them
+    # into clickable chapters. Never truncated: a cut list breaks the chapters.
+    if vi.get("chapters_text"):
+        desc_parts += ["", "Kapitel:", vi["chapters_text"]]
 
     desc_parts += [
         "",

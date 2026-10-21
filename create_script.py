@@ -873,6 +873,12 @@ def build_scene_list(
                 "audio": {"type": "sfx", "asset_key": asset_key, "file_path": path, "duration_ms": None},
                 "subtitle_text": None, "duration_ms": None}
 
+    # grammar_guide: narrator + two students over composed board/example frames
+    # (grammar_guide.build_scenes) — no per-scene illustrations, no narration intro.
+    if rules.get("grammar_guide"):
+        from grammar_guide import build_scenes as build_guide_scenes
+        return build_guide_scenes(gpt_output, chars_data, cast, inter_ms=inter_ms)
+
     # --- Narration ---
     if rules.get("include_narration"):
         nar_raw  = gpt_output.get("narration", {})
@@ -1325,10 +1331,19 @@ def _validate_supplied_script(script: dict, cast: list[str], project_type: dict)
     dialog = script.get("dialog")
     if not isinstance(dialog, list) or not dialog:
         raise ValueError('script needs a non-empty "dialog" list')
+    rules = project_type.get("scene_builder_rules") or {}
+    if rules.get("grammar_guide"):
+        # The narrator speaks too; boards, highlights and markup are checked by the type.
+        from grammar_guide import validate_script
+        errs = validate_script(script, cast)
+        if errs:
+            raise ValueError("grammar_guide script problems:\n- " + "\n- ".join(errs))
     for i, item in enumerate(dialog):
         if not isinstance(item, dict):
             raise ValueError(f"dialog[{i}] must be an object")
         speaker = item.get("speaker") or item.get("character")
+        if rules.get("grammar_guide") and speaker == "Narrator":
+            continue
         if speaker not in cast:
             raise ValueError(f"dialog[{i}] speaker {speaker!r} is not in the cast {cast}")
         if not (item.get("text") or item.get("sentence_full")):
@@ -1336,7 +1351,6 @@ def _validate_supplied_script(script: dict, cast: list[str], project_type: dict)
     for key in ("title", "tags", "insights"):
         if not (script.get(key) or "").strip():
             raise ValueError(f'script needs "{key}"')
-    rules = project_type.get("scene_builder_rules") or {}
     if rules.get("include_repetition_section") and not script.get("repetitions"):
         raise ValueError('this project type needs "repetitions" (3 dialog texts to shadow)')
 
@@ -1454,6 +1468,16 @@ def create_script(
         )
         repetition_texts = rep_texts
         manifest["generation_config"]["prompt_repetitions"] = rep_prompt
+
+    # grammar_guide: keep the board specs (the reusable visual aids) with the project.
+    if project_type["scene_builder_rules"].get("grammar_guide"):
+        manifest["grammar_guide"] = {
+            "boards": {b["id"]: b for b in gpt_output.get("boards") or [] if b.get("id")},
+            "narrator_label": gpt_output.get("narrator_label") or "Erzähler",
+            "cheatsheet": gpt_output.get("cheatsheet") or {},
+        }
+    else:
+        manifest.pop("grammar_guide", None)
 
     manifest["scenes"] = build_scene_list(
         gpt_output       = gpt_output,
