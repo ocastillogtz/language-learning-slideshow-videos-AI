@@ -702,6 +702,20 @@ def _narrator_image_prompt(loc_desc: str, framing_tokens: str = None,
     )
 
 
+def _only_these_in_shot(names: list) -> str:
+    """Cast limiter for prompts that send fewer references than the setting names.
+
+    The visual guidelines (loc_desc) often pin EVERY cast member's role, position and
+    outfit ("ZAHRA always behind the table; JONAS in front"), so a speaker-only prompt
+    still describes the absent character — and fal draws them with no reference
+    image, off-model. This line tells the model who is actually in the shot.
+    """
+    who = " and ".join(names) if len(names) <= 2 else ", ".join(names[:-1]) + " and " + names[-1]
+    verb = "appears" if len(names) == 1 else "appear"
+    return (f"WHO IS IN THIS IMAGE: only {who} {verb} in this shot. Draw no other people — "
+            "any other character named in the setting description above is NOT in this image.")
+
+
 def _action_single_prompt(char_name: str, char_data: dict, loc_desc: str, scene_visual: str,
                           framing_tokens: str = None) -> str:
     """One character performing an action related to what they're saying."""
@@ -712,7 +726,8 @@ def _action_single_prompt(char_name: str, char_data: dict, loc_desc: str, scene_
         f"{_STYLE_TOKENS}\n"
         f"FRAMING: {framing}\n\n"
         f"Scene at: {loc_desc}\n"
-        f"Character: {char_name} — {fixed}\n\n"
+        f"Character: {char_name} — {fixed}\n"
+        f"{_only_these_in_shot([char_name])}\n\n"
         f"Action: {scene_visual}\n\n"
         "Show the character actively engaged with the action described. "
         "Match exact clothing, hair, and facial features from reference. "
@@ -755,7 +770,8 @@ def _action_multi_prompt(present: list, chars_data: dict, loc_desc: str, scene_v
         f"{_STYLE_TOKENS}\n"
         f"FRAMING: {framing}\n\n"
         f"Scene at: {loc_desc}\n"
-        f"{roster}\n\n"
+        f"{roster}\n"
+        f"{_only_these_in_shot(present)}\n\n"
         f"Action: {scene_visual}\n\n"
         "Show all of the listed characters actively engaged in the described scene. "
         "Match exact clothing, hair, and facial features from reference. "

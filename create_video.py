@@ -35,7 +35,7 @@ from utils_image import pad_image_to_frame, pil_to_numpy, make_corner_icon_clip
 from subtitle_render import render_subtitle
 from generate_annotations import generate_annotations
 from html_annotation_renderer import AnnotationBatchRenderer
-from utils_markup import strip_markup as _strip_markup_for_annot
+from utils_markup import strip_markup as _strip_markup_for_annot, has_markup as _has_markup
 from core import report_progress
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
@@ -678,7 +678,10 @@ def _subtitle(text: str, duration: float, is_narrator: bool, cfg: dict) -> TextC
     # highlights (subtitle_render — the configured font, fill and outline; a
     # highlight only re-colours its words). The old ImageMagick "pango" path for
     # markup lines ignored font/colour/outline and produced a second, white style.
-    if not is_narrator:
+    # Narrator-style lines with markup (shadowing repetitions copy the dialog text,
+    # highlights included) go through the same renderer in the narrator style;
+    # plain TextClip would print the _/* markers literally.
+    if not is_narrator or _has_markup(clean):
         rgba = render_subtitle(
             clean, w, font=font, fontsize=sz, color=col,
             stroke_color=scol, stroke_width=sw,
