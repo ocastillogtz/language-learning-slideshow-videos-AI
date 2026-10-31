@@ -581,7 +581,9 @@ Current description:
 
 Rewrite the description so it reflects the whole dialog. Keep the same structure and tone:
 plain text only (no markdown, no bullet points, no headers, no asterisks), 5-8 sentences,
-immediately copy-pasteable into a YouTube description as-is.
+immediately copy-pasteable into a YouTube description as-is. Viewer-facing text only: never
+mention the characters by name, the setting or location, what anyone wears, or the video type —
+if the current description opens with such a scene note, drop it.
 
 MANDATORY: the description must contain a GLOSSARY of the most advanced words and
 expressions actually spoken anywhere in the dialog — the ones most challenging for a
