@@ -70,6 +70,7 @@ import time
 from pathlib import Path
 
 from utils_config import load_config
+from utils_text import fit_text
 
 import requests
 from dotenv import load_dotenv
@@ -420,6 +421,9 @@ def _final_video_path(project_name: str) -> Path:
                         META_PREFER)
 
 
+_CAPTION_LIMIT = 2200
+
+
 def _build_caption(manifest: dict) -> str:
     vi   = manifest.get("video_info", {}) or {}
     gen  = manifest.get("generation_config", {}) or {}
@@ -427,7 +431,6 @@ def _build_caption(manifest: dict) -> str:
     title    = vi.get("title") or manifest.get("title") or ""
     insights = vi.get("insights", "") or ""
     level    = gen.get("level", "") or ""
-    location = gen.get("location_key", "") or manifest.get("location-key", "") or ""
 
     raw_tags = (vi.get("tags", "") or manifest.get("tags", "") or "")
     hashtags = " ".join(
@@ -446,17 +449,14 @@ def _build_caption(manifest: dict) -> str:
             seen.add(t.lower())
             tags.append(t)
 
-    parts = []
-    if title:
-        parts.append(title)
-    if location:
-        parts.append(("Ort: " if cfg["language_code"] == "de" else "📍 ") + location)
-    if insights:
-        parts.append("")
-        parts.append(insights[:500])
-    parts.append("")
-    parts.append(" ".join(tags))
-    return "\n".join(parts).strip()
+    # Viewer-facing text only (no location/production metadata). The insights
+    # get the room the 2200-char Instagram limit leaves, ending on a full sentence.
+    head = title
+    tail = "\n\n" + " ".join(tags)
+    room = _CAPTION_LIMIT - len(head) - len(tail) - 2
+    body = fit_text(insights, room)
+    parts = [p for p in (head, body) if p]
+    return ("\n\n".join(parts) + tail).strip()
 
 
 # =============================================================================

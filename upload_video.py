@@ -58,6 +58,7 @@ import time
 from pathlib import Path
 
 from utils_config import load_config
+from utils_text import fit_text
 from typing import Optional
 
 from googleapiclient.discovery import build, Resource
@@ -247,6 +248,9 @@ def _final_video_path(project_name: str, manifest: dict) -> Path:
     return find_variant(projects_dir / project_name / f"final_{project_name}.mp4", YOUTUBE_PREFER)
 
 
+_YT_DESCRIPTION_LIMIT = 5000
+
+
 def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
     """
     Extract title, description, and tags from the project manifest.
@@ -264,40 +268,20 @@ def _build_metadata(manifest: dict) -> tuple[str, str, list[str]]:
     cfg      = load_config()
     title    = vi.get("title")    or manifest.get("title")    or cfg["channel_default_title"]
     insights = vi.get("insights") or manifest.get("insights", "") or ""
-    location = gc.get("location_key") or manifest.get("location-key", "") or ""
-    style    = (manifest.get("project_metadata") or {}).get("project_type_key") \
-               or manifest.get("style", "") or ""
 
-    # Characters: new format stores them as a list of strings; legacy as list of dicts
-    raw_chars = gc.get("characters") or manifest.get("characters", [])
-    if raw_chars and isinstance(raw_chars[0], dict):
-        chars = [c["name"] for c in raw_chars]
-    else:
-        chars = [c for c in raw_chars if isinstance(c, str)]
-    chars_str = " & ".join(chars) if chars else ""
-
-    # Build a rich description
-    desc_parts = []
-    if chars_str:
-        desc_parts.append(f"Characters: {chars_str}")
-    if location:
-        desc_parts.append(f"Location: {location}")
-    if style:
-        desc_parts.append(f"Style: {style}")
-    if insights:
-        desc_parts.append("")
-        desc_parts.append(insights[:800])   # YouTube description limit is 5000 chars
-    # Chapter timestamps (grammar_guide, filled at assembly) — YouTube turns them
-    # into clickable chapters. Never truncated: a cut list breaks the chapters.
+    # Viewer-facing text only — no production metadata (characters, location,
+    # project type). Chapter timestamps (grammar_guide, filled at assembly)
+    # become clickable YouTube chapters and are never truncated.
+    tail = []
     if vi.get("chapters_text"):
-        desc_parts += ["", "Kapitel:", vi["chapters_text"]]
+        tail += ["", "Kapitel:", vi["chapters_text"]]
+    tail += ["", cfg["channel_default_description"], cfg["channel_hashtags"]]
+    tail_text = "\n".join(tail)
 
-    desc_parts += [
-        "",
-        cfg["channel_default_description"],
-        cfg["channel_hashtags"],
-    ]
-    description = "\n".join(desc_parts)
+    # The insights get whatever room the 5000-char YouTube limit leaves and,
+    # if they must be shortened, end on a complete sentence.
+    body = fit_text(insights, _YT_DESCRIPTION_LIMIT - len(tail_text) - 1)
+    description = (body + "\n" + tail_text if body else tail_text).strip()
 
     # Tags from manifest + automatic language tags
     raw_tags = vi.get("tags") or manifest.get("tags", "") or ""
